@@ -6,9 +6,9 @@
 		<Nullable>enable</Nullable>
 		<UseWindowsForms>true</UseWindowsForms>
 
-		<Company>Your Company or Name</Company>
-		<Product>Guard Core Library</Product>
-		<Copyright>Copyright © Your Name 2025</Copyright>
+		<Company>Aleksei Skorobogatko</Company>
+		<Product>Guard for Windows</Product>
+		<Copyright>Copyright © Aleksei Skorobogatko 2025</Copyright>
 		<Version>1.0.0.0</Version>
 		<AssemblyVersion>1.0.0.0</AssemblyVersion>
 		<FileVersion>1.0.0.0</FileVersion>

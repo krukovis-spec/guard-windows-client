@@ -1,6 +1,12 @@
 # Guard: A Windows Scheduling & Filtering Utility
 
-Guard is a Windows application designed to provide robust, scheduled filtering of internet content. It uses a combination of hosts file modifications and Windows Firewall rules to enforce restrictions based on user-defined rules and categories.
+Guard is a Windows application that provides centralized control over internet access for any assigned device, managed securely through your online account at Guard.AlexWeb.app. Its core functionality is the ability to receive and apply instructions from your account, which define:
+- Rules: Flexible filters that can restrict access to specific websites or online resources according to a schedule you set (for example, only allowing access during homework hours).
+- Categories: Predefined groups—such as gambling, adult content, or social media—which are blocked at all times when selected.
+
+Once a device is assigned, Guard keeps all settings automatically synchronized with your account. The application enforces restrictions by managing the system hosts file and Windows firewall rules, ensuring that the selected resources are inaccessible as specified by your instructions.
+
+Guard protects access to its admin panel, closing, and uninstallation with a PIN code. Its state is securely encrypted, and all configuration data received from HTTP requests is thoroughly sanitized. The application is resistant to tampering: it monitors and automatically restarts itself if terminated, prevents operation without the necessary system privileges, and periodically verifies the device’s clock using public time services to ensure accurate rule enforcement. These safeguards ensure that Guard’s restrictions remain active and reliable, providing robust control for both families and administrators.
 
 ## Features
 
