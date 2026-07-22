@@ -18,6 +18,9 @@ namespace Guard
         public bool SyncStatus { get; set; }
         public int PinStatus { get; set; }
         public bool Assigned { get; set; } = false; 
+        public bool LocalParentMode { get; set; } = false;
+        public bool AllowLegacyRemoteServer { get; set; } = false;
+        public string UiLanguage { get; set; } = Guard.UiLanguage.Russian;
         public DateTime AdRecheck { get; set; } //?
         public string LastUpdate { get; set; } = string.Empty; 
         public DateTime IpsRecheck { get; set; } 
@@ -46,6 +49,25 @@ namespace Guard
         public List<ScheduleSnapshot> WeeklyTimeline { get; set; } = new List<ScheduleSnapshot>();
         public bool ResetConnection { get; set; }
         public int Sound { get; set; }
+        public DevicePairing Pairing { get; set; } = new DevicePairing();
+        public string ParentAdminPasswordHash { get; set; } = "";
+        public string ParentAdminPasswordSalt { get; set; } = "";
+        public int ParentAdminPasswordIterations { get; set; } = 0;
+        public int ParentAdminPort { get; set; } = 8765;
+        public string ChildWindowsUserName { get; set; } = "";
+        public AccountLockdownSettings AccountLockdown { get; set; } = new AccountLockdownSettings();
+        public ApplicationControlSettings AppControl { get; set; } = new ApplicationControlSettings();
+        public List<AccessRequest> AccessRequests { get; set; } = new List<AccessRequest>();
+        public List<DomainAccessGrant> DomainAccessGrants { get; set; } = new List<DomainAccessGrant>();
+        public WebAccessSettings WebAccess { get; set; } = new WebAccessSettings();
+        public long LastAppLockerExeEventRecordId { get; set; } = 0;
+        public ActivitySettings ActivitySettings { get; set; } = new ActivitySettings();
+        public ActivityRuntimeState ActivityRuntime { get; set; } = new ActivityRuntimeState();
+        public List<ActivityUsageEntry> ActivityUsage { get; set; } = new List<ActivityUsageEntry>();
+        public List<DailyTask> DailyTasks { get; set; } = new List<DailyTask>();
+        public List<DailyTaskCompletion> DailyTaskCompletions { get; set; } = new List<DailyTaskCompletion>();
+        public List<BonusTimeGrant> BonusTimeGrants { get; set; } = new List<BonusTimeGrant>();
+        public MaintenanceModeState MaintenanceMode { get; set; } = new MaintenanceModeState();
 
     }
     public class ScheduleSnapshot

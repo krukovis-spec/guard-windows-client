@@ -1,0 +1,21 @@
+- 2026-06-08T16:43:10+00:00 START run mode=single max_passes=1 scope=diff
+- 2026-06-08T16:44:13+00:00 DONE discover
+- 2026-06-08T16:55:26+00:00 START pass 1
+lan pass=1 mode=broad
+- 2026-06-08T17:15:46+00:00 SET aspect requirements status=fixed
+- 2026-06-08T17:15:46+00:00 SET aspect integration_runtime status=fixed
+- 2026-06-08T17:15:46+00:00 SET aspect tests status=fixed
+- 2026-06-08T17:15:46+00:00 SET aspect security_privacy status=clean
+- 2026-06-08T17:15:47+00:00 SET aspect domain_compliance status=clean
+- 2026-06-08T17:15:47+00:00 DONE pass 0 status=clean
+- 2026-06-08T17:16:16+00:00 DONE pass 0 status=clean
+- 2026-06-08T17:25:46+00:00 START command Guard.Tests
+- 2026-06-08T17:25:50+00:00 DONE command Guard.Tests exit=0
+- 2026-06-08T17:26:11+00:00 START command git diff check
+- 2026-06-08T17:26:11+00:00 DONE command git diff check exit=0
+- 2026-06-08T17:26:11+00:00 START command release build
+- 2026-06-08T17:26:12+00:00 DONE command release build exit=1
+- 2026-06-08T17:26:33+00:00 START command release build corrected
+- 2026-06-08T17:26:36+00:00 DONE command release build corrected exit=0
+- 2026-06-08T17:34:48+00:00 START command installer compile
+- 2026-06-08T17:34:53+00:00 DONE command installer compile exit=0

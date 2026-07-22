@@ -1,0 +1,34 @@
+{
+  "created_at": "2026-06-08T16:44:12+00:00",
+  "repo": "C:\\Yandex.Disk\\Projects\\guard-windows-client",
+  "is_git_repo": true,
+  "git_status_short": " M Guard.Cleaner/Program.cs\n M Guard.Core/GuardState.cs\n M Guard.Core/ScheduledTaskHelper.cs\n M Guard.Core/SystemCleaner.cs\n M Output/Guard-Setup-v1.0.0.exe\n M guard.sln\n M guard/DeviceUpdater.cs\n M guard/DiagnosticWindow.cs\n D guard/InputSanitizer.cs\n M guard/Program.cs\n M guard/guard.csproj\n?? .codex/\n?? AGENTS.md\n?? Directory.Build.props\n?? Guard.Core/AccessRequest.cs\n?? Guard.Core/AccountHardening.cs\n?? Guard.Core/ActivityAccounting.cs\n?? Guard.Core/AppLockerBlockedEvent.cs\n?? Guard.Core/ApplicationControl.cs\n?? Guard.Core/DailyTasks.cs\n?? Guard.Core/DevicePairing.cs\n?? Guard.Core/DomainAccess.cs\n?? Guard.Core/EmergencyPinPolicy.cs\n?? \"Guard.Core/GuardState (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? Guard.Core/InputSanitizer.cs\n?? \"Guard.Core/MaintenanceMode (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? Guard.Core/MaintenanceMode.cs\n?? Guard.Core/PairingEmailBuilder.cs\n?? Guard.Core/ParentAdminAuth.cs\n?? Guard.Core/ParentAdminSecurity.cs\n?? \"Guard.Core/ParentCommand (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? Guard.Core/ParentCommand.cs\n?? Guard.Core/SystemCommandRunner.cs\n?? Guard.Tests/\n?? \"Output/Guard-Setup-v1.0.0 (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).exe\"\n?? docs/\n?? guard/ActivityMonitor.cs\n?? guard/AppLockerEventReader.cs\n?? guard/PairingForm.cs\n?? \"guard/ParentAdminServer (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? guard/ParentAdminServer.cs\n?? \"guard/Program (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n",
+  "git_diff_stat": "warning: in the working copy of 'Guard.Cleaner/Program.cs', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'Guard.Core/GuardState.cs', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'Guard.Core/ScheduledTaskHelper.cs', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'Guard.Core/SystemCleaner.cs', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'guard/DeviceUpdater.cs', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'guard/DiagnosticWindow.cs', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'guard/Program.cs', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'guard/guard.csproj', LF will be replaced by CRLF the next time Git touches it\n Guard.Cleaner/Program.cs          |  12 +-\n Guard.Core/GuardState.cs          |  20 +-\n Guard.Core/ScheduledTaskHelper.cs |  27 +-\n Guard.Core/SystemCleaner.cs       |  49 +--\n Output/Guard-Setup-v1.0.0.exe     | Bin 2426924 -> 2717786 bytes\n guard.sln                         |  10 +\n guard/DeviceUpdater.cs            |  15 +-\n guard/DiagnosticWindow.cs         |   6 +-\n guard/InputSanitizer.cs           |  85 -----\n guard/Program.cs                  | 746 +++++++++++++++++++++++++++++++++-----\n guard/guard.csproj                |   4 +-\n 11 files changed, 738 insertions(+), 236 deletions(-)\n",
+  "git_changed_files": [
+    "warning: in the working copy of 'Guard.Cleaner/Program.cs', LF will be replaced by CRLF the next time Git touches it",
+    "warning: in the working copy of 'Guard.Core/GuardState.cs', LF will be replaced by CRLF the next time Git touches it",
+    "warning: in the working copy of 'Guard.Core/ScheduledTaskHelper.cs', LF will be replaced by CRLF the next time Git touches it",
+    "warning: in the working copy of 'Guard.Core/SystemCleaner.cs', LF will be replaced by CRLF the next time Git touches it",
+    "warning: in the working copy of 'guard/DeviceUpdater.cs', LF will be replaced by CRLF the next time Git touches it",
+    "warning: in the working copy of 'guard/DiagnosticWindow.cs', LF will be replaced by CRLF the next time Git touches it",
+    "warning: in the working copy of 'guard/Program.cs', LF will be replaced by CRLF the next time Git touches it",
+    "warning: in the working copy of 'guard/guard.csproj', LF will be replaced by CRLF the next time Git touches it",
+    "Guard.Cleaner/Program.cs",
+    "Guard.Core/GuardState.cs",
+    "Guard.Core/ScheduledTaskHelper.cs",
+    "Guard.Core/SystemCleaner.cs",
+    "Output/Guard-Setup-v1.0.0.exe",
+    "guard.sln",
+    "guard/DeviceUpdater.cs",
+    "guard/DiagnosticWindow.cs",
+    "guard/InputSanitizer.cs",
+    "guard/Program.cs",
+    "guard/guard.csproj"
+  ],
+  "command_candidates": [
+    {
+      "label": "git diff --check",
+      "command": "git diff --check"
+    }
+  ]
+}

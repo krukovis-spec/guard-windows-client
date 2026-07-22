@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Security.Principal;
 using System.Threading;
@@ -55,7 +56,7 @@ namespace Guard
             {
                 // If the Mutex already exists, it means another instance is running.
                 // Show a message and exit immediately.
-                MessageBox.Show("Guard is already running.", "Application Already Running", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Guard уже запущен.", "Guard", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             try
@@ -69,7 +70,7 @@ namespace Guard
                     Application.SetCompatibleTextRenderingDefault(false);
                     var mainForm = new MainForm(); // instance to access methods
 
-                    if (mainForm.PromptPin("Enter PIN to uninstall:"))
+                    if (mainForm.PromptPin("Введите PIN для удаления Guard:"))
                     {
                         // If PIN is correct - cleanup.
                         mainForm.CleanAndClose().Wait(); // .Wait() to ensure it finishes
@@ -98,7 +99,7 @@ namespace Guard
 
                 if (!IsAdministrator())
                 {
-                    using (var infoForm = new InformationForm("Administrator Rights Required", "Guard requires administrator privileges to function correctly.", MessageBoxIcon.Error))
+                    using (var infoForm = new InformationForm("Нужны права администратора", "Guard нужны права администратора, чтобы правильно работать.", MessageBoxIcon.Error))
                     {
                         infoForm.ShowDialog();
                     }
@@ -106,7 +107,7 @@ namespace Guard
                 }
                 else if (!CanWriteToHostsFile()) // Also check hosts file permission
                 {
-                    using (var infoForm = new InformationForm("Permission Error", "Guard is being blocked from accessing critical system files, likely by antivirus software. Please add an exception for Guard.exe.", MessageBoxIcon.Error))
+                    using (var infoForm = new InformationForm("Ошибка доступа", "Guard не может получить доступ к системным файлам. Возможно, его блокирует антивирус. Добавьте Guard.exe в исключения.", MessageBoxIcon.Error))
                     {
                         infoForm.ShowDialog();
                     }
@@ -142,7 +143,7 @@ namespace Guard
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show("Error during backup/init: " + ex.Message);
+                    MessageBox.Show("Ошибка при подготовке резервной копии: " + ex.Message, "Guard");
                 }
 
                 // Remove any "disable.guard" file if main is starting:
@@ -176,14 +177,19 @@ namespace Guard
     public class MainForm : Form
     {
         readonly NotifyIcon tray = new NotifyIcon();
-        private DiagnosticWindow diagWin;
+        private DiagnosticWindow diagWin = null!;
         readonly ContextMenuStrip menu = new ContextMenuStrip();
         private Icon? icon_Active;
         private Icon? icon_Inactive;
         private Icon? icon_Updating;
         private Icon? icon_Grayscale;
-        private ToolStripMenuItem? assignMenuItem;
+        private ParentAdminServer? parentAdminServer;
         private bool isCheckingForUpdate = false;
+        private bool isApplicationControlTickRunning = false;
+        private readonly Dictionary<string, DateTime> lastWebsitePromptUtcByDomain =
+            new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, DateTime> lastApplicationPromptUtcByPath =
+            new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         public GuardState? State { get; private set; }
         public string CurrentAppVersion => System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0.0";
         private int pinFailCount = 0;
@@ -194,7 +200,40 @@ namespace Guard
             diagWin.Show();
             diagWin.Log(message);
         }
+
+        private void Log(string message)
+        {
+            diagWin?.Log(message);
+        }
+
+        private string L(string russian, string english)
+        {
+            return UiLanguage.Text(State?.UiLanguage, russian, english);
+        }
+
+        private string ActivityCategoryText(ActivityCategory category)
+        {
+            switch (category)
+            {
+                case ActivityCategory.Study:
+                    return L("Учёба", "Study");
+                case ActivityCategory.Video:
+                    return L("Видео", "Video");
+                case ActivityCategory.Game:
+                    return L("Игры", "Game");
+                case ActivityCategory.UsefulTraining:
+                    return L("Полезное обучение", "Useful training");
+                case ActivityCategory.Communication:
+                    return L("Общение", "Communication");
+                case ActivityCategory.System:
+                    return L("Система", "System");
+                default:
+                    return L("Без категории", "Uncategorized");
+            }
+        }
+
         private System.Windows.Forms.Timer? _helperWatchdogTimer;
+        private System.Windows.Forms.Timer? _applicationControlTimer;
 
 
         public MainForm(bool startupOk = true)
@@ -210,6 +249,7 @@ namespace Guard
             diagWin.UpdateDisplay(State);
             tray.Visible = true;
             tray.Text = "Guard";
+            StartParentAdminServer();
 
 
 
@@ -238,27 +278,8 @@ namespace Guard
                 // assign button
                 if (State == null || !State.Assigned)
                 {
-                    assignMenuItem = new ToolStripMenuItem("Assign", null, async (s, e) =>
-                    {
-                        using (var assign = new AssignForm())
-                        {
-                            if (assign.ShowDialog() == DialogResult.OK)
-                            {
-                                // This is the corrected way to hide the menu item
-                                if (s is ToolStripMenuItem menuItem)
-                                {
-                                    menuItem.Visible = false;
-                                }
-
-                                State = assign.AssignedState ?? new GuardState();
-                                ShowUpdateMenuItem();
-
-                                await RunMainLoopAsync(forceUpdate: true);
-                            }
-                        }
-                    });
-
-                    menu.Items.Add(assignMenuItem);
+                    var pairingMenuItem = new ToolStripMenuItem(L("Показать код привязки", "Show Pairing Code"), null, (s, e) => ShowPairingCode());
+                    menu.Items.Add(pairingMenuItem);
                 }
                 else
                 {
@@ -280,7 +301,7 @@ namespace Guard
                     ToolStripMenuItem updateMenuItem = null!;
 
                     // update button
-                    updateMenuItem = new ToolStripMenuItem("Request new instructions", null, async (s, e) =>
+                    updateMenuItem = new ToolStripMenuItem(L("Обновить правила", "Request new instructions"), null, async (s, e) =>
                     {
                         updateMenuItem.Enabled = false;
                         await RequestUpdateAsync(); // Call the new method
@@ -300,6 +321,9 @@ namespace Guard
                     menu.Items.Add(updateMenuItem);
                 }
                 menu.Items.Add(new ToolStripSeparator());
+                menu.Items.Add(new ToolStripMenuItem(L("Попросить приложение", "Request App Access"), null, (s, e) => ShowApplicationAccessRequest()));
+                menu.Items.Add(new ToolStripMenuItem(L("Попросить сайт", "Request Site Access"), null, (s, e) => ShowWebsiteAccessRequest()));
+                menu.Items.Add(new ToolStripMenuItem(L("Мои задачи", "My Tasks"), null, (s, e) => ShowChildTasks()));
                 var mainLoopTimer = new System.Windows.Forms.Timer();
                 mainLoopTimer.Interval = 60 * 1000; // 1 minute
                 mainLoopTimer.Tick += async (s, e) => {
@@ -307,30 +331,35 @@ namespace Guard
                     await RunMainLoopAsync();
                 };
                 mainLoopTimer.Start();
-                diagWin.Log("[MainLoop] Main timer started.");
+                diagWin?.Log("[MainLoop] Main timer started.");
+                InitializeApplicationControlTimer();
 
                 this.Load += async (s, e) =>
                 {
                     await RunMainLoopAsync(forceUpdate: true);
+                    if (State != null && !State.Assigned)
+                    {
+                        BeginInvoke(new Action(ShowPairingCode));
+                    }
                 };
 
 
 
 
                 // admin button
-                var adminMenuItem = new ToolStripMenuItem("Admin Panel", null, async (s, e) =>
+                var adminMenuItem = new ToolStripMenuItem(L("Админ-панель", "Admin Panel"), null, async (s, e) =>
                 {
                     // Use the new reusable PromptPin function
-                    if (PromptPin("Enter Admin PIN:"))
+                    if (PromptPin(L("Введите PIN администратора:", "Enter Admin PIN:")))
                     {
-                        diagWin.Show();
+                        diagWin?.Show();
                         await SendInfoLogAsync($"Admin Panel accessed at local time: {DateTime.Now}");
-                        diagWin.Activate(); // Bring the window to the front
+                        diagWin?.Activate(); // Bring the window to the front
                     }
                     else
                     {
 
-                        tray.ShowBalloonTip(1200, "Invalid", "Wrong PIN", ToolTipIcon.Warning);
+                        tray.ShowBalloonTip(1200, L("Неверно", "Invalid"), L("Неверный PIN", "Wrong PIN"), ToolTipIcon.Warning);
                     }
                 });
                 menu.Items.Add(adminMenuItem);
@@ -346,7 +375,7 @@ namespace Guard
             UpdateTrayIcon(); // Update icon to reflect state
 
             // disable button
-            menu.Items.Add("Disable App", null, async (s, e) => await DisableApp());
+            menu.Items.Add(L("Отключить Guard", "Disable App"), null, async (s, e) => await DisableApp());
 
 
             tray.ContextMenuStrip = menu;
@@ -366,6 +395,178 @@ namespace Guard
 
 
 
+        }
+
+        private void StartParentAdminServer()
+        {
+            var state = State;
+            if (state == null) return;
+
+            parentAdminServer = new ParentAdminServer(state, Log, RequestApplyFromParentAdmin);
+            parentAdminServer.Start();
+        }
+
+        private void ShowApplicationAccessRequest()
+        {
+            var state = State;
+            if (state == null)
+            {
+                tray.ShowBalloonTip(1500, "Guard", L("Guard ещё не готов.", "Guard state is not ready."), ToolTipIcon.Warning);
+                return;
+            }
+
+            using (var dialog = new OpenFileDialog())
+            {
+                dialog.Title = L("Попросить доступ к приложению", "Request app access");
+                dialog.Filter = L("Приложения (*.exe;*.com)|*.exe;*.com|Все файлы (*.*)|*.*",
+                                  "Applications (*.exe;*.com)|*.exe;*.com|All files (*.*)|*.*");
+                dialog.CheckFileExists = true;
+                dialog.Multiselect = false;
+
+                if (dialog.ShowDialog() != DialogResult.OK)
+                {
+                    return;
+                }
+
+                var displayName = Path.GetFileNameWithoutExtension(dialog.FileName);
+                var result = AccessRequestApplier.RequestApplication(
+                    state,
+                    dialog.FileName,
+                    displayName,
+                    "child-manual",
+                    Environment.UserName,
+                    DateTime.UtcNow);
+
+                if (!string.IsNullOrEmpty(result.Error))
+                {
+                    tray.ShowBalloonTip(2500, "Guard", result.Error, ToolTipIcon.Warning);
+                    return;
+                }
+
+                GuardStateStorage.Save(state);
+                diagWin?.UpdateDisplay(state);
+                tray.ShowBalloonTip(2500, "Guard", L("Запрос отправлен родителю.", "Access request sent to parent cabinet."), ToolTipIcon.Info);
+            }
+        }
+
+        private void ShowWebsiteAccessRequest()
+        {
+            var state = State;
+            if (state == null)
+            {
+                tray.ShowBalloonTip(1500, "Guard", L("Guard ещё не готов.", "Guard state is not ready."), ToolTipIcon.Warning);
+                return;
+            }
+
+            using (var form = new Form())
+            using (var label = new Label())
+            using (var textBox = new TextBox())
+            using (var ok = new Button())
+            using (var cancel = new Button())
+            {
+                form.Text = L("Попросить доступ к сайту", "Request site access");
+                form.StartPosition = FormStartPosition.CenterScreen;
+                form.FormBorderStyle = FormBorderStyle.FixedDialog;
+                form.MaximizeBox = false;
+                form.MinimizeBox = false;
+                form.ClientSize = new Size(420, 132);
+
+                label.Text = L("Сайт или домен", "Site or domain");
+                label.SetBounds(16, 16, 380, 22);
+
+                textBox.SetBounds(16, 42, 390, 24);
+                textBox.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
+
+                ok.Text = L("Отправить", "Send request");
+                ok.DialogResult = DialogResult.OK;
+                ok.SetBounds(216, 84, 112, 28);
+
+                cancel.Text = L("Отмена", "Cancel");
+                cancel.DialogResult = DialogResult.Cancel;
+                cancel.SetBounds(336, 84, 70, 28);
+
+                form.Controls.Add(label);
+                form.Controls.Add(textBox);
+                form.Controls.Add(ok);
+                form.Controls.Add(cancel);
+                form.AcceptButton = ok;
+                form.CancelButton = cancel;
+
+                if (form.ShowDialog() != DialogResult.OK)
+                {
+                    return;
+                }
+
+                var result = AccessRequestApplier.RequestWebsite(
+                    state,
+                    textBox.Text,
+                    "child-manual",
+                    Environment.UserName,
+                    DateTime.UtcNow);
+
+                if (!string.IsNullOrEmpty(result.Error))
+                {
+                    tray.ShowBalloonTip(2500, "Guard", result.Error, ToolTipIcon.Warning);
+                    return;
+                }
+
+                GuardStateStorage.Save(state);
+                diagWin?.UpdateDisplay(state);
+                tray.ShowBalloonTip(2500, "Guard", L("Запрос на сайт отправлен родителю.", "Site request sent to parent cabinet."), ToolTipIcon.Info);
+            }
+        }
+
+        private void ShowPairingCode()
+        {
+            var state = State;
+            if (state == null) return;
+
+            EnsurePairingCode(state);
+            using (var pairing = new PairingForm(state.Pairing, parentAdminServer?.GetAccessText() ?? "http://localhost:8765/"))
+            {
+                pairing.ShowDialog();
+            }
+        }
+
+        private static void EnsurePairingCode(GuardState state)
+        {
+            var now = DateTime.UtcNow;
+            if (state.Pairing == null ||
+                state.Pairing.Status != PairingStatus.WaitingForParent ||
+                PairingCodeService.IsExpired(state.Pairing, now))
+            {
+                state.Pairing = PairingCodeService.StartPairing(Environment.MachineName, now);
+                GuardStateStorage.Save(state);
+            }
+        }
+
+        private void RequestApplyFromParentAdmin()
+        {
+            try
+            {
+                BeginInvoke(new Action(async () => await RunMainLoopAsync(forceUpdate: true)));
+            }
+            catch (Exception ex)
+            {
+                Log("[ParentAdmin] Could not schedule policy apply: " + ex.Message);
+            }
+        }
+
+        private void InitializeApplicationControlTimer()
+        {
+            _applicationControlTimer = new System.Windows.Forms.Timer();
+            _applicationControlTimer.Interval = 10 * 1000;
+            _applicationControlTimer.Tick += async (s, e) => await RunApplicationControlTickAsync();
+            _applicationControlTimer.Start();
+            diagWin?.Log("[AppControl] Timer started.");
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            _applicationControlTimer?.Stop();
+            _applicationControlTimer?.Dispose();
+            parentAdminServer?.Dispose();
+            base.OnFormClosed(e);
         }
 
 
@@ -437,45 +638,46 @@ namespace Guard
         public async Task RunMainLoopAsync(bool forceUpdate = false, string action = "")
         {
 
-            if (State == null)
+            var state = State;
+            if (state == null)
             {
                 diagWin?.Log("[CRITICAL] State object is null. Cannot run main loop.");
                 return;
             }
-            if (!State.Assigned) { diagWin.Log($"[MainLoop] Device not assigned to account. Please assign. "); return; }
-            diagWin.Log($"[MainLoop] Running main loop. Forced: {forceUpdate}");
+            if (!state.Assigned) { Log($"[MainLoop] Device not assigned to account. Please assign. "); return; }
+            Log($"[MainLoop] Running main loop. Forced: {forceUpdate}");
 
-            if (State.DevUpdate)
+            if (state.DevUpdate)
             {
                 // If this is a high-priority "forceUpdate" call, we will wait.
                 if (forceUpdate || !string.IsNullOrWhiteSpace(action))
                 {
-                    diagWin.Log("[MainLoop] Another process is running, but this is a forced update. Waiting...");
+                    Log("[MainLoop] Another process is running, but this is a forced update. Waiting...");
                     for (int i = 0; i < 5; i++)
                     {
-                        if (!State.DevUpdate)
+                        if (!state.DevUpdate)
                         {
-                            diagWin.Log($"[MainLoop] Lock has been released. Proceeding now.");
+                            Log($"[MainLoop] Lock has been released. Proceeding now.");
                             break; // The lock is now free, we can continue.
                         }
 
                         if (i == 4) // This is the last attempt
                         {
-                            diagWin.Log("[MainLoop] Waited 50 seconds, but process is still running. Forcing execution now.");
+                            Log("[MainLoop] Waited 50 seconds, but process is still running. Forcing execution now.");
                             break;
                         }
 
-                        diagWin.Log($"[MainLoop] Still waiting... (Attempt {i + 1}/5)");
+                        Log($"[MainLoop] Still waiting... (Attempt {i + 1}/5)");
                         await Task.Delay(10000); // Wait 10 seconds
                     }
                 }
                 else // If this is just a regular background tick, we give up immediately.
                 {
-                    diagWin.Log("[MainLoop] Update is still in progress. Skipping this background tick.");
+                    Log("[MainLoop] Update is still in progress. Skipping this background tick.");
                     return;
                 }
             }
-            State.DevUpdate = true;
+            state.DevUpdate = true;
             UpdateTrayIcon();
 
             if (!string.IsNullOrWhiteSpace(action))
@@ -492,19 +694,43 @@ namespace Guard
             {
 
                 bool needsReapply = false;
+                var utcNow = DateTime.UtcNow;
+
+                var maintenanceExpired = MaintenanceModeApplier.ExpireIfNeeded(state, utcNow);
+                if (maintenanceExpired.Changed)
+                {
+                    Log("[Maintenance] Maintenance mode expired. Restoring protection state.");
+                    GuardStateStorage.Save(state);
+                }
+                else
+                {
+                    var maintenanceRefresh = MaintenanceModeApplier.RefreshActiveState(state, utcNow);
+                    if (maintenanceRefresh.Changed)
+                    {
+                        Log("[Maintenance] Maintenance mode refreshed protection state.");
+                        GuardStateStorage.Save(state);
+                    }
+                }
+
+                var expiredWebsiteGrants = DomainAccessGrantApplier.RemoveExpiredTemporaryGrants(state, utcNow);
+                if (expiredWebsiteGrants.Changed)
+                {
+                    Log("[DomainAccess] Temporary website access expired. Rebuilding domain rules.");
+                    GuardStateStorage.Save(state);
+                }
 
                 if (forceUpdate || mainLoopTickCount % 5 == 0)
                 {
 
                     if (mainLoopTickCount % 30 == 0)
                     {
-                        if (State.IsStartUp)
+                        if (state.IsStartUp)
                         {
                             try
                             {
                                 if (!ScheduledTaskHelper.IsStartupTaskInstalled())
                                 {
-                                    ScheduledTaskHelper.RegisterStartupTask(diagWin.Log, State);
+                                    ScheduledTaskHelper.RegisterStartupTask(Log, state);
                                     diagWin?.Log("Startup task or registry was missing and has been re-created.");
                                 }
                             }
@@ -516,20 +742,29 @@ namespace Guard
                     }
 
 
-                    diagWin.Log($"[MainLoop] Running DeviceUpdater. (force: {forceUpdate}, tick: {mainLoopTickCount})");
-                    State.LastTurnOffTime = DateTime.Now.ToString("hh:mm tt MM/dd");
-                    await DeviceUpdater.SendDeviceUpdateAsync(State, str => diagWin.Log(str));
+                    if (state.LocalParentMode)
+                    {
+                        diagWin?.Log("[MainLoop] Local parent mode: skipping remote DeviceUpdater.");
+                    }
+                    else
+                    {
+                        diagWin?.Log($"[MainLoop] Running DeviceUpdater. (force: {forceUpdate}, tick: {mainLoopTickCount})");
+                        state.LastTurnOffTime = DateTime.Now.ToString("hh:mm tt MM/dd");
+                        await DeviceUpdater.SendDeviceUpdateAsync(state, Log);
+                    }
 
                 }
 
+                await ApplyApplicationControlPolicyIfNeeded(state);
+
                 if (((mainLoopTickCount + 3) % 3) == 0)
                 {
-                    if (State.SyncStatus && !State.IsHostsFileActive)
+                    if (state.SyncStatus && !state.IsHostsFileActive)
                     {
-                        diagWin.Log("[STATE-CHECK] Rules should be active. Turning ON.");
+                        Log("[STATE-CHECK] Rules should be active. Turning ON.");
                         needsReapply = true;
                     }
-                    else if (State.HostsFileLastWriteTimeUtc.HasValue && State.HostsFileSize.HasValue)
+                    else if (state.HostsFileLastWriteTimeUtc.HasValue && state.HostsFileSize.HasValue)
                     {
                         try
                         {
@@ -538,110 +773,110 @@ namespace Guard
                             var currentSize = fileInfo.Length;
 
                             // Check 1: Is the file size different? (This is a strong indicator of tampering).
-                            bool sizeMismatch = (currentSize - State.HostsFileSize.Value) > 1000;
+                            bool sizeMismatch = (currentSize - state.HostsFileSize.Value) > 1000;
 
                             // Check 2: Is the time difference significant (more than 60 seconds)?
-                            var timeDifference = (currentWriteTime - State.HostsFileLastWriteTimeUtc.Value).TotalSeconds;
+                            var timeDifference = (currentWriteTime - state.HostsFileLastWriteTimeUtc.Value).TotalSeconds;
                             bool timeMismatch = Math.Abs(timeDifference) > 60; // 1-minute tolerance
 
                             // If either the size is different, OR the timestamp is significantly different,
                             // then we flag it as a potential tamper.
                             if (sizeMismatch || timeMismatch)
                             {
-                                diagWin.Log($"[TAMPER-DETECT] Hosts file change detected. Size different: {sizeMismatch}, Time different: {timeMismatch}.");
-                                diagWin.Log($"[TAMPER-DETECT] Current: {currentWriteTime}, {currentSize} bytes. Saved: {State.HostsFileLastWriteTimeUtc.Value}, {State.HostsFileSize.Value} bytes.");
+                                Log($"[TAMPER-DETECT] Hosts file change detected. Size different: {sizeMismatch}, Time different: {timeMismatch}.");
+                                Log($"[TAMPER-DETECT] Current: {currentWriteTime}, {currentSize} bytes. Saved: {state.HostsFileLastWriteTimeUtc.Value}, {state.HostsFileSize.Value} bytes.");
                                 needsReapply = true;
                             }
                         }
-                        catch (Exception ex) { diagWin.Log($"[TAMPER-CHECK] Could not check hosts file: {ex.Message}"); }
+                        catch (Exception ex) { Log($"[TAMPER-CHECK] Could not check hosts file: {ex.Message}"); }
                     }
                 }
 
                 if (needsReapply)
                 {
-                    State.UpdateInfo.UpdateApplied = false;
-                    State.UpdateInfo.SyncStatUpdate = true;
+                    state.UpdateInfo.UpdateApplied = false;
+                    state.UpdateInfo.SyncStatUpdate = true;
                 }
 
 
-                if (!State.UpdateInfo.UpdateApplied)
+                if (!state.UpdateInfo.UpdateApplied)
                 {
-                    if (State.SyncStatus == true)
+                    if (state.SyncStatus == true)
                     {
                         bool catUpdated = false;
                         bool ruleUpdated = false;
 
-                        if (State.UpdateInfo.Cats || State.UpdateInfo.Presets || State.UpdateInfo.RestrictedCats || State.UpdateInfo.Rules)
+                        if (state.UpdateInfo.Cats || state.UpdateInfo.Presets || state.UpdateInfo.RestrictedCats || state.UpdateInfo.Rules)
                         {
-                            await SystemCleaner.ResetHostsFileAsync(diagWin.Log);
-                            await SystemCleaner.RemoveFirewallRulesAsync(diagWin.Log);
+                            await SystemCleaner.ResetHostsFileAsync(Log);
+                            await SystemCleaner.RemoveFirewallRulesAsync(Log);
 
 
-                            if (State.UpdateInfo.Rules || State.UpdateInfo.Presets || State.UpdateInfo.RestrictedCats)
+                            if (state.UpdateInfo.Rules || state.UpdateInfo.Presets || state.UpdateInfo.RestrictedCats)
                             {
-                                await PrepareRulesList(State);
+                                await PrepareRulesList(state);
                                 ruleUpdated = true;
                             }
-                            if (State.UpdateInfo.Cats || State.UpdateInfo.Presets || State.UpdateInfo.RestrictedCats)
+                            if (state.UpdateInfo.Cats || state.UpdateInfo.Presets || state.UpdateInfo.RestrictedCats)
                             {
-                                await PrepareCatList(State);
+                                await PrepareCatList(state);
                                 catUpdated = true;
                             }
-                            GuardStateStorage.Save(State);
+                            GuardStateStorage.Save(state);
                         }
 
-                        if (catUpdated && ruleUpdated) State.IpsRecheck = DateTime.UtcNow;
+                        if (catUpdated && ruleUpdated) state.IpsRecheck = DateTime.UtcNow;
 
 
-                        if (State.UpdateInfo.Ips)
+                        if (state.UpdateInfo.Ips)
                         {
                             if (!catUpdated && !ruleUpdated)
                             {
-                                await SystemCleaner.ResetHostsFileAsync(diagWin.Log);
-                                await SystemCleaner.RemoveFirewallRulesAsync(diagWin.Log);
+                                await SystemCleaner.ResetHostsFileAsync(Log);
+                                await SystemCleaner.RemoveFirewallRulesAsync(Log);
                             }
 
-                            await PrepareUpdatedIps(State, catUpdated, ruleUpdated);
-                            await CreateDatedHostsBackupAsync(s => diagWin.Log(s));
+                            await PrepareUpdatedIps(state, catUpdated, ruleUpdated);
+                            await CreateDatedHostsBackupAsync(Log);
 
-                            if (!catUpdated || !ruleUpdated) GuardStateStorage.Save(State);
+                            if (!catUpdated || !ruleUpdated) GuardStateStorage.Save(state);
                         }
 
-                        if (State.UpdateInfo.SyncStatUpdate || State.UpdateInfo.Cats || State.UpdateInfo.Rules || State.UpdateInfo.Presets || State.UpdateInfo.RestrictedCats || State.UpdateInfo.Ips)
+                        if (state.UpdateInfo.SyncStatUpdate || state.UpdateInfo.Cats || state.UpdateInfo.Rules || state.UpdateInfo.Presets || state.UpdateInfo.RestrictedCats || state.UpdateInfo.Ips)
                         {
-                            await ApplyPermanentCategoriesAsync(State);
+                            await ApplyPermanentCategoriesAsync(state);
 
                             if (ruleUpdated)
                             {
                                 // This is now the complete logic for handling a change in rules.
-                                diagWin.Log("[MainLoop] Detected rule changes. Calculating new weekly timeline...");
-                                SchedulerEngine.CalculateWeeklyTimeline(State, s => diagWin.Log(s));
+                                Log("[MainLoop] Detected rule changes. Calculating new weekly timeline...");
+                                SchedulerEngine.CalculateWeeklyTimeline(state, Log);
                             }
-                            State.LastAppliedSnapshotMinute = -1;
-                            await SchedulerEngine.RunSchedulerTick(State, s => diagWin.Log(s));
-                            diagWin.Log("[MainLoop] New rule state has been calculated and applied.");
+                            state.LastAppliedSnapshotMinute = -1;
+                            await SchedulerEngine.RunSchedulerTick(state, Log);
+                            Log("[MainLoop] New rule state has been calculated and applied.");
                             //LogTimelineAndRules(State);
 
                         }
-                        State.UpdateInfo.Cats = false;
-                        State.UpdateInfo.Rules = false;
-                        State.UpdateInfo.Presets = false;
-                        State.UpdateInfo.Ips = false;
-                        State.UpdateInfo.Parameters = false;
-                        State.UpdateInfo.RestrictedCats = false;
-                        State.UpdateInfo.SyncStatUpdate = false;
-                        State.UpdateInfo.UpdateApplied = true;
-                        State.IsHostsFileActive = true;
+                        state.UpdateInfo.Cats = false;
+                        state.UpdateInfo.Rules = false;
+                        state.UpdateInfo.Presets = false;
+                        state.UpdateInfo.Ips = false;
+                        state.UpdateInfo.Parameters = false;
+                        state.UpdateInfo.RestrictedCats = false;
+                        state.UpdateInfo.SyncStatUpdate = false;
+                        state.UpdateInfo.UpdateApplied = true;
+                        state.IsHostsFileActive = true;
                         //diagWin.Log("[STATE-DUMP]Current state: " + System.Text.Json.JsonSerializer.Serialize(State));
 
-                        GuardStateStorage.Save(State);
+                        GuardStateStorage.Save(state);
 
                         await SystemCleaner.FlushDnsAsync();
-                        if (State.ResetConnection)
+                        if (state.ResetConnection)
                         {
                             if (MainForm.Instance != null)
                             {
-                                await SystemCleaner.DisableAndRestoreNetworkAsync(diagWin.Log);
+                                await SystemCleaner.DisableAndRestoreNetworkAsync(Log);
                                 await SystemCleaner.FlushDnsAsync();
                             }
                         }
@@ -651,26 +886,26 @@ namespace Guard
                     else // turned off
                     {
                         UpdateTrayIcon();
-                        diagWin.Log("SyncStatus is OFF. Cleaning hosts and firewall rules...");
-                        await SystemCleaner.ResetHostsFileAsync(diagWin.Log);
-                        await SystemCleaner.RemoveFirewallRulesAsync(diagWin.Log);
+                        Log("SyncStatus is OFF. Cleaning hosts and firewall rules...");
+                        await SystemCleaner.ResetHostsFileAsync(Log);
+                        await SystemCleaner.RemoveFirewallRulesAsync(Log);
                         await SystemCleaner.FlushDnsAsync();
                         //diagWin.Log("[STATE-DUMP] Checking ResetConnection. Current state: " + System.Text.Json.JsonSerializer.Serialize(State));
-                        if (State.ResetConnection)
+                        if (state.ResetConnection)
                         {
-                            await SystemCleaner.DisableAndRestoreNetworkAsync(diagWin.Log); await SystemCleaner.FlushDnsAsync();
+                            await SystemCleaner.DisableAndRestoreNetworkAsync(Log); await SystemCleaner.FlushDnsAsync();
                         }
-                        State.UpdateInfo.SyncStatUpdate = false;
-                        State.UpdateInfo.UpdateApplied = true;
-                        GuardStateStorage.Save(State);
+                        state.UpdateInfo.SyncStatUpdate = false;
+                        state.UpdateInfo.UpdateApplied = true;
+                        GuardStateStorage.Save(state);
                     }
                 }
                 else
                 {
-                    if (State.SyncStatus)
+                    if (state.SyncStatus)
                     {
 
-                        await SchedulerEngine.RunSchedulerTick(State, s => diagWin.Log(s));
+                        await SchedulerEngine.RunSchedulerTick(state, Log);
                     }
                 }
 
@@ -678,9 +913,504 @@ namespace Guard
             }
             catch (Exception ex)
             {
-                diagWin.Log("[Scheduler] Error: " + ex.Message);
+                Log("[Scheduler] Error: " + ex.Message);
             }
-            finally { State.DevUpdate = false; diagWin.UpdateDisplay(State); UpdateTrayIcon(); GuardStateStorage.Save(State); }
+            finally { state.DevUpdate = false; diagWin.UpdateDisplay(state); UpdateTrayIcon(); GuardStateStorage.Save(state); }
+        }
+
+        private async Task ApplyApplicationControlPolicyIfNeeded(GuardState state)
+        {
+            if (state.AppControl == null || !state.AppControl.PolicyUpdatePending)
+            {
+                return;
+            }
+
+            await ApplicationControlPolicyManager.ApplyIfNeededAsync(state, Application.ExecutablePath, Log);
+        }
+
+        private async Task RunApplicationControlTickAsync()
+        {
+            if (isApplicationControlTickRunning)
+            {
+                return;
+            }
+
+            isApplicationControlTickRunning = true;
+            try
+            {
+                var state = State;
+                if (state == null)
+                {
+                    return;
+                }
+
+                RecordActivitySnapshot(state);
+
+                var utcNow = DateTime.UtcNow;
+                var maintenanceExpired = MaintenanceModeApplier.ExpireIfNeeded(state, utcNow);
+                if (maintenanceExpired.Changed)
+                {
+                    Log("[Maintenance] Maintenance mode expired. Restoring protection state.");
+                    GuardStateStorage.Save(state);
+                    await ApplyApplicationControlPolicyIfNeeded(state);
+                }
+                else
+                {
+                    var maintenanceRefresh = MaintenanceModeApplier.RefreshActiveState(state, utcNow);
+                    if (maintenanceRefresh.Changed)
+                    {
+                        Log("[Maintenance] Maintenance mode refreshed protection state.");
+                        GuardStateStorage.Save(state);
+                        await ApplyApplicationControlPolicyIfNeeded(state);
+                    }
+                }
+
+                if (state.AppControl == null || state.AppControl.Mode == ApplicationControlMode.Off)
+                {
+                    return;
+                }
+
+                var runningApplications = GetRunningApplications();
+                var result = ApplicationControlRuntime.Evaluate(state.AppControl, runningApplications, utcNow);
+
+                foreach (var warning in result.WarningApplications)
+                {
+                    tray.ShowBalloonTip(
+                        5000,
+                        "Guard",
+                        warning.Application.DisplayName + ": " +
+                        L("сохранись, время закончится через ", "save your game. Time ends in ") +
+                        warning.MinutesLeft +
+                        L(" мин.", " min."),
+                        ToolTipIcon.Warning);
+                }
+
+                foreach (var runningApp in result.ExpiredRunningApplications)
+                {
+                    StopExpiredApplication(runningApp);
+                }
+
+                foreach (var runningTool in result.BlockedManagementTools)
+                {
+                    StopBlockedManagementTool(runningTool);
+                }
+
+                var overLimitApps = TimeLimitEngine.GetOverLimitRunningApplications(state, runningApplications, utcNow);
+                foreach (var runningApp in overLimitApps)
+                {
+                    StopOverLimitApplication(runningApp);
+                }
+
+                if (overLimitApps.Count > 0)
+                {
+                    state.AppControl.PolicyUpdatePending = true;
+                    result.Changed = true;
+                }
+
+                var overLimitSiteGrants = TimeLimitEngine.GetOverLimitWebsiteGrants(state, utcNow);
+                if (overLimitSiteGrants.Count > 0)
+                {
+                    state.UpdateInfo.Rules = true;
+                    state.UpdateInfo.Cats = true;
+                    state.UpdateInfo.UpdateApplied = false;
+                    result.Changed = true;
+                }
+
+                CaptureApplicationAccessRequests(state);
+
+                if (result.Changed)
+                {
+                    GuardStateStorage.Save(state);
+                }
+
+                await ApplyApplicationControlPolicyIfNeeded(state);
+            }
+            catch (Exception ex)
+            {
+                Log("[AppControl] Tick error: " + ex.Message);
+            }
+            finally
+            {
+                isApplicationControlTickRunning = false;
+            }
+        }
+
+        private void RecordActivitySnapshot(GuardState state)
+        {
+            try
+            {
+                var snapshot = ActivityMonitor.Capture(DateTime.UtcNow);
+                CaptureWebsiteAccessRequest(state, snapshot);
+
+                var result = ActivityAccountingEngine.RecordSnapshot(
+                    state,
+                    snapshot);
+
+                if (result.Changed)
+                {
+                    GuardStateStorage.Save(state);
+                    diagWin?.UpdateDisplay(state);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[Activity] Could not record activity snapshot: " + ex.Message);
+            }
+        }
+
+        private void CaptureWebsiteAccessRequest(GuardState state, ActivitySnapshot snapshot)
+        {
+            var utcNow = DateTime.UtcNow;
+            var domain = DomainAccessGrantApplier.NormalizeDomainInput(snapshot.ForegroundDomain);
+            if (!WebsiteAccessPolicy.ShouldBlockWebsite(state, domain, utcNow))
+            {
+                return;
+            }
+
+            var blockResult = WebsiteAccessPolicy.EnsureDefaultDeniedDomainRule(state, domain);
+            bool changed = blockResult.Changed;
+            if (!string.IsNullOrEmpty(blockResult.Error))
+            {
+                Log("[WebDefaultDeny] Could not mark blocked domain: " + blockResult.Error);
+                return;
+            }
+
+            bool hasPendingRequest = AccessRequestApplier.GetPendingRequests(state).Any(request =>
+                request.Type == AccessRequestType.Website &&
+                string.Equals(request.Target, domain, StringComparison.OrdinalIgnoreCase));
+
+            if (hasPendingRequest)
+            {
+                tray.ShowBalloonTip(
+                    2500,
+                    "Guard",
+                    UiLanguage.Text(state.UiLanguage,
+                        "Запрос на сайт " + domain + " уже отправлен родителю.",
+                        "The site request for " + domain + " was already sent to the parent."),
+                    ToolTipIcon.Info);
+            }
+            else if (ShouldShowWebsitePrompt(domain, utcNow) && PromptChildForWebsiteRequest(domain))
+            {
+                var requestResult = AccessRequestApplier.RequestWebsite(
+                    state,
+                    domain,
+                    "browser",
+                    Environment.UserName,
+                    utcNow);
+                if (!string.IsNullOrEmpty(requestResult.Error))
+                {
+                    tray.ShowBalloonTip(2500, "Guard", requestResult.Error, ToolTipIcon.Warning);
+                }
+                else
+                {
+                    changed = changed || requestResult.Changed;
+                    tray.ShowBalloonTip(
+                        2500,
+                        "Guard",
+                        UiLanguage.Text(state.UiLanguage,
+                            "Запрос на сайт отправлен родителю.",
+                            "The site request was sent to the parent."),
+                        ToolTipIcon.Info);
+                }
+            }
+
+            StopBlockedWebsiteBrowser(snapshot, domain);
+
+            if (changed)
+            {
+                GuardStateStorage.Save(state);
+                diagWin?.UpdateDisplay(state);
+            }
+        }
+
+        private void ShowChildTasks()
+        {
+            var state = State;
+            if (state == null)
+            {
+                tray.ShowBalloonTip(1500, "Guard", L("Guard ещё не готов.", "Guard state is not ready."), ToolTipIcon.Warning);
+                return;
+            }
+
+            var tasks = DailyTaskEngine.GetActiveTasks(state);
+            if (!tasks.Any())
+            {
+                tray.ShowBalloonTip(2000, "Guard", L("На сегодня задач нет.", "No tasks for today."), ToolTipIcon.Info);
+                return;
+            }
+
+            using (var form = new Form())
+            using (var panel = new FlowLayoutPanel())
+            {
+                form.Text = L("Мои задачи", "Guard Tasks");
+                form.StartPosition = FormStartPosition.CenterScreen;
+                form.Size = new Size(420, 360);
+                form.MinimizeBox = false;
+                form.MaximizeBox = false;
+
+                panel.Dock = DockStyle.Fill;
+                panel.FlowDirection = FlowDirection.TopDown;
+                panel.WrapContents = false;
+                panel.AutoScroll = true;
+                panel.Padding = new Padding(12);
+                form.Controls.Add(panel);
+
+                foreach (var task in tasks)
+                {
+                    var button = new Button
+                    {
+                        Width = 360,
+                        Height = 52,
+                        Text = task.Title + "  (+" + task.RewardMinutes + " " + L("мин", "min") + " " + ActivityCategoryText(task.RewardCategory) + ")",
+                        Tag = task.Id
+                    };
+                    button.Click += (sender, args) =>
+                    {
+                        var taskId = (string)((Button)sender!).Tag;
+                        var result = ParentCommandApplier.Apply(state, new ParentCommand
+                        {
+                            Type = ParentCommandType.CompleteDailyTask,
+                            Value = taskId,
+                            DisplayName = "child"
+                        });
+
+                        if (!string.IsNullOrEmpty(result.Error))
+                        {
+                            MessageBox.Show(result.Error, "Guard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+
+                        GuardStateStorage.Save(state);
+                        MessageBox.Show(L("Задача выполнена.", "Task completed."), "Guard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    };
+                    panel.Controls.Add(button);
+                }
+
+                form.ShowDialog();
+            }
+        }
+
+        private void CaptureApplicationAccessRequests(GuardState state)
+        {
+            try
+            {
+                var events = AppLockerEventReader.ReadExecutableAccessEvents(
+                    state.LastAppLockerExeEventRecordId,
+                    maxEvents: 50,
+                    log: Log,
+                    latestRecordIdSeen: out var latestRecordIdSeen);
+
+                bool changed = false;
+                foreach (var blockedEvent in events)
+                {
+                    var displayName = Path.GetFileNameWithoutExtension(blockedEvent.FilePath);
+                    bool hasPendingRequest = AccessRequestApplier.GetPendingRequests(state).Any(request =>
+                        request.Type == AccessRequestType.Application &&
+                        string.Equals(
+                            ApplicationControlApplier.NormalizeExecutablePath(request.Target),
+                            ApplicationControlApplier.NormalizeExecutablePath(blockedEvent.FilePath),
+                            StringComparison.OrdinalIgnoreCase));
+                    bool shouldAskChild = state.AppControl != null &&
+                        state.AppControl.Mode == ApplicationControlMode.Enforced &&
+                        blockedEvent.EventId == 8004 &&
+                        !hasPendingRequest;
+                    if (shouldAskChild)
+                    {
+                        if (!ShouldShowApplicationPrompt(blockedEvent.FilePath, DateTime.UtcNow) ||
+                            !PromptChildForApplicationRequest(displayName))
+                        {
+                            continue;
+                        }
+                    }
+
+                    var result = AccessRequestApplier.RequestApplication(
+                        state,
+                        blockedEvent.FilePath,
+                        displayName,
+                        "applocker:" + blockedEvent.EventId,
+                        blockedEvent.User,
+                        blockedEvent.OccurredAtUtc);
+
+                    if (result.Changed)
+                    {
+                        changed = true;
+                        if (state.AppControl != null &&
+                            state.AppControl.Mode == ApplicationControlMode.Enforced &&
+                            blockedEvent.EventId == 8004)
+                        {
+                            tray.ShowBalloonTip(
+                                2500,
+                                "Guard",
+                                UiLanguage.Text(state.UiLanguage,
+                                    "Запрос на приложение отправлен родителю.",
+                                    "The app request was sent to the parent."),
+                                ToolTipIcon.Info);
+                        }
+                    }
+                }
+
+                if (latestRecordIdSeen > state.LastAppLockerExeEventRecordId)
+                {
+                    state.LastAppLockerExeEventRecordId = latestRecordIdSeen;
+                    changed = true;
+                }
+
+                if (changed)
+                {
+                    GuardStateStorage.Save(state);
+                    diagWin?.UpdateDisplay(state);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[AppControl] Could not capture application access requests: " + ex.Message);
+            }
+        }
+
+        private bool ShouldShowWebsitePrompt(string domain, DateTime utcNow)
+        {
+            if (lastWebsitePromptUtcByDomain.TryGetValue(domain, out var lastPrompt) &&
+                (utcNow - lastPrompt).TotalSeconds < 60)
+            {
+                return false;
+            }
+
+            lastWebsitePromptUtcByDomain[domain] = utcNow;
+            return true;
+        }
+
+        private bool ShouldShowApplicationPrompt(string filePath, DateTime utcNow)
+        {
+            var normalized = ApplicationControlApplier.NormalizeExecutablePath(filePath) ?? filePath;
+            if (lastApplicationPromptUtcByPath.TryGetValue(normalized, out var lastPrompt) &&
+                (utcNow - lastPrompt).TotalSeconds < 60)
+            {
+                return false;
+            }
+
+            lastApplicationPromptUtcByPath[normalized] = utcNow;
+            return true;
+        }
+
+        private bool PromptChildForWebsiteRequest(string domain)
+        {
+            var result = MessageBox.Show(
+                L("Сайт " + domain + " закрыт. Попросить доступ у родителя?",
+                  "The site " + domain + " is blocked. Ask the parent for access?"),
+                "Guard",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+            return result == DialogResult.Yes;
+        }
+
+        private bool PromptChildForApplicationRequest(string displayName)
+        {
+            var safeName = string.IsNullOrWhiteSpace(displayName) ? L("это приложение", "this app") : displayName;
+            var result = MessageBox.Show(
+                L("Нельзя запустить " + safeName + ". Попросить доступ у родителя?",
+                  "You cannot open " + safeName + ". Ask the parent for access?"),
+                "Guard",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+            return result == DialogResult.Yes;
+        }
+
+        private void StopBlockedWebsiteBrowser(ActivitySnapshot snapshot, string domain)
+        {
+            if (snapshot.ForegroundProcessId <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                using (var process = Process.GetProcessById(snapshot.ForegroundProcessId))
+                {
+                    process.Kill();
+                    Log("[WebDefaultDeny] Closed browser on blocked site: " + domain);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[WebDefaultDeny] Could not close browser on blocked site: " + ex.Message);
+            }
+        }
+
+        private static List<RunningApplication> GetRunningApplications()
+        {
+            var applications = new List<RunningApplication>();
+            foreach (var process in Process.GetProcesses())
+            {
+                try
+                {
+                    var path = process.MainModule?.FileName;
+                    if (!string.IsNullOrWhiteSpace(path))
+                    {
+                        applications.Add(new RunningApplication
+                        {
+                            ProcessId = process.Id,
+                            FilePath = path!
+                        });
+                    }
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+
+            return applications;
+        }
+
+        private void StopExpiredApplication(RunningApplication runningApp)
+        {
+            try
+            {
+                using (var process = Process.GetProcessById(runningApp.ProcessId))
+                {
+                    process.Kill();
+                    Log("[AppControl] Stopped expired application: " + runningApp.FilePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[AppControl] Could not stop expired application: " + ex.Message);
+            }
+        }
+
+        private void StopBlockedManagementTool(RunningApplication runningApp)
+        {
+            try
+            {
+                using (var process = Process.GetProcessById(runningApp.ProcessId))
+                {
+                    process.Kill();
+                    Log("[AppControl] Stopped blocked management tool: " + runningApp.FilePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[AppControl] Could not stop blocked management tool: " + ex.Message);
+            }
+        }
+
+        private void StopOverLimitApplication(RunningApplication runningApp)
+        {
+            try
+            {
+                using (var process = Process.GetProcessById(runningApp.ProcessId))
+                {
+                    process.Kill();
+                    Log("[TimeLimit] Stopped over-limit application: " + runningApp.FilePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("[TimeLimit] Could not stop over-limit application: " + ex.Message);
+            }
         }
 
 
@@ -715,6 +1445,11 @@ namespace Guard
             {
                 diagWin?.Log("[CRITICAL] State object is null. Cannot run command.");
                 return false;
+            }
+            if (State.LocalParentMode)
+            {
+                diagWin.Log("[Logger] Local parent mode: info log kept locally.");
+                return true;
             }
             if (State.Assigned && !string.IsNullOrEmpty(State.DeviceId))
             {
@@ -769,6 +1504,7 @@ namespace Guard
 
         public async Task PrepareRulesList(GuardState state)
         {
+            var utcNow = DateTime.UtcNow;
             var rulePresetUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var rule in state.Rules.Where(r => r.Type == "preset" && !string.IsNullOrWhiteSpace(r.Value)))
             {
@@ -781,7 +1517,7 @@ namespace Guard
                 var urls = rule.Value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
                                       .Select(u => u.Trim().ToLowerInvariant());
 
-                foreach (var url in urls)
+                foreach (var url in DomainAccessGrantApplier.FilterBlockedDomains(urls, state, utcNow))
                 {
                     ruleCustomUrls.Add(url);
                 }
@@ -839,7 +1575,25 @@ namespace Guard
 
             foreach (var rule in state.Rules)
             {
-                var parsed = RuleParser.ConvertRuleToParsedRule(rule, state);
+                var ruleToParse = rule;
+                if (rule.Type == "custom_url" && !string.IsNullOrWhiteSpace(rule.Value))
+                {
+                    var filteredValues = DomainAccessGrantApplier.FilterBlockedDomains(
+                        rule.Value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                            .Select(u => u.Trim().ToLowerInvariant()),
+                        state,
+                        utcNow);
+                    ruleToParse = new InstructionRule
+                    {
+                        Id = rule.Id,
+                        Type = rule.Type,
+                        Value = string.Join(",", filteredValues),
+                        Schedule = rule.Schedule
+                    };
+                }
+
+                var parsed = RuleParser.ConvertRuleToParsedRule(ruleToParse, state);
+                parsed.Urls = DomainAccessGrantApplier.FilterBlockedDomains(parsed.Urls, state, utcNow);
                 parsedRules.Add(parsed);
 
                 // For debug output:
@@ -969,7 +1723,10 @@ namespace Guard
 
             //diagWin.Log("[PermanentCollector] Domain variants generated: " + string.Join(", ", permanentCategoryVariants));
 
-            var totalDomainsToResolve = permanentCategoryVariants.Concat(permanentPresetDomains).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var totalDomainsToResolve = DomainAccessGrantApplier.FilterBlockedDomains(
+                permanentCategoryVariants.Concat(permanentPresetDomains),
+                state,
+                DateTime.UtcNow);
             //diagWin.Log("[PermanentCollector] Total unique domains to resolve: " + totalDomainsToResolve.Count);
             state.ResolvedPermanentIps = await DomainResolver.ResolveDomainsAsync(totalDomainsToResolve, diagWin.Log);
             //diagWin.Log("[PermanentCollector] Resolved IPs count: " + blockState.ResolvedPermanentIps.Count);
@@ -1264,6 +2021,10 @@ namespace Guard
                 .Where(d => !string.IsNullOrWhiteSpace(d))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            if (State != null)
+            {
+                allDomains = DomainAccessGrantApplier.FilterBlockedDomains(allDomains, State, DateTime.UtcNow);
+            }
 
             allIps = allIps
                 .Where(ip => !string.IsNullOrWhiteSpace(ip))
@@ -1283,7 +2044,7 @@ namespace Guard
 
         public async Task DisableApp(bool requirePin = true)
         {
-            if (!requirePin || PromptPin("Enter PIN to disable app:"))
+            if (!requirePin || PromptPin(L("Введите PIN, чтобы отключить Guard:", "Enter PIN to disable app:")))
             {
                 // We will now use the main 'State' property of the form,
                 // instead of loading a separate local copy.
@@ -1317,7 +2078,7 @@ namespace Guard
             }
             else
             {
-                tray.ShowBalloonTip(1200, "Invalid", "Wrong PIN", ToolTipIcon.Warning);
+                tray.ShowBalloonTip(1200, L("Неверно", "Invalid"), L("Неверный PIN", "Wrong PIN"), ToolTipIcon.Warning);
             }
         }
 
@@ -1337,8 +2098,13 @@ namespace Guard
             Application.Exit();
         }
 
-        public bool PromptPin(string promptText = "Enter PIN to disable app:")
+        public bool PromptPin(string promptText = "")
         {
+            if (string.IsNullOrWhiteSpace(promptText))
+            {
+                promptText = L("Введите PIN, чтобы отключить Guard:", "Enter PIN to disable app:");
+            }
+
             var now = DateTime.UtcNow;
 
             // This lockout logic remains the same
@@ -1348,19 +2114,19 @@ namespace Guard
 
                 if (pinFailCount >= 3 && pinFailCount < 4 && timeSinceLast < TimeSpan.FromMinutes(1))
                 {
-                    tray.ShowBalloonTip(1000, "Too Soon", "Please wait 1 minute before next PIN attempt.", ToolTipIcon.Warning);
+                    tray.ShowBalloonTip(1000, L("Слишком рано", "Too Soon"), L("Подождите 1 минуту перед следующей попыткой PIN.", "Please wait 1 minute before next PIN attempt."), ToolTipIcon.Warning);
                     return false;
                 }
                 else if (pinFailCount >= 4 && timeSinceLast < TimeSpan.FromMinutes(10))
                 {
-                    tray.ShowBalloonTip(1000, "Too Soon", "Please wait 10 minutes before next PIN attempt.", ToolTipIcon.Warning);
+                    tray.ShowBalloonTip(1000, L("Слишком рано", "Too Soon"), L("Подождите 10 минут перед следующей попыткой PIN.", "Please wait 10 minutes before next PIN attempt."), ToolTipIcon.Warning);
                     return false;
                 }
             }
 
             // --- The UI logic is now replaced with a call to our new PinForm ---
             string enteredPin = "";
-            using (var pinDialog = new PinForm(promptText, new Icon(new System.IO.MemoryStream(Properties.Resources.guard))))
+            using (var pinDialog = new PinForm(promptText, new Icon(new System.IO.MemoryStream(Properties.Resources.guard)), L("Введите PIN", "Enter PIN")))
             {
                 // Show the reusable dialog and check if the user clicked OK
                 if (pinDialog.ShowDialog() != DialogResult.OK)
@@ -1373,10 +2139,7 @@ namespace Guard
 
             lastPinAttemptTime = now;
 
-            string correctPin = "123456"; // Default PIN
-
-            if (State != null && !string.IsNullOrEmpty(State.PinCode))
-                correctPin = State.PinCode;
+            string correctPin = EmergencyPinPolicy.GetEffectivePin(State?.PinCode);
 
             if (enteredPin == correctPin)
             {
@@ -1454,11 +2217,6 @@ namespace Guard
         public void UpdateState(GuardState newState)
         {
             State = newState;
-            // This will also hide the "Assign" option from the tray menu if it exists
-            if (assignMenuItem != null)
-            {
-                assignMenuItem.Visible = false;
-            }
         }
 
         public async Task CheckForUpdatesAsync()
@@ -1466,7 +2224,7 @@ namespace Guard
             // In future steps, we will add the logic here to call the GitHub API.
             // For now, it just shows a placeholder message.
             diagWin.Log("Update check initiated.");
-            MessageBox.Show("Update checking is not yet implemented.", "Info");
+            MessageBox.Show(L("Проверка обновлений пока не реализована.", "Update checking is not yet implemented."), L("Информация", "Info"));
             await Task.CompletedTask; // To make the method awaitable
         }
 

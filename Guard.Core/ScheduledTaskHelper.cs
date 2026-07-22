@@ -73,28 +73,16 @@ namespace Guard
 
         private static string RunSchtasks(string arguments, bool captureOutput = false)
         {
-            var psi = new ProcessStartInfo("schtasks.exe", arguments)
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-
-            var proc = Process.Start(psi);
-            if (proc == null)
+            var result = SystemCommandRunnerProvider.Current.Run("schtasks.exe", arguments, captureOutput: true);
+            if (!result.Started)
             {
                 throw new Exception("Failed to start the schtasks.exe process.");
             }
 
-            string output = proc.StandardOutput.ReadToEnd();
-            string error = proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
+            if (result.ExitCode != 0)
+                throw new Exception($"schtasks.exe error: {result.Error}");
 
-            if (proc.ExitCode != 0)
-                throw new Exception($"schtasks.exe error: {error}");
-
-            return output;
+            return captureOutput ? result.Output : "";
         }
 
         private static void SetRegistryRunKey()
@@ -122,8 +110,7 @@ namespace Guard
             using (RegistryKey key = Registry.CurrentUser.OpenSubKey(runKey, false))
             {
                 var value = key?.GetValue("GuardHelper") as string;
-                if (string.IsNullOrEmpty(value)) return false;
-                return value.Contains("StartHelperG.exe");
+                return value?.Contains("StartHelperG.exe") == true;
             }
         }
 

@@ -12,9 +12,31 @@ namespace Guard
     {
         private static int _devUpdateCallCount = 0;
 
+        public static bool ApplyRemotePinCodeIfAllowed(GuardState state, string? remotePinCode, Action<string>? log = null)
+        {
+            if (string.IsNullOrWhiteSpace(remotePinCode))
+            {
+                return false;
+            }
+
+            log?.Invoke("[SECURITY] Ignored remote PIN update. PIN can only be changed from the parent cabinet after parent password confirmation.");
+            return false;
+        }
+
         public static async Task SendDeviceUpdateAsync(GuardState state, Action<string>? log = null)
 
         {
+            if (state.LocalParentMode)
+            {
+                log?.Invoke("[DeviceUpdater] Local parent mode: remote update skipped.");
+                return;
+            }
+
+            if (!state.AllowLegacyRemoteServer)
+            {
+                log?.Invoke("[DeviceUpdater] Legacy remote server mode is disabled; remote update skipped.");
+                return;
+            }
 
 
             _devUpdateCallCount++;            
@@ -134,19 +156,7 @@ namespace Guard
 
                                 if (doc.TryGetProperty("pinCode", out var pinCodeEl))
                                 {
-                                    string? newPin = pinCodeEl.GetString();
-
-                                    // Use our new sanitizer to validate the PIN from the API.
-                                    if (InputSanitizer.IsValidPin(newPin))
-                                    {
-                                        state.PinCode = newPin!; // We use '!' because IsValidPin confirms it's not null.
-                                        log?.Invoke("Pincode Updated.");
-                                    }
-                                    else if (!string.IsNullOrEmpty(newPin))
-                                    {
-                                        // If the PIN from the server is invalid, log it and ignore it.
-                                        log?.Invoke($"[SECURITY] Received invalid PIN from API. Discarding value.");
-                                    }
+                                    ApplyRemotePinCodeIfAllowed(state, pinCodeEl.GetString(), log);
                                 }
 
 
@@ -314,9 +324,10 @@ namespace Guard
                                                 }
 
                                                 // Sanitize the Domains string
-                                                if (!string.IsNullOrEmpty(category.Domains))
+                                                var categoryDomains = category.Domains;
+                                                if (!string.IsNullOrEmpty(categoryDomains))
                                                 {
-                                                    var validDomains = category.Domains
+                                                    var validDomains = categoryDomains!
                                                         .Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries)
                                                         .Select(d => d.Trim())
                                                         .Where(d => InputSanitizer.IsValidDomainName(d))
@@ -325,9 +336,10 @@ namespace Guard
                                                 }
 
                                                 // Sanitize the Ips string
-                                                if (!string.IsNullOrEmpty(category.Ips))
+                                                var categoryIps = category.Ips;
+                                                if (!string.IsNullOrEmpty(categoryIps))
                                                 {
-                                                    var validIps = category.Ips
+                                                    var validIps = categoryIps!
                                                         .Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries)
                                                         .Select(ip => ip.Trim())
                                                         .Where(ip => InputSanitizer.IsValidIpAddress(ip))

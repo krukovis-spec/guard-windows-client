@@ -11,12 +11,14 @@ namespace Guard
     {
         // AssignedState is nullable, so no warning/error.
         public GuardState? AssignedState { get; private set; }
+        private readonly string _language;
 
-        public AssignForm()
+        public AssignForm(string language = UiLanguage.Russian)
         {
+            _language = UiLanguage.Normalize(language);
             InitializeComponent();
             this.Icon = new Icon(new System.IO.MemoryStream(Properties.Resources.guard));
-            this.Text = "Assign Device";
+            this.Text = L("Привязать устройство", "Assign Device");
             this.Width = 720;
             this.Height = 480;
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -30,7 +32,7 @@ namespace Guard
 
             var label1 = new Label()
             {
-                Text = "Assign Code (12 digits):",
+                Text = L("Код привязки (12 цифр):", "Assign Code (12 digits):"),
                 Left = marginLeft,
                 Top = 40,
                 Width = width,
@@ -81,7 +83,7 @@ namespace Guard
 
             var label2 = new Label()
             {
-                Text = "PIN Code (6 digits):",
+                Text = L("PIN-код (6 цифр):", "PIN Code (6 digits):"),
                 Left = marginLeft,
                 Top = tbAssignCode.Top + tbAssignCode.Height + lineSpacing,
                 Width = width,
@@ -111,7 +113,7 @@ namespace Guard
             };
             var btnAssign = new Button()
             {
-                Text = "Assign",
+                Text = L("Привязать", "Assign"),
                 Left = (this.Width - 180) / 2, // Center horizontally
                 Top = lblStatus.Top + lblStatus.Height + lineSpacing,
                 Width = 180,
@@ -136,12 +138,12 @@ namespace Guard
 
                 // Input validation
                 if (code.Length != 12 || !ulong.TryParse(code, out _))
-                { lblStatus.Text = "Assign code must be exactly 12 digits."; return; }
+                { lblStatus.Text = L("Код привязки должен состоять ровно из 12 цифр.", "Assign code must be exactly 12 digits."); return; }
                 if (pin.Length != 6 || !ulong.TryParse(pin, out _))
-                { lblStatus.Text = "PIN code must be exactly 6 digits."; return; }
+                { lblStatus.Text = L("PIN должен состоять ровно из 6 цифр.", "PIN code must be exactly 6 digits."); return; }
 
                 btnAssign.Enabled = false;
-                lblStatus.Text = "Assigning ...";
+                lblStatus.Text = L("Привязываю ...", "Assigning ...");
                 try
                 {
                     using (var client = new HttpClient())
@@ -156,7 +158,7 @@ namespace Guard
                         var response = await client.PostAsync("https://guard.alexweb.app/api/device/assign", content);
                         if (!response.IsSuccessStatusCode)
                         {
-                            lblStatus.Text = $"Server error: {response.StatusCode}";
+                            lblStatus.Text = L("Ошибка сервера: ", "Server error: ") + response.StatusCode;
                             btnAssign.Enabled = true; return;
                         }
                         var respString = await response.Content.ReadAsStringAsync();
@@ -179,14 +181,16 @@ namespace Guard
                             LastUpdate = "",
                             PinStatus = 0,
                             Assigned = true,
+                            UiLanguage = _language,
                             DeviceTimeZoneId = TimeZoneInfo.Local.Id,
                             DeviceUtcOffsetMinutes = (int)TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).TotalMinutes
                         };
 
                         // Save state
                         GuardStateStorage.Save(AssignedState);
-                        MessageBox.Show("Device assigned successfully! Please allow a couple of minutes for the application to apply the new rules.",
-                "Assignment Complete",
+                        MessageBox.Show(L("Устройство успешно привязано. Подождите пару минут, пока Guard применит новые правила.",
+                            "Device assigned successfully! Please allow a couple of minutes for the application to apply the new rules."),
+                L("Привязка завершена", "Assignment Complete"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
 
@@ -196,7 +200,7 @@ namespace Guard
                 }
                 catch (Exception ex)
                 {
-                    lblStatus.Text = "Error: " + ex.Message;
+                    lblStatus.Text = L("Ошибка: ", "Error: ") + ex.Message;
                     btnAssign.Enabled = true;
                 }
             };
@@ -206,6 +210,10 @@ namespace Guard
         }
 
         // --- ADDED: Format input as XXXX-XXXX-XXXX ---
+        private string L(string russian, string english)
+        {
+            return UiLanguage.Text(_language, russian, english);
+        }
 
     }
 }

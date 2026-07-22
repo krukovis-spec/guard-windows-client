@@ -1,0 +1,312 @@
+{
+  "status": "clean",
+  "run_id": "20260608-203930",
+  "mode": "single",
+  "max_passes": 1,
+  "current_pass": 1,
+  "scope": "diff",
+  "report_only": false,
+  "quality_score": true,
+  "aspect_policy": "broad_first_then_dirty",
+  "aspect_catalog": [
+    {
+      "id": "requirements",
+      "label": "Requirements and product fit",
+      "prompt": "Does the change satisfy the user request without scope drift?"
+    },
+    {
+      "id": "core_logic",
+      "label": "Core logic",
+      "prompt": "Are the main algorithms, data flow, and invariants correct?"
+    },
+    {
+      "id": "edge_cases",
+      "label": "Edge cases and contracts",
+      "prompt": "Do boundary values, empty inputs, errors, concurrency, and API contracts hold?"
+    },
+    {
+      "id": "tests",
+      "label": "Tests and regressions",
+      "prompt": "Do tests prove the changed behavior and relevant failure paths?"
+    },
+    {
+      "id": "security_privacy",
+      "label": "Security, privacy, and secrets",
+      "prompt": "Are auth, secrets, private data, injection, paths, and dependencies safe?"
+    },
+    {
+      "id": "tool_safety",
+      "label": "LLM and tool trust boundaries",
+      "prompt": "Are model/tool outputs treated as untrusted and are external actions bounded?"
+    },
+    {
+      "id": "data_encoding_backcompat",
+      "label": "Data integrity, encoding, migrations, and backcompat",
+      "prompt": "Are stored data, encodings, formats, migrations, and old outputs preserved?"
+    },
+    {
+      "id": "integration_runtime",
+      "label": "Integration, runtime, reliability, and cleanup",
+      "prompt": "Does this work in the real runtime with correct resource cleanup and retries?"
+    },
+    {
+      "id": "observability",
+      "label": "Observability, logs, metrics, and debuggability",
+      "prompt": "Can failures be diagnosed without leaking secrets or hiding root causes?"
+    },
+    {
+      "id": "performance_cost",
+      "label": "Performance, cost, and scalability",
+      "prompt": "Does the change avoid avoidable slow paths, duplicate work, and waste?"
+    },
+    {
+      "id": "ux_accessibility_i18n",
+      "label": "UX, UI, accessibility, and i18n",
+      "prompt": "Does the user-facing behavior remain clear, reachable, and language-safe?"
+    },
+    {
+      "id": "devex_docs",
+      "label": "Developer experience, docs, API, and examples",
+      "prompt": "Would a maintainer or caller know how to use and verify this change?"
+    },
+    {
+      "id": "release_ci_rollback",
+      "label": "Release, deploy, rollback, and CI",
+      "prompt": "Are deployment, CI, rollback, and versioning implications handled?"
+    },
+    {
+      "id": "domain_compliance",
+      "label": "Domain-specific risk and compliance",
+      "prompt": "Are domain rules, client data, legal/business constraints, and project policies respected?"
+    }
+  ],
+  "dirty_aspects": [],
+  "aspect_passes": [
+    {
+      "created_at": "2026-06-08T18:19:20+00:00",
+      "pass": 1,
+      "aspect": "requirements",
+      "status": "fixed",
+      "notes": "Added RU default plus EN switch for the requested parent/child UI.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:20+00:00",
+      "pass": 1,
+      "aspect": "ux_accessibility_i18n",
+      "status": "fixed",
+      "notes": "Parent cabinet, tray child requests/tasks, PIN, pairing/assign and diagnostic buttons localized.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:20+00:00",
+      "pass": 1,
+      "aspect": "tests",
+      "status": "fixed",
+      "notes": "Added UI language command test and set-language non-sensitive auth guard.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:20+00:00",
+      "pass": 1,
+      "aspect": "integration_runtime",
+      "status": "fixed",
+      "notes": "Build regression found by Release build was fixed and verified.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:20+00:00",
+      "pass": 1,
+      "aspect": "security_privacy",
+      "status": "clean",
+      "notes": "Language switch does not weaken protection and does not require/apply system actions.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:21+00:00",
+      "pass": 1,
+      "aspect": "data_encoding_backcompat",
+      "status": "clean",
+      "notes": "UiLanguage defaults to Russian for old state files; memory mojibake check passed.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:53+00:00",
+      "pass": 1,
+      "aspect": "core_logic",
+      "status": "clean",
+      "notes": "Language command is simple state normalization; protection logic unchanged.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:53+00:00",
+      "pass": 1,
+      "aspect": "edge_cases",
+      "status": "clean",
+      "notes": "Unknown language falls back to Russian; repeated language command is idempotent.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:54+00:00",
+      "pass": 1,
+      "aspect": "tool_safety",
+      "status": "clean",
+      "notes": "No live Guard/system action was run; only build, tests, installer compile.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:54+00:00",
+      "pass": 1,
+      "aspect": "observability",
+      "status": "clean",
+      "notes": "Technical logs left intact; no new secret-bearing logs added.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:54+00:00",
+      "pass": 1,
+      "aspect": "performance_cost",
+      "status": "clean",
+      "notes": "Localization uses simple in-process string helpers, no network or heavy work.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:54+00:00",
+      "pass": 1,
+      "aspect": "devex_docs",
+      "status": "fixed",
+      "notes": "Project memory updated with RU/EN UI feature and verification.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:54+00:00",
+      "pass": 1,
+      "aspect": "release_ci_rollback",
+      "status": "clean",
+      "notes": "Release build, tests, final diff-check and Inno Setup build passed.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-06-08T18:19:54+00:00",
+      "pass": 1,
+      "aspect": "domain_compliance",
+      "status": "clean",
+      "notes": "Parental-control safety boundaries preserved; live enforcement still requires explicit Ivan-approved test.",
+      "finding_id": "",
+      "reopened": []
+    }
+  ],
+  "scores": [
+    {
+      "created_at": "2026-06-08T18:20:20+00:00",
+      "pass": 1,
+      "before_fixes": 7.0,
+      "after_fixes": 8.0,
+      "confidence": 8,
+      "reasons": "Before: strict approval flow existed but main UI was still partly English. After: RU default, EN switch, parent/child visible flows localized, build regression fixed, memory updated.",
+      "verification_summary": "git diff --check final passed; Release build passed; Guard.Tests passed 32/32; Inno Setup build passed; live app/installer not run by safety policy."
+    }
+  ],
+  "heartbeat_id": null,
+  "phase": "pass_complete",
+  "last_started_step": "pass",
+  "last_completed_step": "pass",
+  "clean_pass_after_last_fix": true,
+  "created_at": "2026-06-08T17:39:31+00:00",
+  "updated_at": "2026-06-08T18:20:20+00:00",
+  "last_aspect_plan": {
+    "pass": 1,
+    "mode": "broad",
+    "aspects": [
+      {
+        "id": "requirements",
+        "label": "Requirements and product fit",
+        "prompt": "Does the change satisfy the user request without scope drift?"
+      },
+      {
+        "id": "core_logic",
+        "label": "Core logic",
+        "prompt": "Are the main algorithms, data flow, and invariants correct?"
+      },
+      {
+        "id": "edge_cases",
+        "label": "Edge cases and contracts",
+        "prompt": "Do boundary values, empty inputs, errors, concurrency, and API contracts hold?"
+      },
+      {
+        "id": "tests",
+        "label": "Tests and regressions",
+        "prompt": "Do tests prove the changed behavior and relevant failure paths?"
+      },
+      {
+        "id": "security_privacy",
+        "label": "Security, privacy, and secrets",
+        "prompt": "Are auth, secrets, private data, injection, paths, and dependencies safe?"
+      },
+      {
+        "id": "tool_safety",
+        "label": "LLM and tool trust boundaries",
+        "prompt": "Are model/tool outputs treated as untrusted and are external actions bounded?"
+      },
+      {
+        "id": "data_encoding_backcompat",
+        "label": "Data integrity, encoding, migrations, and backcompat",
+        "prompt": "Are stored data, encodings, formats, migrations, and old outputs preserved?"
+      },
+      {
+        "id": "integration_runtime",
+        "label": "Integration, runtime, reliability, and cleanup",
+        "prompt": "Does this work in the real runtime with correct resource cleanup and retries?"
+      },
+      {
+        "id": "observability",
+        "label": "Observability, logs, metrics, and debuggability",
+        "prompt": "Can failures be diagnosed without leaking secrets or hiding root causes?"
+      },
+      {
+        "id": "performance_cost",
+        "label": "Performance, cost, and scalability",
+        "prompt": "Does the change avoid avoidable slow paths, duplicate work, and waste?"
+      },
+      {
+        "id": "ux_accessibility_i18n",
+        "label": "UX, UI, accessibility, and i18n",
+        "prompt": "Does the user-facing behavior remain clear, reachable, and language-safe?"
+      },
+      {
+        "id": "devex_docs",
+        "label": "Developer experience, docs, API, and examples",
+        "prompt": "Would a maintainer or caller know how to use and verify this change?"
+      },
+      {
+        "id": "release_ci_rollback",
+        "label": "Release, deploy, rollback, and CI",
+        "prompt": "Are deployment, CI, rollback, and versioning implications handled?"
+      },
+      {
+        "id": "domain_compliance",
+        "label": "Domain-specific risk and compliance",
+        "prompt": "Are domain rules, client data, legal/business constraints, and project policies respected?"
+      }
+    ],
+    "dirty_aspects": [],
+    "global_gates": [
+      "git diff --check",
+      "compile/lint",
+      "targeted tests"
+    ]
+  }
+}

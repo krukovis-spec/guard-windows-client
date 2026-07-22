@@ -43,12 +43,11 @@ namespace Guard.Cleaner
             if (args.Contains("/checkpin"))
             {
                 var state2 = GuardStateStorage.Load();
-                if (state2 == null || string.IsNullOrEmpty(state2.PinCode))
-                    Environment.Exit(0); // No PIN needed, allow uninstall
+                var expectedPin = EmergencyPinPolicy.GetEffectivePin(state2?.PinCode);
 
                 using (var pinDialog = new PinForm("Enter PIN to Uninstall Guard", null))
                 {
-                    if (pinDialog.ShowDialog() == DialogResult.OK && pinDialog.EnteredPin == state2.PinCode)
+                    if (pinDialog.ShowDialog() == DialogResult.OK && pinDialog.EnteredPin == expectedPin)
                     {
                         File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "uninstall.ok"), "ok");
                         Environment.Exit(0);
@@ -106,15 +105,16 @@ namespace Guard.Cleaner
             }
 
 
-                if (state == null || string.IsNullOrEmpty(state.PinCode) || isAuthorized == true)
+                if (isAuthorized == true)
             {
                 isAuthorized = true;
             }
             else
             {
+                var expectedPin = EmergencyPinPolicy.GetEffectivePin(state?.PinCode);
                 using (var pinDialog = new PinForm("Enter PIN to Uninstall Guard", null))
                 {
-                    if (pinDialog.ShowDialog() == DialogResult.OK && pinDialog.EnteredPin == state.PinCode)
+                    if (pinDialog.ShowDialog() == DialogResult.OK && pinDialog.EnteredPin == expectedPin)
                     {
                         isAuthorized = true;
                     }

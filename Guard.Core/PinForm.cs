@@ -7,7 +7,7 @@ namespace Guard
     {
         public string EnteredPin { get; private set; } = "";
 
-        public PinForm(string promptText, Icon? appIcon)
+        public PinForm(string promptText, Icon? appIcon, string title = "Enter PIN")
         {
             InitializeComponent();
 
@@ -15,7 +15,7 @@ namespace Guard
             // 1.5x scale
             this.Width = 480;    // was 320
             this.Height = 240;   // was 160 or 200
-            this.Text = "Enter PIN";
+            this.Text = title;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.StartPosition = FormStartPosition.CenterScreen; // Centered!
             this.MaximizeBox = false;

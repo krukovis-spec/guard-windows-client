@@ -20,10 +20,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}";
 
 [Files]
-Source: "guard\bin\Release\net48\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "Guard.Core\bin\Release\net48\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "Guard.Cleaner\bin\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "GuardStartHelper\bin\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "guard\bin\Release\net48\*"; DestDir: "{app}"; Excludes: "*копия с компьютера LG*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "Guard.Core\bin\Release\net48\*"; DestDir: "{app}"; Excludes: "*копия с компьютера LG*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "Guard.Cleaner\bin\Release\*"; DestDir: "{app}"; Excludes: "*копия с компьютера LG*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "GuardStartHelper\bin\Release\*"; DestDir: "{app}"; Excludes: "*копия с компьютера LG*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "guard\guard.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

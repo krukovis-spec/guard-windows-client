@@ -72,16 +72,7 @@ namespace Guard
         {
             try
             {
-                var psi = new ProcessStartInfo("cmd.exe", "/c " + cmd)
-                {
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
-                var proc = Process.Start(psi);
-                proc?.WaitForExit();
+                SystemCommandRunnerProvider.Current.Run("cmd.exe", "/c " + cmd, captureOutput: true);
             }
             catch { }
         }
@@ -117,30 +108,22 @@ namespace Guard
 
                 foreach (var prefix in tagsToRemove)
                 {
-                    var psi = new ProcessStartInfo("netsh", "advfirewall firewall show rule name=all")
+                    var result = SystemCommandRunnerProvider.Current.Run(
+                        "netsh",
+                        "advfirewall firewall show rule name=all",
+                        captureOutput: true);
+                    if (!result.Started) continue;
+
+                    var ruleNames = result.Output
+                        .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+                        .Where(line => line.StartsWith("Rule Name:", StringComparison.OrdinalIgnoreCase))
+                        .Select(line => line.Substring("Rule Name:".Length).Trim())
+                        .Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                        .Distinct();
+
+                    foreach (var ruleName in ruleNames)
                     {
-                        RedirectStandardOutput = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    };
-
-                    using (var process = Process.Start(psi))
-                    {
-                        if (process == null) continue;
-                        string output = process.StandardOutput.ReadToEnd();
-                        process.WaitForExit();
-
-                        var ruleNames = output
-                            .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
-                            .Where(line => line.StartsWith("Rule Name:", StringComparison.OrdinalIgnoreCase))
-                            .Select(line => line.Substring("Rule Name:".Length).Trim())
-                            .Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                            .Distinct();
-
-                        foreach (var ruleName in ruleNames)
-                        {
-                            RunCmd($"netsh advfirewall firewall delete rule name=\"{ruleName}\"");
-                        }
+                        RunCmd($"netsh advfirewall firewall delete rule name=\"{ruleName}\"");
                     }
                 }
             });

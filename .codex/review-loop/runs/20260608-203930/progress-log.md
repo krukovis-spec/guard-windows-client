@@ -1,0 +1,33 @@
+- 2026-06-08T17:39:31+00:00 START run mode=single max_passes=1 scope=diff
+- 2026-06-08T17:39:31+00:00 DONE discover
+- 2026-06-08T17:39:31+00:00 START pass 1
+- 2026-06-08T17:39:31+00:00 START aspect-plan pass=1 mode=broad
+- 2026-06-08T18:08:22+00:00 START command git diff --check
+- 2026-06-08T18:08:22+00:00 DONE command git diff --check exit=0
+- 2026-06-08T18:08:35+00:00 START command release build
+- 2026-06-08T18:08:42+00:00 DONE command release build exit=1
+- 2026-06-08T18:09:21+00:00 START command release build retry
+- 2026-06-08T18:09:32+00:00 DONE command release build retry exit=0
+- 2026-06-08T18:09:48+00:00 START command guard tests
+- 2026-06-08T18:10:03+00:00 DONE command guard tests exit=0
+- 2026-06-08T18:10:18+00:00 START command inno setup build
+- 2026-06-08T18:10:23+00:00 DONE command inno setup build exit=0
+- 2026-06-08T18:11:15+00:00 START command git diff --check final
+- 2026-06-08T18:11:15+00:00 DONE command git diff --check final exit=0
+- 2026-06-08T18:19:20+00:00 SET aspect requirements status=fixed
+- 2026-06-08T18:19:20+00:00 SET aspect ux_accessibility_i18n status=fixed
+- 2026-06-08T18:19:20+00:00 SET aspect tests status=fixed
+- 2026-06-08T18:19:20+00:00 SET aspect integration_runtime status=fixed
+- 2026-06-08T18:19:20+00:00 SET aspect security_privacy status=clean
+- 2026-06-08T18:19:21+00:00 SET aspect data_encoding_backcompat status=clean
+- 2026-06-08T18:19:53+00:00 SET aspect core_logic status=clean
+- 2026-06-08T18:19:53+00:00 SET aspect edge_cases status=clean
+- 2026-06-08T18:19:54+00:00 SET aspect tool_safety status=clean
+- 2026-06-08T18:19:54+00:00 SET aspect observability status=clean
+- 2026-06-08T18:19:54+00:00 SET aspect performance_cost status=clean
+- 2026-06-08T18:19:54+00:00 SET aspect devex_docs status=fixed
+- 2026-06-08T18:19:54+00:00 SET aspect release_ci_rollback status=clean
+- 2026-06-08T18:19:54+00:00 SET aspect domain_compliance status=clean
+- 2026-06-08T18:20:20+00:00 DONE pass 1 status=clean
+- 2026-06-08T18:21:16+00:00 START command git diff --check after memory
+- 2026-06-08T18:21:16+00:00 DONE command git diff --check after memory exit=0

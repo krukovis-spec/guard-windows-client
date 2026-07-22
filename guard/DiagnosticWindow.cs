@@ -18,8 +18,9 @@ namespace Guard
         public DiagnosticWindow(GuardState state, Icon appIcon)
         {
             InitializeComponent();
+            this._state = state;
             this.Icon = appIcon;
-            this.Text = "Guard Diagnostics";
+            this.Text = L("Диагностика Guard", "Guard Diagnostics");
             this.Size = new System.Drawing.Size(720, 570);
             this.MinimumSize = new System.Drawing.Size(600, 400);
 
@@ -68,7 +69,7 @@ namespace Guard
 
             var btnAssign = new Button()
             {
-                Text = "Assign Device",
+                Text = L("Привязать", "Assign Device"),
                 Width = 120,
                 Height = 30,
                 Left = 10,
@@ -81,7 +82,7 @@ namespace Guard
             // This is the click event handler for the new button
             btnAssign.Click += async (s, e) =>
             {
-                using (var assignForm = new AssignForm())
+                using (var assignForm = new AssignForm(state.UiLanguage))
                 {
                     if (assignForm.ShowDialog() == DialogResult.OK)
                     {
@@ -90,7 +91,7 @@ namespace Guard
                         // Call the new public method to update the state in the main form
                         MainForm.Instance?.UpdateState(newState);
 
-                        Log("Device was assigned successfully. Fetching initial instructions...");
+                        Log(L("Устройство успешно привязано. Получаю первые правила...", "Device was assigned successfully. Fetching initial instructions..."));
 
                         // Disable this button now that assignment is complete
                         btnAssign.Enabled = false;
@@ -104,7 +105,7 @@ namespace Guard
 
             var btnToggleStartup = new Button()
             {
-                Text = "Loading Status...",
+                Text = L("Проверяю статус...", "Loading Status..."),
                 Width = 180, // A bit wider to fit the text
                 Height = 30,
                 Left = btnAssign.Right + 10, // Position it next to the assign button
@@ -118,26 +119,26 @@ namespace Guard
                 {
                     if (ScheduledTaskHelper.IsStartupTaskInstalled())
                     {
-                        btnToggleStartup.Text = "Disable Start with Windows";
+                        btnToggleStartup.Text = L("Выключить автозапуск", "Disable Start with Windows");
                     }
                     else
                     {
-                        btnToggleStartup.Text = "Enable Start with Windows";
+                        btnToggleStartup.Text = L("Включить автозапуск", "Enable Start with Windows");
                     }
                     btnToggleStartup.Enabled = true;
                 }
                 catch (Exception ex)
                 {
-                    Log("Could not get startup task status: " + ex.Message);
-                    btnToggleStartup.Text = "Startup Status Unavailable";
+                    Log(L("Не удалось получить статус автозапуска: ", "Could not get startup task status: ") + ex.Message);
+                    btnToggleStartup.Text = L("Статус автозапуска недоступен", "Startup Status Unavailable");
                     btnToggleStartup.Enabled = false;
                 }
             };
 
             // Set the initial text of the button when the window is created.
             btnToggleStartup.Text = state.IsStartUp
-    ? "Disable Start with Windows"
-    : "Enable Start with Windows";
+    ? L("Выключить автозапуск", "Disable Start with Windows")
+    : L("Включить автозапуск", "Enable Start with Windows");
 
             // Define the action to take when the button is clicked.
             btnToggleStartup.Click += (s, e) =>
@@ -147,17 +148,17 @@ namespace Guard
                     if (ScheduledTaskHelper.IsStartupTaskInstalled())
                     {
                         ScheduledTaskHelper.RemoveStartupTask(Log, state);
-                        Log("Startup task removed.");
+                        Log(L("Задача автозапуска удалена.", "Startup task removed."));
                     }
                     else
                     {
                         ScheduledTaskHelper.RegisterStartupTask(Log, state);
-                        Log("Startup task registered.");
+                        Log(L("Задача автозапуска создана.", "Startup task registered."));
                     }
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show("Error updating startup task: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show(L("Ошибка обновления автозапуска: ", "Error updating startup task: ") + ex.Message, L("Ошибка", "Error"), MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
 
                 // Refresh the button's text after performing the action.
@@ -171,7 +172,7 @@ namespace Guard
 
             btnUpdateApp = new Button()
             {
-                Text = "Check for Updates",
+                Text = L("Проверить обновления", "Check for Updates"),
                 Width = 150,
                 Height = 30,
                 Left = btnToggleStartup.Right + 10, // Position it next to the startup button
@@ -190,7 +191,7 @@ namespace Guard
             // ADD "Log Current State" button in its place
             btnLogState = new Button()
             {
-                Text = "Log Current State",
+                Text = L("Записать состояние", "Log Current State"),
                 Width = 150,
                 Height = 30,
                 Left = btnToggleStartup.Right + 10,
@@ -204,13 +205,10 @@ namespace Guard
 
             topPanel.Controls.Add(btnLogState);
 
-            this._state = state; // Save state ref for logger
-
-
             Label labelTrueTime = new Label
             {
                 Name = "labelTrueTime",
-                Text = "Loading real time...",
+                Text = L("Проверяю точное время...", "Loading real time..."),
                 AutoSize = true,
                 Location = new Point(topPanel.ClientSize.Width - 160, 10),
                 Anchor = AnchorStyles.Top | AnchorStyles.Right
@@ -220,7 +218,7 @@ namespace Guard
             Label labelUtcOffset = new Label
             {
                 Name = "labelUtcOffset",
-                Text = "Offset: ...",
+                Text = L("Смещение: ...", "Offset: ..."),
                 AutoSize = true,
                 ForeColor = Color.Gray,
                 Location = new Point(topPanel.ClientSize.Width - 160, 28),
@@ -231,7 +229,7 @@ namespace Guard
             // --- Controls for the Bottom Panel ---
             var btnReset = new Button()
             {
-                Text = "Reset assignment and quit",
+                Text = L("Сбросить и выйти", "Reset assignment and quit"),
                 Width = 190,
                 Height = 30,
                 Left = 10,
@@ -243,14 +241,15 @@ namespace Guard
             btnReset.Click += async (s, e) =>
             {
                 var confirmResult = MessageBox.Show(
-                    "Please confirm removing all instructions and the device assignment.",
-                    "Confirm Full Reset",
+                    L("Подтвердите удаление всех правил и привязки устройства.",
+                        "Please confirm removing all instructions and the device assignment."),
+                    L("Подтвердите полный сброс", "Confirm Full Reset"),
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning);
 
                 if (confirmResult == DialogResult.No)
                 {
-                    Log("Reset operation canceled by user.");
+                    Log(L("Сброс отменён пользователем.", "Reset operation canceled by user."));
                     return;
                 }
 
@@ -264,7 +263,7 @@ namespace Guard
             // Add a "Close" button that shuts down the application completely.
             var btnClose = new Button()
             {
-                Text = "Close",
+                Text = L("Закрыть", "Close"),
                 Width = 90,
                 Height = 30,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right
@@ -280,7 +279,7 @@ namespace Guard
             // Add a "Disable and Close" button.
             var btnDisable = new Button()
             {
-                Text = "Disable and Close",
+                Text = L("Отключить и закрыть", "Disable and Close"),
                 Width = 140,
                 Height = 30,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right
@@ -343,6 +342,11 @@ namespace Guard
             return sb.ToString();
         }
 
+        private string L(string russian, string english)
+        {
+            return UiLanguage.Text(_state?.UiLanguage, russian, english);
+        }
+
 
 
 
@@ -359,13 +363,13 @@ namespace Guard
                     {
                         // If sync is ON, show the offset or a "waiting" message.
                         offsetLabel.Text = state.DeviceUtcOffsetMinutes.HasValue
-                            ? $"Offset: {state.DeviceUtcOffsetMinutes.Value} minutes"
-                            : "Offset: Awaiting check...";
+                            ? L("Смещение: ", "Offset: ") + state.DeviceUtcOffsetMinutes.Value + " " + L("минут", "minutes")
+                            : L("Смещение: ожидаю проверки...", "Offset: Awaiting check...");
                     }
                     else
                     {
                         // If sync is OFF, show that it's disabled.
-                        offsetLabel.Text = "Offset: Sync Disabled";
+                        offsetLabel.Text = L("Смещение: синхронизация выключена", "Offset: Sync Disabled");
                     }
                 }
             };

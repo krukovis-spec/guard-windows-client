@@ -1,0 +1,25 @@
+- 2026-07-21T21:43:14+00:00 START run mode=assessment max_passes=1 scope=repo
+- 2026-07-21T21:43:14+00:00 DONE discover
+- 2026-07-21T21:43:15+00:00 START pass 1
+- 2026-07-21T21:43:15+00:00 START aspect-plan pass=1 mode=broad
+- 2026-07-21T21:57:31+00:00 START command git diff --check
+- 2026-07-21T21:57:32+00:00 DONE command git diff --check exit=0
+- 2026-07-21T21:57:32+00:00 START command Guard.Tests
+- 2026-07-21T21:57:44+00:00 DONE command Guard.Tests exit=0
+- 2026-07-21T21:57:50+00:00 START command Release build
+- 2026-07-21T21:57:52+00:00 DONE command Release build exit=0
+- 2026-07-21T22:03:20+00:00 SET aspect requirements status=dirty
+- 2026-07-21T22:03:20+00:00 SET aspect core_logic status=clean
+- 2026-07-21T22:03:20+00:00 SET aspect edge_cases status=dirty
+- 2026-07-21T22:03:20+00:00 SET aspect tests status=dirty
+- 2026-07-21T22:03:21+00:00 SET aspect security_privacy status=dirty
+- 2026-07-21T22:03:21+00:00 SET aspect tool_safety status=not_applicable
+- 2026-07-21T22:03:21+00:00 SET aspect data_encoding_backcompat status=dirty
+- 2026-07-21T22:03:21+00:00 SET aspect integration_runtime status=dirty
+- 2026-07-21T22:03:22+00:00 SET aspect observability status=dirty
+- 2026-07-21T22:03:22+00:00 SET aspect performance_cost status=clean
+- 2026-07-21T22:03:22+00:00 SET aspect ux_accessibility_i18n status=dirty
+- 2026-07-21T22:03:22+00:00 SET aspect devex_docs status=dirty
+- 2026-07-21T22:03:22+00:00 SET aspect release_ci_rollback status=dirty
+- 2026-07-21T22:03:23+00:00 SET aspect domain_compliance status=clean
+- 2026-07-21T22:03:29+00:00 DONE pass 1 status=single_pass_complete
