@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-07-22 - P0 quarantines legacy control and requires confirmed cleanup
+
+- Decision: until passkey provisioning and the `LocalSystem` boundary exist, hard-disable the LAN cabinet, child pairing/email, Assign API, legacy remote sync and telemetry for every persisted state. Local disable/uninstall accepts only an existing custom PIN other than `123456`; Inno removes binaries only after Cleaner confirms every cleanup stage and returns exit 0.
+- Why: preserving any first-caller or legacy recovery route keeps the ownership takeover open, while swallowed cleanup errors can delete recovery binaries after a partial uninstall.
+- Alternatives: keep legacy routes for previously assigned devices; retain `123456` for migration; accept best-effort cleanup. All three preserve a known bypass or false-success path, so P0 intentionally breaks those legacy flows.
+- Risk: new pairing and old remote administration are unavailable; blank/default-PIN installations need a future parent-admin migration ceremony; system cleanup is not transactional and still needs disposable-VM lifecycle testing.
+- Check: remote checkpoint `381afa54a067665b2977389d582ec3166bc8a4ef`; application commit `3e7e384d26864a5976da85652f160e0dd7da67ab`; Release build, 45/45 safe checks, Inno syntax/package compile, NuGet audit, diff check, masked secret scan and independent security review accepted without remaining P0/P1.
+
 ## 2026-07-22 - Guard v2 uses request-first default-deny and passkey parent approval
 
 - Decision: everything unknown is blocked; the child requests an app or site; the parent decides `always`, `temporary`, `daily quota`, or `deny` in a Russian-default PWA. Every permissive decision uses a passkey with fresh fingerprint/Face ID. Parent PIN, TOTP, SMS and email codes are not used, including as the normal recovery route.
@@ -18,11 +26,11 @@
 
 ## 2026-06-14 - Emergency PIN cannot be recovered through email-visible server codes
 
-- Decision: reject server-driven `pinCode` updates completely and disable the legacy `guard.alexweb.app` remote path by default; emergency PIN is changed only from the LAN parent cabinet after parent password step-up, and `123456` stays a temporary fallback only.
+- Decision: reject server-driven `pinCode` updates completely. Guard v2 P0 later strengthened this decision: the entire legacy remote/LAN ownership path is hard-disabled and `123456` is never an authorization fallback.
 - Why: Ivan observed a real bypass where a child triggered a reset email/code and read it from the parent phone lock-screen notification shade.
 - Alternatives: keep accepting remote `pinCode` for the legacy cloud flow; require a second code; hide only phone notifications. Accepting remote PIN keeps the bypass; extra codes still risk notification leakage; phone settings are necessary but not enough.
-- Risk: legacy `guard.alexweb.app` account reset and remote sync no longer update this fork automatically unless future code explicitly opts in.
-- Check: `Guard.Tests` covers remote PIN rejection, default PIN rejection, local remote-skip, and legacy remote-skip; Release build passes.
+- Risk: legacy `guard.alexweb.app` account reset and remote sync no longer update this fork; future code must not reopen them through a persisted opt-in.
+- Check: `Guard.Tests` covers remote PIN rejection, missing/default PIN fail-closed, telemetry quarantine and hard-disabled legacy remote use; Release build passes.
 
 ## 2026-06-08 - Strict default-deny without breaking Windows shell
 

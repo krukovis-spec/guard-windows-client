@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-07-22 - Guard v2 Foundation checkpoint
+
+- Done: verified the existing dirty MVP baseline, created writable fork `krukovis-spec/guard-windows-client`, and pushed checkpoint branch `codex/checkpoint-20260722-1920-guard-v2-foundation` at `381afa54a067665b2977389d582ec3166bc8a4ef` before any Guard v2 application-code change.
+- Working branch: `codex/guard-v2-foundation`, created from the same checkpoint commit.
+- Check: masked secret scan found no high-confidence secret patterns; Release build passed with the existing nullable warning; `Guard.Tests` passed 35/35; staged `git diff --check` passed; remote SHA and push permission were verified.
+- Excluded safely: modified generated `Output/Guard-Setup-v1.0.0.exe`, `.gstack`, and Yandex.Disk conflict copies `*копия с компьютера LG*`. These local user files were not deleted or reverted.
+- Network: GitHub API POST timeouts were initially isolated to the Happ TUN route; the existing scoped Xray proxy `http://127.0.0.1:10808` completed fork creation and push verification without enabling a global Windows proxy. A later direct recheck passed authenticated GETs and three consecutive side-effect-free POST probes without the proxy, with push permission still true.
+- Safety: no Guard, installer, cleaner, helper, AppLocker, firewall, hosts, registry, scheduled-task, or account-changing action was run.
+- P0 implementation: hard-disabled legacy LAN cabinet, child pairing/email, Assign API, remote updater and telemetry; removed default PIN fallback and unauthenticated diagnostic/reset/cleanup routes; changed installer/Cleaner to one exact authorized cleanup mode without `uninstall.ok`; added safe diagnostic summary and structured fail-fast cleanup results.
+- Implementation commit: `3e7e384d26864a5976da85652f160e0dd7da67ab` (`security: contain legacy Guard control paths`), created from an exact 18-file allowlist. User-owned `Output`, `.gstack`, conflict copies and `.codex/review-loop` stayed unstaged.
+- Final verification: Release solution build passed; expanded safe harness passed 45/45 checks, including fake cleanup failures, exit-code contract and scheduled-task query classification. Inno 6.7.3 compiled the post-confirmation uninstall hook into an excluded review-only directory; the installer was not run and `Output` was untouched. NuGet audit, diff check, masked secret scan and UTF-8/mojibake check passed. Independent review accepted the code/security delta with no remaining P0/P1.
+
 ## 2026-06-14 - PIN recovery bypass hardening
 
 - Done: closed the old-server PIN-reset bypass Ivan described: `DeviceUpdater` now ignores remote `pinCode`, emergency PIN changes remain parent-cabinet-only with step-up parent password, `123456` cannot be saved as a permanent custom PIN, legacy remote server mode is disabled by default, and the tray no longer offers `Привязать через сервер`.

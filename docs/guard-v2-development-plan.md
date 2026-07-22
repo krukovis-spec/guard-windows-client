@@ -1,8 +1,18 @@
 # Guard v2: канонический план разработки
 
-Статус: одобрен для поэтапной реализации. Переход к исполнению дан Иваном 2026-07-22; application code изменяется только в отдельной execution-сессии после безопасного GitHub checkpoint.
+Статус: в исполнении, первый инкремент Guard v2 Foundation / P0 containment. Безопасный GitHub checkpoint создан до изменений application code.
 
 Последнее обновление: 2026-07-22.
+
+## Журнал исполнения
+
+- 2026-07-22: доказанный MVP baseline прошёл Release-сборку и 35/35 безопасных logic-тестов.
+- Checkpoint: ветка `codex/checkpoint-20260722-1920-guard-v2-foundation`, commit `381afa54a067665b2977389d582ec3166bc8a4ef`, push подтверждён на `krukovis-spec/guard-windows-client`.
+- Рабочая ветка первого инкремента: `codex/guard-v2-foundation`, создана из того же checkpoint commit.
+- В checkpoint намеренно не включены изменённый generated installer `Output/Guard-Setup-v1.0.0.exe`, `.gstack` и конфликтные копии Яндекс.Диска `*копия с компьютера LG*`; локальные пользовательские файлы не удалялись и не откатывались.
+- P0 containment зафиксирован application commit `3e7e384d26864a5976da85652f160e0dd7da67ab`: legacy LAN/remote provisioning и telemetry заморожены, PIN fallback удалён, destructive diagnostic/Cleaner bypasses закрыты, cleanup получил fail-fast result/exit contract, Inno запускает cleanup только после подтверждения uninstall, неоднозначные ошибки scheduled-task query дают отказ, safe harness расширен с 35 до 45 проверок.
+- Независимый security-review принял кодовый delta без оставшихся P0/P1; точный staged allowlist и `git diff --cached --check` подтвердили отсутствие пользовательского installer, конфликтных копий и review-артефактов в commit.
+- Текущее поведение и временно недоступные функции описаны в `docs/guard-v2-p0-containment.md`.
 
 ## Как ведётся этот план
 
