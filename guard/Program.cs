@@ -65,17 +65,14 @@ namespace Guard
                                        // --- arg for Uninstall 
                 if (args.Length == 1 && args[0] == "/uninstall")
                 {
-                    // visible form to prompt for the PIN.
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
-                    var mainForm = new MainForm(); // instance to access methods
-
-                    if (mainForm.PromptPin("Введите PIN для удаления Guard:"))
-                    {
-                        // If PIN is correct - cleanup.
-                        mainForm.CleanAndClose().Wait(); // .Wait() to ensure it finishes
-                    }
-                    return; // Exit after uninstall attempt.
+                    MessageBox.Show(
+                        "Legacy Guard uninstall entry point is disabled. Use Windows Installed apps so Guard.Cleaner can authorize and complete the removal.",
+                        "Guard",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
                 }
 
 
@@ -183,7 +180,6 @@ namespace Guard
         private Icon? icon_Inactive;
         private Icon? icon_Updating;
         private Icon? icon_Grayscale;
-        private ParentAdminServer? parentAdminServer;
         private bool isCheckingForUpdate = false;
         private bool isApplicationControlTickRunning = false;
         private readonly Dictionary<string, DateTime> lastWebsitePromptUtcByDomain =
@@ -249,11 +245,6 @@ namespace Guard
             diagWin.UpdateDisplay(State);
             tray.Visible = true;
             tray.Text = "Guard";
-            StartParentAdminServer();
-
-
-
-
             //Register the startup task by default if it's not already installed.
 
 
@@ -278,7 +269,11 @@ namespace Guard
                 // assign button
                 if (State == null || !State.Assigned)
                 {
-                    var pairingMenuItem = new ToolStripMenuItem(L("Показать код привязки", "Show Pairing Code"), null, (s, e) => ShowPairingCode());
+                    var pairingMenuItem = new ToolStripMenuItem(
+                        L("Безопасная привязка временно недоступна", "Secure pairing is temporarily unavailable"))
+                    {
+                        Enabled = false
+                    };
                     menu.Items.Add(pairingMenuItem);
                 }
                 else
@@ -337,10 +332,6 @@ namespace Guard
                 this.Load += async (s, e) =>
                 {
                     await RunMainLoopAsync(forceUpdate: true);
-                    if (State != null && !State.Assigned)
-                    {
-                        BeginInvoke(new Action(ShowPairingCode));
-                    }
                 };
 
 
@@ -366,9 +357,7 @@ namespace Guard
             }
             else
             {
-                // If startup failed, enter a disabled state
-                State.SyncStatus = false; // Ensure sync is off
-                diagWin.Log("Application started in a disabled state due to startup errors.");
+                diagWin.Log("Application startup checks failed. Existing protection state was preserved; no cleanup or disable action was run.");
                 // We do NOT start the main loop timer.
             }
 
@@ -395,15 +384,6 @@ namespace Guard
 
 
 
-        }
-
-        private void StartParentAdminServer()
-        {
-            var state = State;
-            if (state == null) return;
-
-            parentAdminServer = new ParentAdminServer(state, Log, RequestApplyFromParentAdmin);
-            parentAdminServer.Start();
         }
 
         private void ShowApplicationAccessRequest()
@@ -516,42 +496,6 @@ namespace Guard
             }
         }
 
-        private void ShowPairingCode()
-        {
-            var state = State;
-            if (state == null) return;
-
-            EnsurePairingCode(state);
-            using (var pairing = new PairingForm(state.Pairing, parentAdminServer?.GetAccessText() ?? "http://localhost:8765/"))
-            {
-                pairing.ShowDialog();
-            }
-        }
-
-        private static void EnsurePairingCode(GuardState state)
-        {
-            var now = DateTime.UtcNow;
-            if (state.Pairing == null ||
-                state.Pairing.Status != PairingStatus.WaitingForParent ||
-                PairingCodeService.IsExpired(state.Pairing, now))
-            {
-                state.Pairing = PairingCodeService.StartPairing(Environment.MachineName, now);
-                GuardStateStorage.Save(state);
-            }
-        }
-
-        private void RequestApplyFromParentAdmin()
-        {
-            try
-            {
-                BeginInvoke(new Action(async () => await RunMainLoopAsync(forceUpdate: true)));
-            }
-            catch (Exception ex)
-            {
-                Log("[ParentAdmin] Could not schedule policy apply: " + ex.Message);
-            }
-        }
-
         private void InitializeApplicationControlTimer()
         {
             _applicationControlTimer = new System.Windows.Forms.Timer();
@@ -565,7 +509,6 @@ namespace Guard
         {
             _applicationControlTimer?.Stop();
             _applicationControlTimer?.Dispose();
-            parentAdminServer?.Dispose();
             base.OnFormClosed(e);
         }
 
@@ -635,7 +578,7 @@ namespace Guard
 
 
 
-        public async Task RunMainLoopAsync(bool forceUpdate = false, string action = "")
+        public async Task RunMainLoopAsync(bool forceUpdate = false)
         {
 
             var state = State;
@@ -650,7 +593,7 @@ namespace Guard
             if (state.DevUpdate)
             {
                 // If this is a high-priority "forceUpdate" call, we will wait.
-                if (forceUpdate || !string.IsNullOrWhiteSpace(action))
+                if (forceUpdate)
                 {
                     Log("[MainLoop] Another process is running, but this is a forced update. Waiting...");
                     for (int i = 0; i < 5; i++)
@@ -679,16 +622,6 @@ namespace Guard
             }
             state.DevUpdate = true;
             UpdateTrayIcon();
-
-            if (!string.IsNullOrWhiteSpace(action))
-            {
-                if (action == "cleanAndClose")
-                {
-                    await CleanAndClose();
-
-                }
-
-            }
 
             try
             {
@@ -1441,6 +1374,12 @@ namespace Guard
         public async Task<bool> SendInfoLogAsync(string message)
         {
             diagWin.Log(message);
+            if (!GuardV2ContainmentPolicy.CanSendLegacyTelemetry(State))
+            {
+                diagWin.Log("[Logger] P0 containment: legacy telemetry is disabled; info log kept locally.");
+                return true;
+            }
+
             if (State == null)
             {
                 diagWin?.Log("[CRITICAL] State object is null. Cannot run command.");
@@ -2042,9 +1981,9 @@ namespace Guard
 
 
 
-        public async Task DisableApp(bool requirePin = true)
+        public async Task DisableApp()
         {
-            if (!requirePin || PromptPin(L("Введите PIN, чтобы отключить Guard:", "Enter PIN to disable app:")))
+            if (PromptPin(L("Введите PIN, чтобы отключить Guard:", "Enter PIN to disable app:")))
             {
                 // We will now use the main 'State' property of the form,
                 // instead of loading a separate local copy.
@@ -2080,22 +2019,6 @@ namespace Guard
             {
                 tray.ShowBalloonTip(1200, L("Неверно", "Invalid"), L("Неверный PIN", "Wrong PIN"), ToolTipIcon.Warning);
             }
-        }
-
-        public void ShutdownApplication()
-        {
-            try
-            {
-                // Create disable.guard file to signal the watchdog to exit
-                System.IO.File.WriteAllText(AppSettings.DisableFlagPath, DateTime.Now.ToString());
-            }
-            catch (Exception ex)
-            {
-                diagWin.Log("Failed to create disable flag file: " + ex.Message);
-            }
-
-            tray.Visible = false;
-            Application.Exit();
         }
 
         public bool PromptPin(string promptText = "")
@@ -2139,9 +2062,7 @@ namespace Guard
 
             lastPinAttemptTime = now;
 
-            string correctPin = EmergencyPinPolicy.GetEffectivePin(State?.PinCode);
-
-            if (enteredPin == correctPin)
+            if (GuardV2ContainmentPolicy.CanAuthorizeLocalPrivilegedAction(State?.PinCode, enteredPin))
             {
                 pinFailCount = 0;
                 return true;
@@ -2226,69 +2147,6 @@ namespace Guard
             diagWin.Log("Update check initiated.");
             MessageBox.Show(L("Проверка обновлений пока не реализована.", "Update checking is not yet implemented."), L("Информация", "Info"));
             await Task.CompletedTask; // To make the method awaitable
-        }
-
-        public async Task CleanAndClose()
-        {
-            try
-            {
-                // Clear Hosts and Firewall Rules first
-                await SystemCleaner.ResetHostsFileAsync(diagWin.Log);
-                await SystemCleaner.RemoveFirewallRulesAsync(diagWin.Log);
-                diagWin.Log("[Action] Hosts and firewall rules cleared.");
-
-                // --- ADD THIS BLOCK TO REMOVE THE STARTUP TASK ---
-                try
-                {
-
-                    ScheduledTaskHelper.RemoveStartupTask();
-                    diagWin.Log("[Action] Startup task removed.");
-
-                }
-                catch (Exception ex)
-                {
-                    diagWin.Log("Error removing startup task: " + ex.Message);
-                }
-                // --- END OF NEW BLOCK ---
-
-                // Delete GuardState main file
-                File.Delete(GuardStateStorage.StateFilePath);
-                diagWin.Log("GuardState main file deleted.");
-
-                // Delete GuardState backup file
-                try
-                {
-                    string etcSavedBU = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.System), @"drivers\etc\savedBU");
-                    string backupFile = Path.Combine(etcSavedBU, $"state.dat");
-                    if (File.Exists(backupFile)) File.Delete(backupFile);
-                    diagWin.Log("GuardState backup file deleted.");
-                }
-                catch (Exception ex)
-                {
-                    diagWin.Log("Error deleting GuardState backup: " + ex.Message);
-                }
-
-            }
-            catch (Exception ex)
-            {
-                diagWin.Log("Error during full clean: " + ex.Message);
-            }
-            finally
-            {
-                // This section will run even if there was an error during cleanup.
-                try
-                {
-                    File.WriteAllText(AppSettings.DisableFlagPath, DateTime.Now.ToString());
-                }
-                catch { }
-
-                // Wait a bit for watchdog to see the flag
-                await Task.Delay(500);
-
-                // Finally exit the app
-                Application.Exit();
-            }
         }
 
     }

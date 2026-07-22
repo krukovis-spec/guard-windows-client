@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Windows.Forms;
 
 namespace Guard.Cleaner
@@ -40,25 +39,29 @@ namespace Guard.Cleaner
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            if (args.Contains("/checkpin"))
+            var launchMode = CleanerLaunchPolicy.Parse(args);
+            if (launchMode == CleanerLaunchMode.StartupFailureNotification)
             {
-                var state2 = GuardStateStorage.Load();
-                var expectedPin = EmergencyPinPolicy.GetEffectivePin(state2?.PinCode);
-
-                using (var pinDialog = new PinForm("Enter PIN to Uninstall Guard", null))
-                {
-                    if (pinDialog.ShowDialog() == DialogResult.OK && pinDialog.EnteredPin == expectedPin)
-                    {
-                        File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "uninstall.ok"), "ok");
-                        Environment.Exit(0);
-                    } // Correct PIN, allow uninstall 
-                    else
-                        Environment.Exit(1); // Wrong PIN or canceled, block uninstall
-                }
-                return; // Do not proceed to the rest of the program
+                MessageBox.Show(
+                    "Guard failed to start repeatedly. P0 containment will not remove or weaken protection automatically. A parent administrator must diagnose the failure.",
+                    "Guard Startup Failure",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                Environment.Exit(1);
+                return;
             }
 
-            // 1. Ensure we are running as Admin
+            if (launchMode != CleanerLaunchMode.AuthorizedCleanup)
+            {
+                MessageBox.Show(
+                    "Direct and legacy cleaner modes are disabled. Start removal from Windows Installed apps.",
+                    "Guard Removal Blocked",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                Environment.Exit(1);
+                return;
+            }
+
             if (!SystemCleaner.IsAdministrator())
             {
                 MessageBox.Show("This utility requires administrator privileges to run.", "Permission Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -76,103 +79,151 @@ namespace Guard.Cleaner
                 return;
             }
 
-            // 2. Check for the special notification argument from the service
-            if (args.Contains("/notifyfailure"))
+            var state = GuardStateStorage.Load();
+            bool isAuthorized;
+            using (var pinDialog = new PinForm("Enter the existing custom parent PIN to uninstall Guard", null))
             {
-                var result = MessageBox.Show(
-                    "Guard has been failing to start. Would you like to run the uninstaller to cleanly remove the application?",
-                    "Guard Startup Failure",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning);
-
-                if (result == DialogResult.No)
+                if (pinDialog.ShowDialog() != DialogResult.OK)
                 {
                     Environment.Exit(1);
                     return;
                 }
+
+                isAuthorized = GuardV2ContainmentPolicy.CanAuthorizeCleaner(state?.PinCode, pinDialog.EnteredPin);
             }
 
-            // 3. Load state and check PIN
-            var state = GuardStateStorage.Load();
-            bool isAuthorized = false;
-
-            string uninstallFlagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "uninstall.ok");
-            if (File.Exists(uninstallFlagPath))
+            if (!isAuthorized)
             {
-                try { File.Delete(uninstallFlagPath); } catch { }
-                // Already authorized: skip PIN
-                isAuthorized = true;
-            }
-
-
-                if (isAuthorized == true)
-            {
-                isAuthorized = true;
-            }
-            else
-            {
-                var expectedPin = EmergencyPinPolicy.GetEffectivePin(state?.PinCode);
-                using (var pinDialog = new PinForm("Enter PIN to Uninstall Guard", null))
-                {
-                    if (pinDialog.ShowDialog() == DialogResult.OK && pinDialog.EnteredPin == expectedPin)
-                    {
-                        isAuthorized = true;
-                    }
-                    else
-                    {
-                        MessageBox.Show("The PIN code is incorrect or the operation was cancelled. Uninstall will not proceed.", "PIN Required", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        isAuthorized = false;
-                    }
-                }
-            }
-
-            // 4. Final check: Only run cleanup IF authorized. Otherwise, exit with an error.
-            if (isAuthorized)
-            {
-                MessageBox.Show("Guard will now be completely removed from your system.", "Uninstalling Guard", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                bool guardKilled = false, helperKilled = false;
-                try { File.WriteAllText(AppSettings.DisableFlagPath, DateTime.Now.ToString()); } catch { }
-                for (int attempt = 1; attempt <= 3; attempt++)
-                {
-                    guardKilled = true; helperKilled = true;
-                    var guards = Process.GetProcessesByName("guard");
-                    if (guards.Length > 0)
-                    {
-                        guardKilled = false;
-                        foreach (var proc in guards) { try { proc.CloseMainWindow(); if (!proc.WaitForExit(1000)) proc.Kill(); } catch { } }
-                    }
-                    var helpers = Process.GetProcessesByName("StartHelperG");
-                    if (helpers.Length > 0)
-                    {
-                        helperKilled = false;
-                        foreach (var proc in helpers) { try { proc.Kill(); } catch { } }
-                    }
-                    if (guardKilled && helperKilled) break;
-                    System.Threading.Thread.Sleep(500);
-                }
-                if (guardKilled && helperKilled) { try { File.Delete(AppSettings.DisableFlagPath); } catch { } }
-                System.Threading.Thread.Sleep(500);
-
-                SystemCleaner.PerformFullCleanupAsync().Wait();
-
-                if (args.Contains("/notifyfailure"))
-                {
-                    string uninstallPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "unins000.exe");
-                    if (File.Exists(uninstallPath))
-                    {
-                        Process.Start(new ProcessStartInfo(uninstallPath) { UseShellExecute = true });
-                    }
-                    else
-                    {
-                        Process.Start("appwiz.cpl");
-                    }
-                }
-                Environment.Exit(0);
-            }
-            else
-            {
+                MessageBox.Show(
+                    "The parent PIN is unavailable, known to be compromised, incorrect, or the operation was cancelled. Guard was not removed.",
+                    "Parent Authorization Required",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
                 Environment.Exit(1);
+                return;
+            }
+
+            MessageBox.Show("Guard will now be completely removed from your system.", "Uninstalling Guard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            bool guardKilled = false, helperKilled = false;
+            if (!SystemCleaner.TryWriteDisableFlag())
+            {
+                AbortCleanupAndRestoreProtection("Guard could not enter the guarded cleanup state.");
+                return;
+            }
+
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                guardKilled = true;
+                helperKilled = true;
+                var guards = Process.GetProcessesByName("guard");
+                if (guards.Length > 0)
+                {
+                    guardKilled = false;
+                    foreach (var proc in guards)
+                    {
+                        try { proc.CloseMainWindow(); if (!proc.WaitForExit(1000)) proc.Kill(); }
+                        catch { }
+                        finally { proc.Dispose(); }
+                    }
+                }
+                var helpers = Process.GetProcessesByName("StartHelperG");
+                if (helpers.Length > 0)
+                {
+                    helperKilled = false;
+                    foreach (var proc in helpers)
+                    {
+                        try { proc.Kill(); }
+                        catch { }
+                        finally { proc.Dispose(); }
+                    }
+                }
+                if (guardKilled && helperKilled) break;
+                System.Threading.Thread.Sleep(500);
+            }
+
+            guardKilled = NoProcessesNamed("guard");
+            helperKilled = NoProcessesNamed("StartHelperG");
+            if (!guardKilled || !helperKilled)
+            {
+                AbortCleanupAndRestoreProtection("Guard processes could not be stopped safely.");
+                return;
+            }
+
+            System.Threading.Thread.Sleep(500);
+
+            GuardCleanupResult cleanupResult;
+            try
+            {
+                cleanupResult = SystemCleaner.PerformFullCleanupAsync().GetAwaiter().GetResult();
+            }
+            catch
+            {
+                AbortCleanupAndRestoreProtection("Guard cleanup failed unexpectedly.");
+                return;
+            }
+
+            if (!cleanupResult.Succeeded)
+            {
+                AbortCleanupAndRestoreProtection(
+                    "Guard cleanup did not complete the " + cleanupResult.FailedStep + " stage.");
+                return;
+            }
+
+            Environment.Exit(CleanerExitCodePolicy.FromCleanupResult(cleanupResult));
+        }
+
+        private static void AbortCleanupAndRestoreProtection(string reason)
+        {
+            SystemCleaner.TryRemoveDisableFlag();
+            TryRestartProtection();
+
+            MessageBox.Show(
+                reason + " Uninstall was aborted and Guard recovery was requested.",
+                "Guard Cleanup Failed",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            Environment.Exit(CleanerExitCodePolicy.CleanupFailed);
+        }
+
+        private static bool NoProcessesNamed(string processName)
+        {
+            var processes = Process.GetProcessesByName(processName);
+            try
+            {
+                return processes.Length == 0;
+            }
+            finally
+            {
+                foreach (var process in processes)
+                {
+                    process.Dispose();
+                }
+            }
+        }
+
+        private static void TryRestartProtection()
+        {
+            try
+            {
+                string helperPath = ScheduledTaskHelper.HelperPath;
+                if (!File.Exists(helperPath))
+                {
+                    return;
+                }
+
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = helperPath,
+                    Arguments = "/startup",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                });
+            }
+            catch
+            {
+                // Recovery is best-effort. The nonzero exit code still blocks file removal.
             }
         }
     }

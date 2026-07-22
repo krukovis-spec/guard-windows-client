@@ -1,9 +1,7 @@
 ﻿using System;
 using System.Drawing;
-using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using System.Text.Json;
 
 namespace Guard
 {
@@ -67,115 +65,22 @@ namespace Guard
 
             // --- Controls for the Top Panel ---
 
-            var btnAssign = new Button()
+            var containmentStatus = new Label
             {
-                Text = L("Привязать", "Assign Device"),
-                Width = 120,
-                Height = 30,
-                Left = 10,
-                Top = 10,
-                // FIX: Use the 'state' object that was passed in, NOT MainForm.Instance
-                Enabled = !state.Assigned
+                Text = L("Guard v2 P0: устаревшее управление отключено.",
+                    "Guard v2 P0: legacy controls are disabled."),
+                AutoSize = true,
+                Left = 170,
+                Top = 16
             };
-            topPanel.Controls.Add(btnAssign);
-
-            // This is the click event handler for the new button
-            btnAssign.Click += async (s, e) =>
-            {
-                using (var assignForm = new AssignForm(state.UiLanguage))
-                {
-                    if (assignForm.ShowDialog() == DialogResult.OK)
-                    {
-                        var newState = assignForm.AssignedState ?? new GuardState();
-
-                        // Call the new public method to update the state in the main form
-                        MainForm.Instance?.UpdateState(newState);
-
-                        Log(L("Устройство успешно привязано. Получаю первые правила...", "Device was assigned successfully. Fetching initial instructions..."));
-
-                        // Disable this button now that assignment is complete
-                        btnAssign.Enabled = false;
-
-                        // Immediately run the main loop to apply the new state
-                        var updateTask = MainForm.Instance?.RunMainLoopAsync(forceUpdate: true);
-                        await (updateTask ?? Task.CompletedTask);
-                    }
-                }
-            };
-
-            var btnToggleStartup = new Button()
-            {
-                Text = L("Проверяю статус...", "Loading Status..."),
-                Width = 180, // A bit wider to fit the text
-                Height = 30,
-                Left = btnAssign.Right + 10, // Position it next to the assign button
-                Top = 10
-            };
-
-            // This is a helper action to update the button's text and state.
-            Action updateButtonState = () =>
-            {
-                try
-                {
-                    if (ScheduledTaskHelper.IsStartupTaskInstalled())
-                    {
-                        btnToggleStartup.Text = L("Выключить автозапуск", "Disable Start with Windows");
-                    }
-                    else
-                    {
-                        btnToggleStartup.Text = L("Включить автозапуск", "Enable Start with Windows");
-                    }
-                    btnToggleStartup.Enabled = true;
-                }
-                catch (Exception ex)
-                {
-                    Log(L("Не удалось получить статус автозапуска: ", "Could not get startup task status: ") + ex.Message);
-                    btnToggleStartup.Text = L("Статус автозапуска недоступен", "Startup Status Unavailable");
-                    btnToggleStartup.Enabled = false;
-                }
-            };
-
-            // Set the initial text of the button when the window is created.
-            btnToggleStartup.Text = state.IsStartUp
-    ? L("Выключить автозапуск", "Disable Start with Windows")
-    : L("Включить автозапуск", "Enable Start with Windows");
-
-            // Define the action to take when the button is clicked.
-            btnToggleStartup.Click += (s, e) =>
-            {
-                try
-                {
-                    if (ScheduledTaskHelper.IsStartupTaskInstalled())
-                    {
-                        ScheduledTaskHelper.RemoveStartupTask(Log, state);
-                        Log(L("Задача автозапуска удалена.", "Startup task removed."));
-                    }
-                    else
-                    {
-                        ScheduledTaskHelper.RegisterStartupTask(Log, state);
-                        Log(L("Задача автозапуска создана.", "Startup task registered."));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(L("Ошибка обновления автозапуска: ", "Error updating startup task: ") + ex.Message, L("Ошибка", "Error"), MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-
-                // Refresh the button's text after performing the action.
-                updateButtonState();
-            };
-
-            topPanel.Controls.Add(btnToggleStartup);
-            // --- END OF NEW BLOCK ---
-
-
+            topPanel.Controls.Add(containmentStatus);
 
             btnUpdateApp = new Button()
             {
                 Text = L("Проверить обновления", "Check for Updates"),
                 Width = 150,
                 Height = 30,
-                Left = btnToggleStartup.Right + 10, // Position it next to the startup button
+                Left = 10,
                 Top = 10,
             };
             btnUpdateApp.Click += async (s, e) =>
@@ -194,13 +99,12 @@ namespace Guard
                 Text = L("Записать состояние", "Log Current State"),
                 Width = 150,
                 Height = 30,
-                Left = btnToggleStartup.Right + 10,
+                Left = 10,
                 Top = 10
             };
             btnLogState.Click += (s, e) =>
             {
-                // Always log the MAIN, CURRENT state!
-                Log(LogCurrentState(MainForm.Instance?.State ?? _state));
+                Log(GuardDiagnosticSummary.Build(MainForm.Instance?.State ?? _state));
             };
 
             topPanel.Controls.Add(btnLogState);
@@ -227,119 +131,21 @@ namespace Guard
             topPanel.Controls.Add(labelUtcOffset);
 
             // --- Controls for the Bottom Panel ---
-            var btnReset = new Button()
-            {
-                Text = L("Сбросить и выйти", "Reset assignment and quit"),
-                Width = 190,
-                Height = 30,
-                Left = 10,
-                Top = 10,
-                ForeColor = Color.Red // Make the text red
-            };
-            bottomPanel.Controls.Add(btnReset);
-
-            btnReset.Click += async (s, e) =>
-            {
-                var confirmResult = MessageBox.Show(
-                    L("Подтвердите удаление всех правил и привязки устройства.",
-                        "Please confirm removing all instructions and the device assignment."),
-                    L("Подтвердите полный сброс", "Confirm Full Reset"),
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning);
-
-                if (confirmResult == DialogResult.No)
-                {
-                    Log(L("Сброс отменён пользователем.", "Reset operation canceled by user."));
-                    return;
-                }
-
-                // Safely call the instance method. If Instance is null, the task will be null.
-                var cleanTask = MainForm.Instance?.CleanAndClose();
-
-                // Await the task, or if it's null, await an already completed task.
-                await (cleanTask ?? Task.CompletedTask);
-            };
-
-            // Add a "Close" button that shuts down the application completely.
+            // Close only this diagnostics window. It must never stop Guard.
             var btnClose = new Button()
             {
-                Text = L("Закрыть", "Close"),
-                Width = 90,
+                Text = L("Закрыть окно", "Close window"),
+                Width = 110,
                 Height = 30,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right
             };
             btnClose.Location = new Point(bottomPanel.ClientSize.Width - btnClose.Width - 10, 10);
             btnClose.Click += (s, e) =>
             {
-                // Calls the new shutdown method
-                MainForm.Instance?.ShutdownApplication();
+                Hide();
             };
             bottomPanel.Controls.Add(btnClose);
 
-            // Add a "Disable and Close" button.
-            var btnDisable = new Button()
-            {
-                Text = L("Отключить и закрыть", "Disable and Close"),
-                Width = 140,
-                Height = 30,
-                Anchor = AnchorStyles.Top | AnchorStyles.Right
-            };
-            btnDisable.Location = new Point(btnClose.Left - btnDisable.Width - 5, 10);
-            btnDisable.Click += async (s, e) =>
-            {
-                // Calls DisableApp, passing 'false' to bypass the PIN prompt.
-                // Safely call the instance method. If Instance is null, the task will be null.
-                var disableTask = MainForm.Instance?.DisableApp(requirePin: false);
-                // Await the task, or if it's null, await an already completed task.
-                await (disableTask ?? Task.CompletedTask);
-            };
-            bottomPanel.Controls.Add(btnDisable);
-
-        }
-
-        private string LogCurrentState(GuardState state)
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine("------ Current Guard State ------");
-            sb.AppendLine($"AssignCode: {state.AssignCode}");
-            sb.AppendLine($"DeviceId: {state.DeviceId}");
-            sb.AppendLine($"Version: {state.Version}");
-            sb.AppendLine($"DevUpdate: {state.DevUpdate}");
-            sb.AppendLine($"SyncStatus: {state.SyncStatus}");
-            sb.AppendLine($"PinStatus: {state.PinStatus}");
-            sb.AppendLine($"Assigned: {state.Assigned}");
-            sb.AppendLine($"AdRecheck: {state.AdRecheck}");
-            sb.AppendLine($"LastUpdate: {state.LastUpdate}");
-            sb.AppendLine($"IpsRecheck: {state.IpsRecheck}");
-            sb.AppendLine($"DeviceTimeZoneId: {state.DeviceTimeZoneId}");
-            sb.AppendLine($"DeviceUtcOffsetMinutes: {state.DeviceUtcOffsetMinutes}");
-            sb.AppendLine($"IsHostsFileActive: {state.IsHostsFileActive}");
-            sb.AppendLine($"IsStartUp: {state.IsStartUp}");
-            sb.AppendLine($"HostsFileLastWriteTimeUtc: {state.HostsFileLastWriteTimeUtc}");
-            sb.AppendLine($"HostsFileSize: {state.HostsFileSize}");
-            sb.AppendLine($"ResetConnection: {state.ResetConnection}");
-            sb.AppendLine($"Sound: {state.Sound}");
-
-            // Arrays & complex objects as JSON
-            var opts = new JsonSerializerOptions { WriteIndented = true };
-            sb.AppendLine("RestrictedCategoryIds: " + JsonSerializer.Serialize(state.RestrictedCategoryIds, opts));
-            sb.AppendLine("ErrorLog: " + JsonSerializer.Serialize(state.ErrorLog, opts));
-            sb.AppendLine("Rules: " + JsonSerializer.Serialize(state.Rules, opts));
-            sb.AppendLine("Presets: " + JsonSerializer.Serialize(state.Presets, opts));
-            sb.AppendLine("RestrictedCategories: " + JsonSerializer.Serialize(state.RestrictedCategories, opts));
-            sb.AppendLine("UpdateInfo: " + JsonSerializer.Serialize(state.UpdateInfo, opts));
-            sb.AppendLine("RulePresets: " + JsonSerializer.Serialize(state.RulePresets, opts));
-            sb.AppendLine("RuleUrls: " + JsonSerializer.Serialize(state.RuleUrls, opts));
-            sb.AppendLine("PermanentDomains: " + JsonSerializer.Serialize(state.PermanentDomains, opts));
-            sb.AppendLine("ResolvedPermanentIps: " + JsonSerializer.Serialize(state.ResolvedPermanentIps, opts));
-            sb.AppendLine("PermanentPresetIps: " + JsonSerializer.Serialize(state.PermanentPresetIps, opts));
-            sb.AppendLine("ActiveRuleIds: " + JsonSerializer.Serialize(state.ActiveRuleIds, opts));
-            sb.AppendLine("ParsedRules: " + JsonSerializer.Serialize(state.ParsedRules, opts));
-            sb.AppendLine($"LastAppliedSnapshotMinute: {state.LastAppliedSnapshotMinute}");
-            sb.AppendLine("WeeklyTimeline: " + JsonSerializer.Serialize(state.WeeklyTimeline, opts));
-
-            sb.AppendLine("------ End of State ------");
-            return sb.ToString();
         }
 
         private string L(string russian, string english)

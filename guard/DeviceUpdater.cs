@@ -26,15 +26,9 @@ namespace Guard
         public static async Task SendDeviceUpdateAsync(GuardState state, Action<string>? log = null)
 
         {
-            if (state.LocalParentMode)
+            if (!GuardV2ContainmentPolicy.CanUseLegacyRemoteServer(state))
             {
-                log?.Invoke("[DeviceUpdater] Local parent mode: remote update skipped.");
-                return;
-            }
-
-            if (!state.AllowLegacyRemoteServer)
-            {
-                log?.Invoke("[DeviceUpdater] Legacy remote server mode is disabled; remote update skipped.");
+                log?.Invoke("[SECURITY] Guard v2 P0 containment disabled the legacy remote control plane; remote update skipped.");
                 return;
             }
 

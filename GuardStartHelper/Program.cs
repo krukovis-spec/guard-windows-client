@@ -45,9 +45,8 @@ namespace Guard
 
                         if (restartAttempts > MaxRestartAttempts)
                         {
-                            // Too many failed restarts: run Guard.Cleaner.exe /notifyfailure
-                            RunCleanerNotifyFailure();
-                            // Wait 10 minutes before next set of attempts
+                            // P0 containment never starts Cleaner after failures.
+                            // Preserve the protection state and retry after a cooldown.
                             Thread.Sleep(FailureCooldownMs);
                             restartAttempts = 0; // Reset attempts for next cycle
                         }
@@ -88,24 +87,5 @@ namespace Guard
             }
         }
 
-        static void RunCleanerNotifyFailure()
-        {
-            try
-            {
-                var cleanerPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Guard.Cleaner.exe");
-                if (File.Exists(cleanerPath))
-                {
-                    var psi = new ProcessStartInfo(cleanerPath, "/notifyfailure")
-                    {
-                        UseShellExecute = true
-                    };
-                    Process.Start(psi);
-                }
-            }
-            catch
-            {
-                // Optionally, log to file if needed, but avoid exceptions stopping the helper
-            }
-        }
     }
 }

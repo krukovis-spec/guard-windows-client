@@ -2,29 +2,37 @@ namespace Guard
 {
     public static class EmergencyPinPolicy
     {
-        public const string TemporaryDefaultPin = "123456";
+        public const string KnownCompromisedPin = "123456";
 
-        public static string GetEffectivePin(string? storedPin)
+        public static bool IsAuthorized(string? storedPin, string? enteredPin)
         {
-            var pin = storedPin?.Trim();
-            if (string.IsNullOrWhiteSpace(pin))
+            var expected = storedPin?.Trim();
+            var actual = enteredPin?.Trim();
+            if (!IsAllowedCustomPin(expected) || !InputSanitizer.IsValidPin(actual))
             {
-                return TemporaryDefaultPin;
+                return false;
             }
 
-            return pin!;
+            int difference = 0;
+            for (int index = 0; index < expected!.Length; index++)
+            {
+                difference |= expected[index] ^ actual![index];
+            }
+
+            return difference == 0;
         }
 
-        public static bool IsTemporaryDefault(string? storedPin)
+        public static bool IsMissingOrCompromised(string? storedPin)
         {
             var pin = storedPin?.Trim();
             return string.IsNullOrWhiteSpace(pin) ||
-                   string.Equals(pin, TemporaryDefaultPin, System.StringComparison.Ordinal);
+                   string.Equals(pin, KnownCompromisedPin, System.StringComparison.Ordinal);
         }
 
         public static bool IsAllowedCustomPin(string? pin)
         {
-            return InputSanitizer.IsValidPin(pin) && !IsTemporaryDefault(pin);
+            var normalized = pin?.Trim();
+            return InputSanitizer.IsValidPin(normalized) && !IsMissingOrCompromised(normalized);
         }
     }
 }

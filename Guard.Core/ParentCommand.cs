@@ -258,7 +258,7 @@ namespace Guard
 
             if (!EmergencyPinPolicy.IsAllowedCustomPin(pin))
             {
-                return new ParentCommandResult { Error = "Choose a custom PIN, not the temporary default." };
+                return new ParentCommandResult { Error = "Choose a custom PIN; the known compromised PIN is not allowed." };
             }
 
             if (state.PinCode == pin)

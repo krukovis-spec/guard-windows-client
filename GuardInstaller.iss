@@ -39,29 +39,25 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
 [Run]
 Filename: "{app}\StartHelperG.exe"; Parameters: "/startup"; Description: "Launch Guard now"; Flags: postinstall skipifsilent runascurrentuser
 
-[UninstallRun]
-Filename: "{app}\Guard.Cleaner.exe"; Flags: waituntilterminated; RunOnceId: "runcleaner"
-
 [Code]
-function InitializeUninstall(): Boolean;
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
 begin
-  // Run Guard.Cleaner.exe in checkpin mode
-  if not ShellExec('', ExpandConstant('{app}\Guard.Cleaner.exe'), '/checkpin', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
-  begin
-    MsgBox('Unable to run Guard uninstaller for PIN check. Uninstall cannot continue.', mbError, MB_OK);
-    Result := False;
+  if CurUninstallStep <> usUninstall then
     exit;
+
+  // Authorize and finish cleanup in one process. No reusable marker file is trusted.
+  // usUninstall runs after the user confirms removal and before Inno deletes files.
+  if not ShellExec('', ExpandConstant('{app}\Guard.Cleaner.exe'), '/authorize-and-clean', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+  begin
+    MsgBox('Unable to run the guarded cleanup. Uninstall cannot continue.', mbError, MB_OK);
+    Abort;
   end;
 
   if ResultCode <> 0 then
   begin
-    MsgBox('Guard uninstall PIN check failed or was cancelled. Uninstall aborted.', mbError, MB_OK);
-    Result := False;
-    exit;
+    MsgBox('Parent authorization or guarded cleanup failed. Uninstall aborted.', mbError, MB_OK);
+    Abort;
   end;
-
-  // PIN ok or not required
-  Result := True;
 end;

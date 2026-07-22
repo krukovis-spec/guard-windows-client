@@ -13,21 +13,31 @@ namespace Guard.Tests
         private static int Main()
         {
             Run("validates PINs", TestPins);
-            Run("enforces emergency PIN policy", TestEmergencyPinPolicy);
+            Run("rejects missing and compromised privileged PINs", TestEmergencyPinPolicy);
             Run("validates domains", TestDomains);
             Run("validates IP addresses", TestIps);
             Run("parses instruction JSON", TestInstructionsParser);
             Run("converts preset-backed custom URL rules", TestRuleParser);
             Run("routes system commands through injectable runner", TestSystemCommandRunner);
             Run("removes only matching firewall rules through command runner", TestFirewallRuleCleanupUsesRunner);
+            Run("reports unremoved firewall rules as cleanup failure", TestFirewallCleanupVerificationFailure);
             Run("creates short expiring pairing codes", TestPairingCodes);
+            Run("blocks first-caller ownership takeover", TestFirstCallerTakeoverBlocked);
+            Run("keeps unprovisioned control plane fail closed", TestUnprovisionedDeviceFailClosed);
+            Run("rejects cleaner and disable bypasses", TestCleanerAndDisableAuthorization);
+            Run("accepts only the exact guarded Cleaner mode", TestCleanerLaunchPolicy);
+            Run("reports cleanup failures without false success", TestGuardCleanupCoordinator);
+            Run("distinguishes missing scheduled tasks from query errors", TestScheduledTaskQueryClassification);
+            Run("keeps legacy telemetry quarantined", TestLegacyTelemetryQuarantine);
+            Run("builds diagnostics without sensitive state", TestSafeDiagnosticSummary);
+            Run("rejects email and legacy recovery routes", TestLegacyRecoveryRoutesBlocked);
             Run("applies parent commands to Guard state", TestParentCommands);
             Run("applies UI language command", TestUiLanguageCommand);
             Run("hashes and verifies parent admin passwords", TestParentAdminAuth);
             Run("expires parent admin sessions and marks sensitive actions", TestParentAdminSecurity);
             Run("ignores remote PIN updates", TestRemotePinUpdatesDoNotChangeLocalPin);
             Run("keeps local parent mode offline", TestLocalParentModeSkipsRemoteUpdater);
-            Run("keeps legacy remote server disabled by default", TestLegacyRemoteServerDisabledByDefault);
+            Run("keeps legacy remote server disabled despite persisted opt-in", TestLegacyRemoteServerDisabledByDefault);
             Run("applies application control commands", TestApplicationControlCommands);
             Run("handles application access requests", TestApplicationAccessRequests);
             Run("handles website access requests and grants", TestWebsiteAccessRequests);
@@ -82,13 +92,16 @@ namespace Guard.Tests
 
         private static void TestEmergencyPinPolicy()
         {
-            Assert(EmergencyPinPolicy.GetEffectivePin("") == EmergencyPinPolicy.TemporaryDefaultPin, "empty stored PIN should use temporary default");
-            Assert(EmergencyPinPolicy.GetEffectivePin(null) == EmergencyPinPolicy.TemporaryDefaultPin, "null stored PIN should use temporary default");
-            Assert(EmergencyPinPolicy.GetEffectivePin("654321") == "654321", "custom stored PIN should be effective");
-            Assert(EmergencyPinPolicy.IsTemporaryDefault(""), "empty PIN should be reported as temporary default");
-            Assert(EmergencyPinPolicy.IsTemporaryDefault("123456"), "default PIN should be reported as temporary default");
-            Assert(!EmergencyPinPolicy.IsTemporaryDefault("654321"), "custom PIN should not be reported as temporary default");
-            Assert(!EmergencyPinPolicy.IsAllowedCustomPin("123456"), "temporary default should not be allowed as custom PIN");
+            Assert(!EmergencyPinPolicy.IsAuthorized("", "123456"), "empty stored PIN must fail closed");
+            Assert(!EmergencyPinPolicy.IsAuthorized(null, "123456"), "null stored PIN must fail closed");
+            Assert(!EmergencyPinPolicy.IsAuthorized("123456", "123456"), "known compromised PIN must never authorize");
+            Assert(!EmergencyPinPolicy.IsAuthorized("654321", "123456"), "known compromised input must not authorize a custom PIN");
+            Assert(!EmergencyPinPolicy.IsAuthorized("654321", "111111"), "wrong custom PIN must be rejected");
+            Assert(EmergencyPinPolicy.IsAuthorized("654321", "654321"), "matching custom PIN should authorize the legacy local flow");
+            Assert(EmergencyPinPolicy.IsMissingOrCompromised(""), "empty PIN should be unavailable");
+            Assert(EmergencyPinPolicy.IsMissingOrCompromised("123456"), "known PIN should be compromised");
+            Assert(!EmergencyPinPolicy.IsMissingOrCompromised("654321"), "custom PIN should be available");
+            Assert(!EmergencyPinPolicy.IsAllowedCustomPin("123456"), "known compromised PIN should not be allowed as custom PIN");
             Assert(EmergencyPinPolicy.IsAllowedCustomPin("654321"), "non-default six digit PIN should be allowed");
         }
 
@@ -172,23 +185,55 @@ namespace Guard.Tests
                 Output =
                     "Rule Name: GuardBlock-Cat\r\n" +
                     "Rule Name: OtherRule\r\n" +
-                    "Rule Name: GuardBlock-Rules-Child\r\n"
+                    "Имя правила: GuardBlock-Rules-Child\r\n"
             };
+            runner.Outputs.Enqueue(runner.Output);
+            runner.Outputs.Enqueue(string.Empty);
+            runner.Outputs.Enqueue("Rule Name: OtherRule\r\n");
             SystemCommandRunnerProvider.Current = runner;
+            bool cleanupSucceeded;
             try
             {
-                SystemCleaner.RemoveFirewallRulesAsync(log: null, tag: "GuardBlock-Rules").GetAwaiter().GetResult();
+                cleanupSucceeded = SystemCleaner.RemoveFirewallRulesAsync(log: null, tag: "GuardBlock-Rules")
+                    .GetAwaiter()
+                    .GetResult();
             }
             finally
             {
                 SystemCommandRunnerProvider.Reset();
             }
 
-            Assert(runner.Commands.Count == 2, "show and delete commands should be routed");
+            Assert(cleanupSucceeded, "successful netsh results should report successful cleanup");
+            Assert(runner.Commands.Count == 3, "show, delete, and verification commands should be routed");
             Assert(runner.Commands[0].FileName == "netsh", "first command should query netsh rules");
-            Assert(runner.Commands[1].FileName == "cmd.exe", "delete command should go through RunCmd");
+            Assert(runner.Commands[1].FileName == "netsh", "delete command should call netsh without a command shell");
             Assert(runner.Commands[1].Arguments.Contains("GuardBlock-Rules-Child"), "matching rule should be deleted");
             Assert(!runner.Commands[1].Arguments.Contains("OtherRule"), "unmatched rule should not be deleted");
+            Assert(runner.Commands[2].Arguments.Contains("show rule name=all"),
+                "firewall cleanup should verify that matching rules are gone");
+        }
+
+        private static void TestFirewallCleanupVerificationFailure()
+        {
+            const string matchingRule = "Rule Name: GuardBlock-Rules-Child\r\n";
+            var runner = new RecordingCommandRunner();
+            runner.Outputs.Enqueue(matchingRule);
+            runner.Outputs.Enqueue(string.Empty);
+            runner.Outputs.Enqueue(matchingRule);
+            SystemCommandRunnerProvider.Current = runner;
+            bool cleanupSucceeded;
+            try
+            {
+                cleanupSucceeded = SystemCleaner.RemoveFirewallRulesAsync(log: null, tag: "GuardBlock-Rules")
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            finally
+            {
+                SystemCommandRunnerProvider.Reset();
+            }
+
+            Assert(!cleanupSucceeded, "a Guard firewall rule found after deletion must fail cleanup");
         }
 
         private static void TestPairingCodes()
@@ -205,6 +250,209 @@ namespace Guard.Tests
             Assert(PairingCodeService.FormatCode("ABCDEFGH") == "ABCD-EFGH", "formatting should add separator");
             Assert(PairingCodeService.IsExpired(pairing, now.AddMinutes(16)), "pairing should expire after default lifetime");
             Assert(!PairingCodeService.IsValidCode("O0I1-!!!!"), "confusing or invalid characters should be rejected");
+        }
+
+        private static void TestFirstCallerTakeoverBlocked()
+        {
+            var state = new GuardState
+            {
+                Pairing = PairingCodeService.StartPairing("Child laptop", DateTime.UtcNow)
+            };
+
+            Assert(!GuardV2ContainmentPolicy.CanClaimParentOwnership(state, LegacyParentOwnershipRoute.ChildVisiblePairingCode),
+                "a caller holding the child-visible pairing code must not claim ownership");
+            Assert(!state.Assigned, "rejected first caller must not assign the device");
+            Assert(!ParentAdminAuth.IsConfigured(state), "rejected first caller must not create a parent password");
+        }
+
+        private static void TestUnprovisionedDeviceFailClosed()
+        {
+            var state = new GuardState();
+
+            Assert(!GuardV2ContainmentPolicy.CanStartParentAdminServer(state),
+                "unprovisioned state must not expose the parent server");
+            Assert(!GuardV2ContainmentPolicy.CanUseLegacyRemoteServer(new GuardState { AllowLegacyRemoteServer = true }),
+                "persisted legacy opt-in must not reopen remote control");
+        }
+
+        private static void TestCleanerAndDisableAuthorization()
+        {
+            Assert(!GuardV2ContainmentPolicy.CanAuthorizeLocalPrivilegedAction(null, "123456"),
+                "disable must reject a missing parent factor");
+            Assert(!GuardV2ContainmentPolicy.CanAuthorizeLocalPrivilegedAction("123456", "123456"),
+                "disable must reject the known compromised PIN");
+            Assert(!GuardV2ContainmentPolicy.CanAuthorizeCleaner("", "123456"),
+                "cleaner must reject an uninitialized parent factor");
+            Assert(!GuardV2ContainmentPolicy.CanAuthorizeCleaner("123456", "123456"),
+                "cleaner must reject the known compromised PIN");
+            Assert(GuardV2ContainmentPolicy.CanAuthorizeCleaner("654321", "654321"),
+                "cleaner may accept only the existing custom parent PIN during containment");
+
+            Assert(typeof(MainForm).GetMethod("CleanAndClose") == null,
+                "unauthenticated reset-and-clean entry point must not exist");
+            Assert(typeof(MainForm).GetMethod("ShutdownApplication") == null,
+                "unauthenticated shutdown entry point must not exist");
+            Assert(typeof(MainForm).GetMethod("DisableApp", new[] { typeof(bool) }) == null,
+                "DisableApp must not expose a boolean PIN bypass");
+            Assert(typeof(MainForm).GetMethod("DisableApp", Type.EmptyTypes) != null,
+                "the tray disable flow should remain available behind authorization");
+        }
+
+        private static void TestCleanerLaunchPolicy()
+        {
+            Assert(CleanerLaunchPolicy.Parse(new[] { "/authorize-and-clean" }) == CleanerLaunchMode.AuthorizedCleanup,
+                "the exact guarded cleanup argument should be accepted");
+            Assert(CleanerLaunchPolicy.Parse(Array.Empty<string>()) == CleanerLaunchMode.Rejected,
+                "a direct Cleaner launch must be rejected");
+            Assert(CleanerLaunchPolicy.Parse(new[] { "/checkpin" }) == CleanerLaunchMode.Rejected,
+                "the legacy reusable authorization mode must be rejected");
+            Assert(CleanerLaunchPolicy.Parse(new[] { "/AUTHORIZE-AND-CLEAN" }) == CleanerLaunchMode.Rejected,
+                "only the exact guarded cleanup argument should be accepted");
+            Assert(CleanerLaunchPolicy.Parse(new[] { "/authorize-and-clean", "extra" }) == CleanerLaunchMode.Rejected,
+                "extra Cleaner arguments must be rejected");
+            Assert(CleanerLaunchPolicy.Parse(new[] { "/notifyfailure" }) == CleanerLaunchMode.StartupFailureNotification,
+                "startup failure notification must not be parsed as cleanup authorization");
+        }
+
+        private static void TestGuardCleanupCoordinator()
+        {
+            var successfulOperations = new RecordingCleanupOperations();
+            var successfulResult = GuardCleanupCoordinator.RunAsync(successfulOperations).GetAwaiter().GetResult();
+
+            Assert(successfulResult.Succeeded, "all confirmed cleanup stages should report success");
+            Assert(successfulResult.FailedStep == null, "successful cleanup should not report a failed step");
+            Assert(successfulOperations.Calls.Count == 5, "successful cleanup should run every stage");
+            Assert(successfulOperations.Calls[0] == GuardCleanupStep.DisableWatchdog,
+                "watchdog must be disabled before cleanup starts");
+
+            var stages = (GuardCleanupStep[])Enum.GetValues(typeof(GuardCleanupStep));
+            for (int index = 0; index < stages.Length; index++)
+            {
+                var failingOperations = new RecordingCleanupOperations
+                {
+                    FailingStep = stages[index]
+                };
+                var failedResult = GuardCleanupCoordinator.RunAsync(failingOperations).GetAwaiter().GetResult();
+
+                Assert(!failedResult.Succeeded, "a failed cleanup stage must never report success");
+                Assert(failedResult.FailedStep == stages[index],
+                    "the structured result should identify the failed stage");
+                Assert(failingOperations.Calls.Count == index + 1,
+                    "cleanup must stop immediately after an unconfirmed critical stage");
+                Assert(CleanerExitCodePolicy.FromCleanupResult(failedResult) == CleanerExitCodePolicy.CleanupFailed,
+                    "a cleanup failure must map to a nonzero Cleaner exit code");
+            }
+
+            var throwingOperations = new RecordingCleanupOperations
+            {
+                ThrowingStep = GuardCleanupStep.FirewallRules
+            };
+            var throwingResult = GuardCleanupCoordinator.RunAsync(throwingOperations).GetAwaiter().GetResult();
+            Assert(!throwingResult.Succeeded && throwingResult.FailedStep == GuardCleanupStep.FirewallRules,
+                "an exception in a cleanup operation must become a structured failure");
+            Assert(CleanerExitCodePolicy.FromCleanupResult(successfulResult) == CleanerExitCodePolicy.Success,
+                "confirmed cleanup success should map to exit code zero");
+            Assert(CleanerExitCodePolicy.FromCleanupResult(null) == CleanerExitCodePolicy.CleanupFailed,
+                "a missing cleanup result must fail closed");
+        }
+
+        private static void TestScheduledTaskQueryClassification()
+        {
+            Assert(ScheduledTaskHelper.ClassifyQueryResult(new SystemCommandResult
+            {
+                Started = true,
+                ExitCode = 0
+            }) == ScheduledTaskPresence.Present, "a successful query should confirm the task is present");
+
+            Assert(ScheduledTaskHelper.ClassifyQueryResult(new SystemCommandResult
+            {
+                Started = true,
+                ExitCode = 1,
+                Error = "ERROR: The system cannot find the file specified."
+            }) == ScheduledTaskPresence.ConfirmedAbsent, "the explicit Windows missing-file result should confirm absence");
+
+            Assert(ScheduledTaskHelper.ClassifyQueryResult(new SystemCommandResult
+            {
+                Started = true,
+                ExitCode = 1,
+                Error = "ОШИБКА: Не удается найти указанный файл."
+            }) == ScheduledTaskPresence.ConfirmedAbsent, "the Russian missing-file result should confirm absence");
+
+            Assert(ScheduledTaskHelper.ClassifyQueryResult(new SystemCommandResult
+            {
+                Started = true,
+                ExitCode = 1,
+                Error = "ERROR: Access is denied."
+            }) == ScheduledTaskPresence.Error, "generic nonzero query failures must fail closed");
+
+            Assert(ScheduledTaskHelper.ClassifyQueryResult(new SystemCommandResult
+            {
+                Started = false,
+                ExitCode = 0
+            }) == ScheduledTaskPresence.Error, "a query process that did not start must fail closed");
+        }
+
+        private static void TestLegacyTelemetryQuarantine()
+        {
+            var legacyAssignedState = new GuardState
+            {
+                Assigned = true,
+                DeviceId = "sensitive-device-id",
+                AllowLegacyRemoteServer = true
+            };
+
+            Assert(!GuardV2ContainmentPolicy.CanSendLegacyTelemetry(legacyAssignedState),
+                "persisted legacy assignment must not reopen telemetry");
+            Assert(!GuardV2ContainmentPolicy.CanSendLegacyTelemetry(null),
+                "missing state must fail closed for telemetry");
+        }
+
+        private static void TestSafeDiagnosticSummary()
+        {
+            const string assignSecret = "SENSITIVE-ASSIGN-CODE";
+            const string deviceSecret = "SENSITIVE-DEVICE-ID";
+            const string payloadSecret = "SENSITIVE-RAW-PAYLOAD";
+            var state = new GuardState
+            {
+                AssignCode = assignSecret,
+                DeviceId = deviceSecret,
+                ErrorLog = new List<string> { payloadSecret },
+                RuleUrls = new List<string> { payloadSecret + ".example" }
+            };
+
+            string summary = GuardDiagnosticSummary.Build(state);
+            Assert(!summary.Contains(assignSecret), "diagnostics must not expose the assignment secret");
+            Assert(!summary.Contains(deviceSecret), "diagnostics must not expose the device identifier");
+            Assert(!summary.Contains(payloadSecret), "diagnostics must not expose raw state payloads");
+            Assert(!summary.Contains("AssignCode"), "diagnostics must not advertise a sensitive assignment field");
+            Assert(!summary.Contains("DeviceId"), "diagnostics must not advertise a sensitive identifier field");
+            Assert(summary.Contains("ErrorCount: 1"), "diagnostics may expose safe aggregate counts");
+        }
+
+        private static void TestLegacyRecoveryRoutesBlocked()
+        {
+            var state = new GuardState();
+            var routes = new[]
+            {
+                LegacyParentOwnershipRoute.LegacyAssignApi,
+                LegacyParentOwnershipRoute.EmailCode,
+                LegacyParentOwnershipRoute.SmsCode,
+                LegacyParentOwnershipRoute.Totp,
+                LegacyParentOwnershipRoute.LegacyServerPayload
+            };
+
+            foreach (var route in routes)
+            {
+                Assert(!GuardV2ContainmentPolicy.CanClaimParentOwnership(state, route),
+                    route + " must not create or recover parent ownership");
+            }
+
+            Assert(typeof(MainForm).Assembly.GetType("Guard.AssignForm") == null,
+                "legacy Assign UI must not be compiled into the active client");
+            Assert(typeof(MainForm).Assembly.GetType("Guard.PairingForm") == null,
+                "child-visible pairing/email UI must not be compiled into the active client");
+            Assert(typeof(GuardV2ContainmentPolicy).Assembly.GetType("Guard.PairingEmailBuilder") == null,
+                "pairing email builder must not be compiled into the active core");
         }
 
         private static void TestParentCommands()
@@ -259,7 +507,7 @@ namespace Guard.Tests
             var defaultPinResult = ParentCommandApplier.Apply(state, new ParentCommand
             {
                 Type = ParentCommandType.SetEmergencyPin,
-                Value = EmergencyPinPolicy.TemporaryDefaultPin
+                Value = EmergencyPinPolicy.KnownCompromisedPin
             });
             Assert(!defaultPinResult.Changed, "default PIN should not be accepted as custom PIN");
             Assert(!string.IsNullOrEmpty(defaultPinResult.Error), "default PIN rejection should explain the error");
@@ -375,14 +623,16 @@ namespace Guard.Tests
             var state = new GuardState
             {
                 Assigned = true,
-                AssignCode = "LEGACYTEST"
+                AssignCode = "LEGACYTEST",
+                AllowLegacyRemoteServer = true
             };
             var logs = new List<string>();
 
             DeviceUpdater.SendDeviceUpdateAsync(state, logs.Add).GetAwaiter().GetResult();
 
-            Assert(!state.AllowLegacyRemoteServer, "legacy remote server should be disabled by default");
-            Assert(logs.Exists(log => log.Contains("Legacy remote server mode is disabled")), "legacy remote updater should be skipped");
+            Assert(state.AllowLegacyRemoteServer, "test precondition should simulate a persisted legacy opt-in");
+            Assert(logs.Exists(log => log.Contains("P0 containment disabled the legacy remote control plane")),
+                "legacy remote updater should be skipped even when the old flag is true");
         }
 
         private static void TestApplicationControlCommands()
@@ -1392,6 +1642,7 @@ namespace Guard.Tests
         private sealed class RecordingCommandRunner : ISystemCommandRunner
         {
             public readonly List<(string FileName, string Arguments, bool CaptureOutput)> Commands = new List<(string, string, bool)>();
+            public readonly Queue<string> Outputs = new Queue<string>();
             public string Output { get; set; } = "";
 
             public SystemCommandResult Run(string fileName, string arguments, bool captureOutput = false)
@@ -1401,9 +1652,52 @@ namespace Guard.Tests
                 {
                     Started = true,
                     ExitCode = 0,
-                    Output = Output,
+                    Output = Outputs.Count > 0 ? Outputs.Dequeue() : Output,
                     Error = ""
                 };
+            }
+        }
+
+        private sealed class RecordingCleanupOperations : IGuardCleanupOperations
+        {
+            public readonly List<GuardCleanupStep> Calls = new List<GuardCleanupStep>();
+            public GuardCleanupStep? FailingStep { get; set; }
+            public GuardCleanupStep? ThrowingStep { get; set; }
+
+            public bool WriteDisableFlag()
+            {
+                return Record(GuardCleanupStep.DisableWatchdog);
+            }
+
+            public Task<bool> ResetHostsFileAsync()
+            {
+                return Task.FromResult(Record(GuardCleanupStep.HostsFile));
+            }
+
+            public Task<bool> RemoveFirewallRulesAsync()
+            {
+                return Task.FromResult(Record(GuardCleanupStep.FirewallRules));
+            }
+
+            public bool RemoveStartupEntries()
+            {
+                return Record(GuardCleanupStep.StartupEntries);
+            }
+
+            public bool DeleteStateFiles()
+            {
+                return Record(GuardCleanupStep.StateFiles);
+            }
+
+            private bool Record(GuardCleanupStep step)
+            {
+                Calls.Add(step);
+                if (ThrowingStep == step)
+                {
+                    throw new InvalidOperationException("simulated cleanup failure");
+                }
+
+                return FailingStep != step;
             }
         }
 

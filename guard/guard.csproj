@@ -85,6 +85,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="AssignForm.cs" />
+    <Compile Remove="AssignForm.Designer.cs" />
+    <Compile Remove="PairingForm.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Update="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>

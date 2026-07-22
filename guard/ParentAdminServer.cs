@@ -39,6 +39,12 @@ namespace Guard
 
         public bool Start()
         {
+            if (!GuardV2ContainmentPolicy.CanStartParentAdminServer(_state))
+            {
+                _log("[SECURITY] Legacy parent cabinet is disabled by Guard v2 P0 containment.");
+                return false;
+            }
+
             if (IsRunning)
             {
                 return true;
@@ -171,70 +177,10 @@ namespace Guard
 
         private void HandleSetup(HttpListenerContext context, Dictionary<string, string> form)
         {
-            if (ParentAdminAuth.IsConfigured(_state))
-            {
-                WriteHtml(context, RenderPage(context, "Cabinet is already configured."));
-                return;
-            }
-
-            var code = Get(form, "pairingCode");
-            var password = Get(form, "password");
-            var confirm = Get(form, "confirm");
-            var now = DateTime.UtcNow;
-
-            if (_state.Pairing == null ||
-                _state.Pairing.Status != PairingStatus.WaitingForParent ||
-                PairingCodeService.IsExpired(_state.Pairing, now) ||
-                PairingCodeService.NormalizeCode(code) != PairingCodeService.NormalizeCode(_state.Pairing.Code))
-            {
-                WriteHtml(context, RenderPage(context, "Pairing code is invalid or expired."));
-                return;
-            }
-
-            if (password != confirm)
-            {
-                WriteHtml(context, RenderPage(context, "Passwords do not match."));
-                return;
-            }
-
-            if (!ParentAdminAuth.SetPassword(_state, password))
-            {
-                WriteHtml(context, RenderPage(context, "Password must be at least 12 characters."));
-                return;
-            }
-
-            _state.Pairing.Status = PairingStatus.Paired;
-            _state.Pairing.PairedAtUtc = now;
-            _state.Assigned = true;
-            _state.LocalParentMode = true;
-            _state.SyncStatus = true;
-            if (_state.WebAccess == null)
-            {
-                _state.WebAccess = new WebAccessSettings();
-            }
-            _state.WebAccess.DefaultDenyEnabled = true;
-            if (_state.AppControl == null)
-            {
-                _state.AppControl = new ApplicationControlSettings();
-            }
-            _state.AppControl.Mode = ApplicationControlMode.Enforced;
-            _state.AppControl.BlockTaskManager = true;
-            _state.AppControl.PolicyUpdatePending = true;
-            _state.UpdateInfo.Rules = true;
-            _state.UpdateInfo.Cats = true;
-            _state.UpdateInfo.UpdateApplied = false;
-            if (string.IsNullOrWhiteSpace(_state.DeviceId))
-            {
-                _state.DeviceId = "local-" + Environment.MachineName;
-            }
-            if (string.IsNullOrWhiteSpace(_state.AssignCode))
-            {
-                _state.AssignCode = PairingCodeService.NormalizeCode(_state.Pairing.Code);
-            }
-
-            GuardStateStorage.Save(_state);
-            SignIn(context);
-            WriteHtml(context, RenderPage(context, "Cabinet configured."));
+            context.Response.StatusCode = 403;
+            WriteHtml(context, RenderPage(context,
+                L("Небезопасная первичная привязка отключена до появления passkey-настройки.",
+                  "Unsafe first pairing is disabled until passkey provisioning is available.")));
         }
 
         private void HandleLogin(HttpListenerContext context, Dictionary<string, string> form)
@@ -557,13 +503,9 @@ namespace Guard
         private string RenderSetup(string message)
         {
             return Header(L("Guard: родительский кабинет", "Guard Parent Cabinet"), message) +
-                   "<p class=\"muted\">" + Html(L("Введите код, который показан на детском компьютере, и задайте сильный пароль родителя.",
-                       "Enter the pairing code shown on the child computer, then set a strong parent password.")) + "</p>" +
-                   "<form method=\"post\" action=\"/setup\">" +
-                   "<label>" + Html(L("Код привязки", "Pairing code")) + "</label><input name=\"pairingCode\" autocomplete=\"one-time-code\" required>" +
-                   "<label>" + Html(L("Пароль родителя", "Parent password")) + "</label><input name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required>" +
-                   "<label>" + Html(L("Повторите пароль", "Repeat password")) + "</label><input name=\"confirm\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required>" +
-                   "<p><button type=\"submit\">" + Html(L("Привязать компьютер", "Pair computer")) + "</button></p></form>";
+                   "<p class=\"muted\">" + Html(L(
+                       "Legacy-привязка и создание владельца на детском компьютере временно недоступны. Дождитесь безопасной passkey-настройки Guard v2.",
+                       "Legacy pairing and owner creation on the child computer are temporarily unavailable. Wait for Guard v2 passkey provisioning.")) + "</p>";
         }
 
         private string RenderLogin(string message)
