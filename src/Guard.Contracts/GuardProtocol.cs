@@ -9,6 +9,8 @@ namespace Guard.Contracts
         public const int MaximumReasonCharacters = 280;
         public const int MaximumTargetCharacters = 2048;
         public const int MaximumParentPublicKeyBytes = 1024;
+        public const int MaximumWindowsSidCharacters = 184;
+        public const int SetupSecretBytes = 32;
         public const int MaximumConcurrentPipeConnections = 8;
         public const int DefaultIpcReadTimeoutMilliseconds = 5000;
         public const int MaximumIpcReadTimeoutMilliseconds = 30000;
@@ -64,6 +66,7 @@ namespace Guard.Contracts
         EvaluateDomain = 20,
         BeginSetup = 30,
         CompleteSetup = 31,
+        BindChildAccount = 32,
         ApplyParentDecision = 40,
         ReconcilePolicy = 50
     }
@@ -96,6 +99,144 @@ namespace Guard.Contracts
         {
             return (byte[])_payloadUtf8.Clone();
         }
+    }
+
+    public enum GuardIpcResponseStatus
+    {
+        Success = 0,
+        Rejected = 1,
+        Forbidden = 2,
+        Conflict = 3,
+        Unavailable = 4,
+        InvalidRequest = 5,
+        InternalError = 6
+    }
+
+    public sealed class GuardIpcResponse
+    {
+        private readonly byte[] _payloadUtf8;
+
+        public GuardIpcResponse(
+            int protocolVersion,
+            string requestId,
+            GuardIpcResponseStatus status,
+            byte[] payloadUtf8)
+        {
+            ProtocolVersion = protocolVersion;
+            RequestId = requestId ?? string.Empty;
+            Status = status;
+            _payloadUtf8 = payloadUtf8 == null ? Array.Empty<byte>() : (byte[])payloadUtf8.Clone();
+        }
+
+        public int ProtocolVersion { get; }
+
+        public string RequestId { get; }
+
+        public GuardIpcResponseStatus Status { get; }
+
+        public int PayloadLength => _payloadUtf8.Length;
+
+        public byte[] GetPayloadCopy()
+        {
+            return (byte[])_payloadUtf8.Clone();
+        }
+    }
+
+    public sealed class BindChildAccountRequest
+    {
+        public BindChildAccountRequest(string candidateSid)
+        {
+            if (string.IsNullOrWhiteSpace(candidateSid) ||
+                candidateSid.Length > GuardProtocol.MaximumWindowsSidCharacters)
+            {
+                throw new ArgumentException("A bounded candidate SID is required.", nameof(candidateSid));
+            }
+
+            for (var index = 0; index < candidateSid.Length; index++)
+            {
+                var character = candidateSid[index];
+                if (character > 0x7F || char.IsControl(character))
+                {
+                    throw new ArgumentException("The candidate SID must contain printable ASCII.", nameof(candidateSid));
+                }
+            }
+
+            CandidateSid = candidateSid;
+        }
+
+        public string CandidateSid { get; }
+    }
+
+    public sealed class GuardStatusPayload
+    {
+        public GuardStatusPayload(
+            long stateVersion,
+            bool isProvisioned,
+            bool isChildAccountBound)
+        {
+            if (stateVersion < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(stateVersion));
+            }
+
+            StateVersion = stateVersion;
+            IsProvisioned = isProvisioned;
+            IsChildAccountBound = isChildAccountBound;
+        }
+
+        public long StateVersion { get; }
+
+        public bool IsProvisioned { get; }
+
+        public bool IsChildAccountBound { get; }
+    }
+
+    public sealed class SetupTicketPayload
+    {
+        private readonly byte[] _secret;
+
+        public SetupTicketPayload(
+            string challengeId,
+            byte[] secret,
+            DateTimeOffset expiresAtUtc)
+        {
+            if (!GuardIdentifier.IsCanonicalToken(challengeId))
+            {
+                throw new ArgumentException(
+                    "A canonical setup challenge id is required.",
+                    nameof(challengeId));
+            }
+
+            if (secret == null || secret.Length != GuardProtocol.SetupSecretBytes)
+            {
+                throw new ArgumentException(
+                    "A complete setup secret is required.",
+                    nameof(secret));
+            }
+
+            ChallengeId = challengeId;
+            _secret = (byte[])secret.Clone();
+            ExpiresAtUtc = expiresAtUtc.ToUniversalTime();
+        }
+
+        public string ChallengeId { get; }
+
+        public DateTimeOffset ExpiresAtUtc { get; }
+
+        public byte[] GetSecretCopy()
+        {
+            return (byte[])_secret.Clone();
+        }
+    }
+
+    public sealed class ChildAccountBindingPayload
+    {
+        public ChildAccountBindingPayload(bool serviceRestartRequired)
+        {
+            ServiceRestartRequired = serviceRestartRequired;
+        }
+
+        public bool ServiceRestartRequired { get; }
     }
 
     public enum ParentDecisionKind

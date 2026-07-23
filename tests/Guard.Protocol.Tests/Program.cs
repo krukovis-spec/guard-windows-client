@@ -19,7 +19,11 @@ namespace Guard.Protocol.Tests
                 ("signature bytes are excluded from signed content", ExcludesSignatureBytes),
                 ("invalid and oversized envelopes fail closed", RejectsInvalidEnvelope),
                 ("parent decisions use a closed request-bound payload", RoundTripsParentDecisionPayload),
+                ("child account binding uses a strict SID-only payload", RoundTripsChildBindingPayload),
+                ("service operation payloads are bounded and versioned", RoundTripsServiceOperationPayloads),
+                ("malformed service operation payloads fail closed", RejectsMalformedServiceOperationPayloads),
                 ("IPC frames round-trip without polymorphic payloads", RoundTripsIpcFrame),
+                ("IPC responses are bounded and request-correlated", RoundTripsIpcResponse),
                 ("truncated and oversized IPC frames fail closed", RejectsInvalidIpcFrame),
                 ("partial IPC frames honor cancellation", CancelsPartialIpcFrame),
                 ("partial IPC frames cannot outlive their read budget", TimesOutPartialIpcFrame)
@@ -171,6 +175,138 @@ namespace Guard.Protocol.Tests
             AssertThrowsInvalidData(
                 () => ParentDecisionPayloadCodec.Decode(withTrailingByte),
                 "Trailing payload bytes were accepted as another schema.");
+        }
+
+        private static void RoundTripsChildBindingPayload()
+        {
+            var request = new BindChildAccountRequest("S-1-5-21-1001-2002-3003-1004");
+            var encoded = BindChildAccountPayloadCodec.Encode(request);
+            var decoded = BindChildAccountPayloadCodec.Decode(encoded);
+            AssertEqual(request.CandidateSid, decoded.CandidateSid, "Child SID payload did not round-trip.");
+
+            var trailing = new byte[encoded.Length + 1];
+            Array.Copy(encoded, trailing, encoded.Length);
+            AssertThrowsInvalidData(
+                () => BindChildAccountPayloadCodec.Decode(trailing),
+                "Trailing child-binding payload bytes were accepted.");
+
+            var nonAscii = new BindChildAccountRequest("S-1-5-21-1001");
+            var malformed = BindChildAccountPayloadCodec.Encode(nonAscii);
+            malformed[malformed.Length - 1] = 0xFF;
+            AssertThrowsInvalidData(
+                () => BindChildAccountPayloadCodec.Decode(malformed),
+                "Non-ASCII child SID bytes were accepted.");
+        }
+
+        private static void RoundTripsServiceOperationPayloads()
+        {
+            var status = GuardStatusPayloadCodec.Decode(
+                GuardStatusPayloadCodec.Encode(
+                    new GuardStatusPayload(
+                        stateVersion: 7,
+                        isProvisioned: true,
+                        isChildAccountBound: false)));
+            AssertEqual(7L, status.StateVersion, "Guard status version changed.");
+            AssertEqual(true, status.IsProvisioned, "Guard provisioning status changed.");
+            AssertEqual(false, status.IsChildAccountBound, "Guard child-binding status changed.");
+
+            var secret = new byte[GuardProtocol.SetupSecretBytes];
+            for (var index = 0; index < secret.Length; index++)
+            {
+                secret[index] = (byte)(index + 1);
+            }
+
+            var expiry = new DateTimeOffset(
+                2026,
+                7,
+                23,
+                12,
+                5,
+                0,
+                TimeSpan.Zero);
+            var ticket = SetupTicketPayloadCodec.Decode(
+                SetupTicketPayloadCodec.Encode(
+                    new SetupTicketPayload(
+                        "setup:challenge-000001",
+                        secret,
+                        expiry)));
+            AssertEqual(
+                "setup:challenge-000001",
+                ticket.ChallengeId,
+                "Setup challenge id changed.");
+            AssertEqual(
+                expiry,
+                ticket.ExpiresAtUtc,
+                "Setup ticket expiry changed.");
+            var decodedSecret = ticket.GetSecretCopy();
+            AssertEqual(
+                GuardProtocol.SetupSecretBytes,
+                decodedSecret.Length,
+                "Setup secret length changed.");
+            AssertEqual(secret[0], decodedSecret[0], "Setup secret changed.");
+            Array.Clear(decodedSecret, 0, decodedSecret.Length);
+            Array.Clear(secret, 0, secret.Length);
+
+            var binding = ChildAccountBindingPayloadCodec.Decode(
+                ChildAccountBindingPayloadCodec.Encode(
+                    new ChildAccountBindingPayload(
+                        serviceRestartRequired: true)));
+            AssertEqual(
+                true,
+                binding.ServiceRestartRequired,
+                "Child binding restart requirement changed.");
+        }
+
+        private static void RejectsMalformedServiceOperationPayloads()
+        {
+            var status = GuardStatusPayloadCodec.Encode(
+                new GuardStatusPayload(0, false, false));
+            status[status.Length - 1] = 0x80;
+            AssertThrowsInvalidData(
+                () => GuardStatusPayloadCodec.Decode(status),
+                "Unknown Guard status flags were accepted.");
+
+            var secret = new byte[GuardProtocol.SetupSecretBytes];
+            var ticket = SetupTicketPayloadCodec.Encode(
+                new SetupTicketPayload(
+                    "setup:challenge-000002",
+                    secret,
+                    DateTimeOffset.UtcNow.AddMinutes(5)));
+            var trailing = new byte[ticket.Length + 1];
+            Array.Copy(ticket, trailing, ticket.Length);
+            AssertThrowsInvalidData(
+                () => SetupTicketPayloadCodec.Decode(trailing),
+                "Trailing setup ticket data was accepted.");
+            Array.Clear(secret, 0, secret.Length);
+
+            var binding = ChildAccountBindingPayloadCodec.Encode(
+                new ChildAccountBindingPayload(
+                    serviceRestartRequired: false));
+            binding[binding.Length - 1] = 0x02;
+            AssertThrowsInvalidData(
+                () => ChildAccountBindingPayloadCodec.Decode(binding),
+                "Unknown child-binding result flags were accepted.");
+        }
+
+        private static void RoundTripsIpcResponse()
+        {
+            var requestId = Guid.NewGuid().ToString("D");
+            var response = new GuardIpcResponse(
+                GuardProtocol.CurrentVersion,
+                requestId,
+                GuardIpcResponseStatus.Forbidden,
+                new byte[] { 1, 2, 3 });
+            var decoded = IpcResponseFrameCodec.Decode(IpcResponseFrameCodec.Encode(response));
+            AssertEqual(requestId, decoded.RequestId, "IPC response lost request correlation.");
+            AssertEqual(GuardIpcResponseStatus.Forbidden, decoded.Status, "IPC response status changed.");
+            AssertEqual(3, decoded.PayloadLength, "IPC response payload changed.");
+
+            var frame = IpcResponseFrameCodec.Encode(response);
+            var trailing = new byte[frame.Length + 1];
+            Array.Copy(frame, trailing, frame.Length);
+            AssertThrowsInvalidData(
+                () => IpcResponseFrameCodec.Decode(trailing),
+                "Trailing IPC response bytes were accepted.");
         }
 
         private static void CancelsPartialIpcFrame()

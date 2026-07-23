@@ -116,7 +116,7 @@ namespace Guard.Application
 
     public sealed class SetupCeremony
     {
-        public const int SetupSecretBytes = 32;
+        public const int SetupSecretBytes = GuardProtocol.SetupSecretBytes;
 
         private static readonly TimeSpan MinimumLifetime = TimeSpan.FromMinutes(1);
         private static readonly TimeSpan MaximumLifetime = TimeSpan.FromMinutes(10);

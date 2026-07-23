@@ -7,6 +7,7 @@ namespace Guard.Domain
     public sealed class DeviceSecurityState
     {
         public const int MaximumRecentCommandIds = 128;
+        public const int MaximumTrustedParentKeys = 8;
 
         private readonly string[] _recentCommandIds;
         private readonly ParentTrustAnchor[] _trustedParentKeys;
@@ -18,7 +19,8 @@ namespace Guard.Domain
             long desiredPolicyRevision,
             IEnumerable<string>? recentCommandIds = null,
             SetupChallengeState? setupChallenge = null,
-            IEnumerable<ParentTrustAnchor>? trustedParentKeys = null)
+            IEnumerable<ParentTrustAnchor>? trustedParentKeys = null,
+            WindowsAccountSid? childAccountSid = null)
         {
             if (!GuardIdentifier.IsCanonicalToken(deviceId))
             {
@@ -45,6 +47,7 @@ namespace Guard.Domain
             HighestAcceptedSequence = highestAcceptedSequence;
             DesiredPolicyRevision = desiredPolicyRevision;
             SetupChallenge = setupChallenge;
+            ChildAccountSid = childAccountSid;
             _recentCommandIds = CopyRecentIds(recentCommandIds);
             _trustedParentKeys = CopyTrustAnchors(trustedParentKeys);
         }
@@ -58,6 +61,8 @@ namespace Guard.Domain
         public long DesiredPolicyRevision { get; }
 
         public SetupChallengeState? SetupChallenge { get; }
+
+        public WindowsAccountSid? ChildAccountSid { get; }
 
         public IReadOnlyList<string> RecentCommandIds => Array.AsReadOnly((string[])_recentCommandIds.Clone());
 
@@ -122,7 +127,8 @@ namespace Guard.Domain
                 DesiredPolicyRevision,
                 _recentCommandIds,
                 challenge,
-                _trustedParentKeys);
+                _trustedParentKeys,
+                ChildAccountSid);
         }
 
         public DeviceSecurityState WithCompletedSetup(SetupChallengeState consumedChallenge, ParentTrustAnchor parentKey)
@@ -143,6 +149,11 @@ namespace Guard.Domain
                 throw new ArgumentNullException(nameof(parentKey));
             }
 
+            if (_trustedParentKeys.Length >= MaximumTrustedParentKeys)
+            {
+                throw new InvalidOperationException("The trusted parent key limit has been reached.");
+            }
+
             var nextKeys = new ParentTrustAnchor[_trustedParentKeys.Length + 1];
             Array.Copy(_trustedParentKeys, nextKeys, _trustedParentKeys.Length);
             nextKeys[nextKeys.Length - 1] = parentKey;
@@ -154,7 +165,41 @@ namespace Guard.Domain
                 DesiredPolicyRevision,
                 _recentCommandIds,
                 setupChallenge: null,
-                trustedParentKeys: nextKeys);
+                trustedParentKeys: nextKeys,
+                childAccountSid: ChildAccountSid);
+        }
+
+        public DeviceSecurityState WithBoundChildAccount(
+            WindowsAccountSid childAccountSid,
+            DateTimeOffset nowUtc)
+        {
+            if (!IsProvisioned &&
+                (SetupChallenge == null ||
+                 !SetupChallenge.IsActive(nowUtc)))
+            {
+                throw new InvalidOperationException(
+                    "Child binding requires an active setup ceremony or a parent trust anchor.");
+            }
+
+            if (childAccountSid == null)
+            {
+                throw new ArgumentNullException(nameof(childAccountSid));
+            }
+
+            if (ChildAccountSid != null)
+            {
+                throw new InvalidOperationException("The child account is already bound.");
+            }
+
+            return new DeviceSecurityState(
+                DeviceId,
+                checked(Version + 1),
+                HighestAcceptedSequence,
+                DesiredPolicyRevision,
+                _recentCommandIds,
+                SetupChallenge,
+                _trustedParentKeys,
+                childAccountSid);
         }
 
         public DeviceSecurityState WithAcceptedCommand(string commandId, long sequence)
@@ -185,7 +230,8 @@ namespace Guard.Domain
                 checked(DesiredPolicyRevision + 1),
                 nextIds,
                 SetupChallenge,
-                _trustedParentKeys);
+                _trustedParentKeys,
+                ChildAccountSid);
         }
 
         private static string[] CopyRecentIds(IEnumerable<string>? values)
@@ -238,6 +284,10 @@ namespace Guard.Domain
                 }
 
                 result.Add(value);
+                if (result.Count > MaximumTrustedParentKeys)
+                {
+                    throw new ArgumentException("Too many trusted parent keys were supplied.", nameof(values));
+                }
             }
 
             return result.ToArray();

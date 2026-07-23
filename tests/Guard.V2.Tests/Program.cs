@@ -17,6 +17,7 @@ namespace Guard.V2.Tests
             var tests = new List<(string Name, Action Run)>
             {
                 ("restricts IPC verbs by authenticated client role", RestrictsIpcVerbs),
+                ("dispatches IPC only through the server-authenticated role", DispatchesOnlyAuthorizedIpc),
                 ("rejects malformed and oversized IPC frames", RejectsInvalidFrames),
                 ("limits concurrent IPC handlers", LimitsConcurrentIpcHandlers),
                 ("keeps contract byte arrays defensive", KeepsContractArraysDefensive),
@@ -25,6 +26,8 @@ namespace Guard.V2.Tests
                 ("consumes setup secrets once and registers a parent key", ConsumesSetupOnce),
                 ("commits setup consumption and parent key atomically", CommitsSetupAtomically),
                 ("rejects expired setup completion", RejectsExpiredSetup),
+                ("accepts only canonical Windows account SIDs", AcceptsOnlyCanonicalWindowsAccountSids),
+                ("binds the child SID once through admin setup", BindsChildSidOnce),
                 ("rejects replayed and stale parent commands", RejectsReplayedCommands),
                 ("persists command acceptance before policy reconciliation", PersistsBeforeReconcile),
                 ("keeps committed desired state when reconciliation fails", KeepsCommitOnReconcileFailure),
@@ -33,6 +36,7 @@ namespace Guard.V2.Tests
                 ("rejects malformed typed parent decision payloads", RejectsMalformedParentDecision),
                 ("rejects a decision for a different pending request", RejectsCrossRequestDecision),
                 ("does not let a reducer mutate the trust boundary", RejectsReducerTrustMutation),
+                ("does not let a reducer rebind the child account", RejectsReducerChildBindingMutation),
                 ("does not let a reducer mutate replay markers", RejectsReducerMarkerMutation)
             };
 
@@ -62,13 +66,49 @@ namespace Guard.V2.Tests
             Assert(IpcSecurityPolicy.CanInvoke(ClientRole.Child, GuardVerb.GetStatus), "Child status must be allowed.");
             Assert(IpcSecurityPolicy.CanInvoke(ClientRole.Child, GuardVerb.CreateApplicationRequest), "Child app request must be allowed.");
             Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.Child, GuardVerb.BeginSetup), "Child setup must be denied.");
+            Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.Child, GuardVerb.BindChildAccount), "Child account binding must be denied.");
             Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.Child, GuardVerb.ApplyParentDecision), "Child parent decision must be denied.");
             Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.Child, GuardVerb.ReconcilePolicy), "Child reconciliation must be denied.");
             Assert(IpcSecurityPolicy.CanInvoke(ClientRole.AdminSetup, GuardVerb.BeginSetup), "Admin setup must be allowed.");
+            Assert(IpcSecurityPolicy.CanInvoke(ClientRole.AdminSetup, GuardVerb.BindChildAccount), "Admin child binding must be allowed.");
             Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.AdminSetup, GuardVerb.ApplyParentDecision), "Admin IPC is not a parent-decision channel.");
             Assert(IpcSecurityPolicy.CanInvoke(ClientRole.Proxy, GuardVerb.EvaluateDomain), "Proxy domain evaluation must be allowed.");
             Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.Proxy, GuardVerb.GetStatus), "Proxy status must be denied.");
             Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.Unknown, GuardVerb.GetStatus), "Unknown role must be denied.");
+        }
+
+        private static void DispatchesOnlyAuthorizedIpc()
+        {
+            var handler = new RecordingIpcHandler();
+            var dispatcher = new SecureIpcRequestDispatcher(handler);
+            var requestId = Guid.NewGuid().ToString("D");
+            var setup = new GuardIpcRequest(
+                GuardProtocol.CurrentVersion,
+                requestId,
+                GuardVerb.BeginSetup,
+                Array.Empty<byte>());
+            var childResult = dispatcher
+                .DispatchAsync(ClientRole.Child, setup, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            AssertEqual(GuardIpcResponseStatus.Forbidden, childResult.Status, "Child reached an admin setup verb.");
+            AssertEqual(0, handler.CallCount, "Forbidden IPC reached the operation handler.");
+
+            var adminResult = dispatcher
+                .DispatchAsync(ClientRole.AdminSetup, setup, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            AssertEqual(GuardIpcResponseStatus.Success, adminResult.Status, "Admin setup verb was rejected.");
+            AssertEqual(ClientRole.AdminSetup, handler.LastRole, "Handler role did not come from the authenticated endpoint.");
+            AssertEqual(requestId, adminResult.RequestId, "Response was not correlated to the request.");
+
+            handler.ThrowOnCall = true;
+            var sanitized = dispatcher
+                .DispatchAsync(ClientRole.AdminSetup, setup, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            AssertEqual(GuardIpcResponseStatus.InternalError, sanitized.Status, "Handler failure was exposed to the IPC client.");
+            AssertEqual(0, sanitized.PayloadLength, "Internal failure leaked a response payload.");
         }
 
         private static void RejectsInvalidFrames()
@@ -275,6 +315,89 @@ namespace Guard.V2.Tests
             AssertEqual(SetupOperationStatus.Rejected, completed.Status, "Expired setup ticket was accepted.");
         }
 
+        private static void AcceptsOnlyCanonicalWindowsAccountSids()
+        {
+            Assert(WindowsAccountSid.IsCanonical("S-1-5-21-1001-2002-3003-1004"), "Canonical child SID was rejected.");
+            Assert(!WindowsAccountSid.IsCanonical("s-1-5-21-1001"), "Lowercase SID prefix was accepted.");
+            Assert(!WindowsAccountSid.IsCanonical("S-01-5-21-1001"), "Non-canonical revision was accepted.");
+            Assert(!WindowsAccountSid.IsCanonical("S-1-5-21-4294967296"), "Oversized sub-authority was accepted.");
+            Assert(!WindowsAccountSid.IsCanonical("S-1-281474976710656-21-1001"), "Oversized identifier authority was accepted.");
+        }
+
+        private static void BindsChildSidOnce()
+        {
+            var now = DateTimeOffset.UtcNow;
+            var childSid = new WindowsAccountSid("S-1-5-21-1001-2002-3003-1004");
+            var unprovisionedStore = new FakeStateStore(CreateUnprovisionedState());
+            var unprovisioned = new ChildAccountBindingCoordinator(unprovisionedStore, new FixedChildAccountValidator(childSid))
+                .BindAsync(ClientRole.AdminSetup, childSid.Value, now, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            AssertEqual(ChildAccountBindingStatus.ParentNotProvisioned, unprovisioned.Status, "Child was bound before parent provisioning.");
+
+            var setup = CreateCeremony().Begin(
+                ClientRole.AdminSetup,
+                CreateUnprovisionedState(),
+                now,
+                TimeSpan.FromMinutes(5));
+            var expiredSetupStore = new FakeStateStore(setup.State);
+            var expiredSetupBinding = new ChildAccountBindingCoordinator(
+                    expiredSetupStore,
+                    new FixedChildAccountValidator(childSid))
+                .BindAsync(
+                    ClientRole.AdminSetup,
+                    childSid.Value,
+                    now.AddMinutes(5),
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            AssertEqual(
+                ChildAccountBindingStatus.ParentNotProvisioned,
+                expiredSetupBinding.Status,
+                "An expired setup ceremony authorized child binding.");
+
+            var setupStore = new FakeStateStore(setup.State);
+            var setupBound = new ChildAccountBindingCoordinator(
+                    setupStore,
+                    new FixedChildAccountValidator(childSid))
+                .BindAsync(
+                    ClientRole.AdminSetup,
+                    childSid.Value,
+                    now,
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            AssertEqual(
+                ChildAccountBindingStatus.Succeeded,
+                setupBound.Status,
+                "An authenticated admin could not bind the child during the active setup ceremony.");
+
+            var store = new FakeStateStore(CreateProvisionedState());
+            var coordinator = new ChildAccountBindingCoordinator(store, new FixedChildAccountValidator(childSid));
+            var childAttempt = coordinator
+                .BindAsync(ClientRole.Child, childSid.Value, now, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            AssertEqual(ChildAccountBindingStatus.Forbidden, childAttempt.Status, "Child bound its own account.");
+
+            var bound = coordinator
+                .BindAsync(ClientRole.AdminSetup, childSid.Value, now, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            AssertEqual(ChildAccountBindingStatus.Succeeded, bound.Status, "Admin setup did not bind the child account.");
+            AssertEqual(childSid, store.State.ChildAccountSid, "Bound child SID was not committed.");
+
+            var repeated = coordinator
+                .BindAsync(
+                    ClientRole.AdminSetup,
+                    "S-1-5-21-1001-2002-3003-1005",
+                    now,
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            AssertEqual(ChildAccountBindingStatus.AlreadyBound, repeated.Status, "Child account binding was replaceable.");
+        }
+
         private static void RejectsReplayedCommands()
         {
             var now = DateTimeOffset.UtcNow;
@@ -408,6 +531,22 @@ namespace Guard.V2.Tests
             AssertEqual(0, store.CommitCount, "Trust-boundary mutation reached the commit boundary.");
         }
 
+        private static void RejectsReducerChildBindingMutation()
+        {
+            var store = new FakeStateStore(CreateProvisionedState(
+                childAccountSid: new WindowsAccountSid("S-1-5-21-1001-2002-3003-1004")));
+            var reconciler = new RecordingReconciler(store, shouldThrow: false);
+            var coordinator = CreateCoordinator(
+                store,
+                reconciler,
+                signatureValid: true,
+                reducer: new ChildRebindingReducer());
+            var result = coordinator.ProcessAsync(CreateEnvelope(), DateTimeOffset.UtcNow, CancellationToken.None).GetAwaiter().GetResult();
+
+            AssertEqual(CommandProcessingStatus.Rejected, result.Status, "A reducer changed the child-account boundary.");
+            AssertEqual(0, store.CommitCount, "Child-account mutation reached the commit boundary.");
+        }
+
         private static void RejectsReducerMarkerMutation()
         {
             var store = new FakeStateStore(CreateProvisionedState(recentCommandIds: new[] { "cmd-000000000000" }));
@@ -448,7 +587,8 @@ namespace Guard.V2.Tests
 
         private static DeviceSecurityState CreateProvisionedState(
             long highestSequence = 0,
-            IEnumerable<string>? recentCommandIds = null)
+            IEnumerable<string>? recentCommandIds = null,
+            WindowsAccountSid? childAccountSid = null)
         {
             return new DeviceSecurityState(
                 "device-v2-000001",
@@ -456,7 +596,8 @@ namespace Guard.V2.Tests
                 highestAcceptedSequence: highestSequence,
                 desiredPolicyRevision: 0,
                 recentCommandIds: recentCommandIds,
-                trustedParentKeys: new[] { CreateParentKey(1) });
+                trustedParentKeys: new[] { CreateParentKey(1) },
+                childAccountSid: childAccountSid);
         }
 
         private static CommandMetadata Metadata(
@@ -745,6 +886,22 @@ namespace Guard.V2.Tests
             }
         }
 
+        private sealed class ChildRebindingReducer : IParentCommandReducer
+        {
+            public DeviceSecurityState ApplyDesiredMutation(DeviceSecurityState acceptedState, ParentDecisionCommand command)
+            {
+                return new DeviceSecurityState(
+                    acceptedState.DeviceId,
+                    acceptedState.Version,
+                    acceptedState.HighestAcceptedSequence,
+                    acceptedState.DesiredPolicyRevision,
+                    acceptedState.RecentCommandIds,
+                    acceptedState.SetupChallenge,
+                    acceptedState.TrustedParentKeys,
+                    new WindowsAccountSid("S-1-5-21-1001-2002-3003-1005"));
+            }
+        }
+
         private sealed class RecordingReconciler : IPolicyReconciler
         {
             private readonly FakeStateStore _store;
@@ -769,6 +926,51 @@ namespace Guard.V2.Tests
                 }
 
                 return Task.CompletedTask;
+            }
+        }
+
+        private sealed class FixedChildAccountValidator : IManagedChildAccountValidator
+        {
+            private readonly WindowsAccountSid _binding;
+
+            public FixedChildAccountValidator(WindowsAccountSid binding)
+            {
+                _binding = binding;
+            }
+
+            public bool TryValidate(string candidateSid, out WindowsAccountSid binding)
+            {
+                binding = _binding;
+                return string.Equals(candidateSid, _binding.Value, StringComparison.Ordinal);
+            }
+        }
+
+        private sealed class RecordingIpcHandler : IGuardIpcOperationHandler
+        {
+            public int CallCount { get; private set; }
+
+            public ClientRole LastRole { get; private set; }
+
+            public bool ThrowOnCall { get; set; }
+
+            public Task<GuardIpcResponse> HandleAsync(
+                ClientRole authenticatedRole,
+                GuardIpcRequest request,
+                CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                CallCount++;
+                LastRole = authenticatedRole;
+                if (ThrowOnCall)
+                {
+                    throw new InvalidOperationException("Synthetic handler failure.");
+                }
+
+                return Task.FromResult(new GuardIpcResponse(
+                    GuardProtocol.CurrentVersion,
+                    request.RequestId,
+                    GuardIpcResponseStatus.Success,
+                    Array.Empty<byte>()));
             }
         }
     }

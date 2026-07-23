@@ -36,6 +36,11 @@ namespace Guard.Domain
 
         public bool Consumed { get; }
 
+        public byte[] GetSecretHashCopy()
+        {
+            return (byte[])_secretHash.Clone();
+        }
+
         public bool IsActive(DateTimeOffset nowUtc)
         {
             return !Consumed && nowUtc < ExpiresAtUtc;

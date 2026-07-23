@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Guard.Application\Guard.Application.csproj" />
+    <ProjectReference Include="..\Guard.Contracts\Guard.Contracts.csproj" />
+    <ProjectReference Include="..\Guard.Domain\Guard.Domain.csproj" />
+  </ItemGroup>
+</Project>

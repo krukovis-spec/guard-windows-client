@@ -26,7 +26,8 @@ namespace Guard.Application
                 case ClientRole.AdminSetup:
                     return verb == GuardVerb.GetStatus ||
                            verb == GuardVerb.GetReadiness ||
-                           verb == GuardVerb.BeginSetup;
+                           verb == GuardVerb.BeginSetup ||
+                           verb == GuardVerb.BindChildAccount;
 
                 case ClientRole.Proxy:
                     return verb == GuardVerb.EvaluateDomain;
