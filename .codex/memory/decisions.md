@@ -1,11 +1,20 @@
 # Decisions
 
+## 2026-07-23 - Guard v2 Stage 2 uses a fail-closed LocalSystem boundary
+
+- Decision: pin official `.NET SDK 10.0.302`; use official `Microsoft.Extensions.Hosting.WindowsServices` `10.0.10`; start production only through SCM as `LocalSystem`; allow initial authoritative-state creation only with one exact CLI bootstrap flag after that boundary; never reset existing/corrupt artifacts.
+- Decision: `%ProgramData%\Guard\v2` is SYSTEM-only, DPAPI-protected and atomically replaced under a single writer lease with CAS and a protected hash-chained version journal. Admin/child/proxy use separate first-instance local-only pipes whose role comes from the verified token/SID/integrity, never the payload.
+- Decision: a fresh installation binds one validated standard-child SID only during an active elevated admin setup challenge; binding is immutable, and the exact-SID child endpoint appears after service restart. No public ParentRelay pipe is exposed; relay work will use a future internal outbound path.
+- Why: these constraints prevent child-side ownership claim, same-user secret access, second-writer races, role spoofing and silent recovery-by-reset.
+- Risk: code-only tests do not prove Windows tamper resistance. Real SCM/ACL/DPAPI/named-pipe/account/crash behavior remains a disposable-VM gate; joint offline rollback of both state and journal needs a future TPM or remote witness.
+- Check: implementation `078ffa1`; Release build; 159/159 safe checks; clean NuGet audit and secret/diff checks; two independent final reviews accepted the exact staged tree with no P0/P1/P2. No service or system action was run.
+
 ## 2026-07-23 - Guard v2 uses a side-by-side authoritative service architecture
 
 - Decision: build Guard v2 beside quarantined legacy code. `Guard.Service` will be the only authoritative writer; child/admin/proxy use separate restricted IPC; setup atomically consumes a one-time challenge and binds parent public-key material; signed decisions are exact-request-bound and committed before reconciliation.
 - Why: promoting the interactive tray, CurrentUser storage or LAN cabinet would preserve the same child-visible and same-user trust failures that P0 contained.
 - Alternatives: convert `guard.exe` into a service; reuse legacy DPAPI state and pairing IDs; use one role-bearing pipe. These make untrusted payload identity or child-readable legacy state part of the security boundary.
-- Risk: current commit is only the tested cross-platform foundation. Real ECDSA, ProgramData ACL/encryption, named-pipe token/DACL, AppLocker/proxy adapters and Windows VM attack tests remain required.
+- Risk: this decision began as a cross-platform foundation. Stage 2 now supplies ECDSA, ProgramData ACL/encryption and named-pipe token/DACL adapters in code; AppLocker/proxy adapters and Windows VM attack tests remain required.
 - Check: checkpoint `6bfcb15e50f05b9110e6c0227c927be683a5f293`; implementation `de4db2d`; evidence `784ccd0`; Release build, 84/84 safe checks, clean NuGet/staged-secret scans and independent review with no remaining P0/P1/P2.
 
 ## 2026-07-22 - P0 quarantines legacy control and requires confirmed cleanup

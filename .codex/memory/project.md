@@ -17,7 +17,7 @@
 ## Architecture
 
 - `src/Guard.Contracts`, `Guard.Domain`, `Guard.Protocol`, `Guard.Application` - side-by-side Guard v2 foundation. It owns canonical identifiers, bounded IPC/parent-decision codecs, immutable security/readiness/policy models, atomic setup and signed-command use cases. It does not run privileged Windows actions.
-- `Guard.Service` / `Guard.Windows` / `Guard.Child` / `Guard.Proxy` are the next cutover layers and do not exist yet. The target remains `.NET 10`; legacy `guard.exe` is quarantined and must not become the service or authoritative writer.
+- `src/Guard.Service` is the `.NET 10` SCM/`LocalSystem` composition root and sole authoritative writer. `src/Guard.Windows` owns SYSTEM-only ProgramData storage, LocalSystem DPAPI, ECDSA P-256, local-account validation and restricted named-pipe adapters. `Guard.Child` / `Guard.Proxy` remain later cutover layers; legacy `guard.exe` stays quarantined.
 - `guard/` - main WinForms/tray client, API sync, forms, rule application.
 - `Guard.Core/` - shared state, DPAPI storage, cleanup helpers, scheduled task helper, models.
 - `Guard.Cleaner/` - uninstall/PIN cleanup helper.
@@ -29,11 +29,11 @@
 - Cloned from `https://github.com/ganjie/guard-windows-client.git`.
 - Moved to `C:\Yandex.Disk\Projects\guard-windows-client` on 2026-06-06.
 - Git state at bootstrap: `main...origin/main`, clean.
-- Tooling observed on 2026-06-06: `dotnet.exe` exists (`.NET SDK 8.0.421`); legacy Framework MSBuild exists (`4.8.9221.0`); Visual Studio 2022 Build Tools MSBuild not found in standard paths.
+- Tooling: official `.NET SDK 10.0.302` was installed with Ivan's explicit approval on 2026-07-23 and is pinned by `global.json`; legacy Framework MSBuild `4.8.9221.0` remains available. `Guard.Service` locks the official `Microsoft.Extensions.Hosting.WindowsServices` package to `10.0.10`.
 - Baseline build on 2026-06-06 was fixed without installing Visual Studio Build Tools by adding `Directory.Build.props` with `Microsoft.NETFramework.ReferenceAssemblies.net48` and `GenerateResourceMSBuildArchitecture/Runtime = Current...`. Current gate: `dotnet msbuild guard.sln /p:Configuration=Release /p:Platform="Any CPU"` passes cleanly. No Guard app/cleaner/helper exe was launched.
 - Inno Setup is available at `C:\Users\kruko\AppData\Local\Programs\Inno Setup 6\ISCC.exe`.
-- Safe verification now consists of 45 legacy checks plus 39 Guard v2 checks in four net8 console harnesses: 84/84 PASS after a Release solution build. The net8 harness target is only a local test runner; production `Guard.Service` remains `.NET 10`.
-- Guard v2 foundation commit `de4db2d` and evidence commit `784ccd0` are pushed on `codex/guard-v2-implementation`; remote HEAD was verified at `784ccd05d9745c536fcbf7ea51678e98bd763656`.
+- Safe verification now consists of 159/159 checks after a Release solution build: 45 legacy, 22 v2, 13 protocol, 6 policy, 6 readiness, 20 service, 22 storage, 4 Windows account, 7 Windows crypto, 10 Windows IPC and 4 Windows storage. NuGet audit is clean; no production executable was run.
+- Guard v2 foundation commits `de4db2d` / `784ccd0` and service-boundary implementation commit `078ffa1` are on `codex/guard-v2-implementation`. The exact accepted Stage 2 tree was `6a94830515b81a5ef0b53589b0aef615a86e772e`; two independent final reviews found no P0/P1/P2.
 - Setup challenge consumption and parent public-key trust are one CAS transaction; parent commands use canonical signed metadata, a strict request-bound decision payload, durable replay markers and commit-before-reconcile behavior. IPC reads require a deadline and have an eight-handler quota contract.
 - `Directory.Build.props` also excludes Yandex.Disk conflict-copy files matching `**/*копия с компьютера LG*.*`; otherwise SDK-style `.csproj` auto-includes duplicate `.cs` files and the build fails with repeated type definitions.
 - System process calls now route through `ISystemCommandRunner` / `SystemCommandRunnerProvider`, so tests can fake `cmd`, `netsh`, and `schtasks` without touching Windows.
@@ -54,7 +54,8 @@
 
 ## Risks
 
-- The foundation is not yet a Windows security boundary: no real service host, ProgramData store, ECDSA adapter, named-pipe SID/DACL enforcement, AppLocker/browser adapter or VM proof exists. Do not treat pure-model tests as tamper-resistance evidence.
+- The Stage 2 service/storage/crypto/IPC boundary exists in code, but Windows tamper resistance is not yet proven. Disposable-VM tests must validate real SCM/LocalSystem bootstrap, ProgramData ACL/DPAPI/reparse behavior, named-pipe impersonation/UAC/integrity, nested local groups, restart cutover, crash durability and the child tamper matrix.
+- The protected state and hash-chained journal detect ordinary rollback/substitution, but an attacker who can jointly restore both artifacts offline requires a future TPM or remote witness for stronger rollback proof.
 - The 2026-07-22 P0 source changes close the child-visible first-pairing takeover, known/missing PIN bypasses, legacy telemetry and unsafe Cleaner routes. Do not deploy to the child PC yet: installer/Cleaner and enforcement lifecycle still require disposable Windows VM validation.
 - The current admin tray process, HKCU autostart and interactive scheduled-task watchdog do not form a reliable boundary for a separate standard child account. The recommended architecture is a `LocalSystem` Windows service that owns policy/state plus a separate child-session UI over restricted IPC.
 - Current web default-deny is best-effort UI Automation after navigation, not browser-independent enforcement. The AppLocker policy also keeps broad Windows allow rules while blocking only a partial list of documented bypass hosts.
@@ -68,9 +69,9 @@
 ## Recommended Next
 
 - Active branch: `codex/guard-v2-implementation`; pre-change checkpoint: `codex/checkpoint-20260723-0041-guard-v2-implementation` at `6bfcb15e50f05b9110e6c0227c927be683a5f293`.
-- Next ordered increment is the real `.NET 10` LocalSystem service, linearizable encrypted/atomic ProgramData store, production ECDSA trust validator/verifier and separate restricted named-pipe hosts. Installing the official .NET 10 SDK and Microsoft Windows-service NuGet package requires Ivan's explicit approval first.
+- Next ordered code-only increment is Stage 3 readiness/self-protection: injected read-only Windows/account/service-health probes, strict fail-closed readiness and testable setup contracts. Actual service installation, account changes and tamper testing remain disposable-VM-only.
 - Current product path remains: temporary passkey-gated maintenance, signed app identities, managed supported browsers, localhost domain proxy without HTTPS interception, parent PWA and four decisions (`always`, `temporary`, `daily quota`, `deny`).
-- Ivan authorized execution of the full plan, but the toolchain installation remains an explicit approval gate. Do not skip forward to live Windows enforcement or downgrade the service to the installed .NET 8 SDK.
+- Ivan authorized execution of the full plan and separately approved the .NET 10/service-package toolchain. Continue in small verified code-only increments; do not skip to live Windows enforcement.
 - Do not install or live-test the current build on the child PC. After the P0 changes, validate only in disposable Windows 11 Pro VMs before any real-device pilot.
 - Reuse the tested request/grant/limit/task engines, but replace the privileged tray/watchdog boundary, child-known pairing/PIN recovery, UI-Automation web enforcement and one-page LAN cabinet.
 - The current cabinet is LAN-only and must not be exposed to the internet. Guard v2 requires a new outbound TLS device channel, encrypted relay payloads where practical, and a passkey-protected parent PWA.

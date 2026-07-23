@@ -1,5 +1,16 @@
 # Worklog
 
+## 2026-07-23 - Guard v2 Stage 2 secure service boundary
+
+- Ivan explicitly approved installing the official .NET 10 SDK and Microsoft Windows-service package. Installed SDK `10.0.302`, pinned it in `global.json`, and locked `Microsoft.Extensions.Hosting.WindowsServices` to `10.0.10`.
+- Committed `078ffa1` (`feat(v2): add secure Windows service boundary`) on `codex/guard-v2-implementation`.
+- Added the SCM/`LocalSystem` service gate; explicit no-reset bootstrap; SYSTEM-only ProgramData layout; LocalSystem DPAPI; encrypted/versioned atomic state with writer lease, CAS and protected hash-chained journal; strict ECDSA P-256; exact-role named pipes with local-only first-instance DACL/token/SID/integrity validation; and active-admin-challenge binding of one validated standard-child SID.
+- Fresh setup no longer needs a pre-injected parent key. Child binding is immutable, and the exact-SID child endpoint becomes available after service restart. No public ParentRelay pipe exists.
+- Verification: Release solution build; 159/159 safe tests; NuGet vulnerable-package audit clean; exact staged allowlist, diff and high-confidence secret checks clean. Two independent final security/correctness reviews found no P0/P1/P2.
+- Code review loop: one clean final pass after 13 fixes; score improved from 5.5 to 9.2. Report: `.codex/review-loop-stage2/.codex/review-loop/runs/20260723-153239/report.md` (review artifact intentionally unstaged).
+- No Guard, service executable, installer, Cleaner, helper, AppLocker, firewall, hosts, registry, scheduled-task or account action was run. User-owned `Output`, `.gstack`, review artifacts and Yandex.Disk conflict copies remain unstaged.
+- Remaining evidence gate is disposable Windows 11 Pro VM testing. Stronger protection against joint offline rollback of both state and journal requires a future TPM or remote witness.
+
 ## 2026-07-23 - Guard v2 full-plan execution checkpoint
 
 - Ivan explicitly authorized continued execution of the approved Guard v2 plan beyond P0.
@@ -11,7 +22,7 @@
 - Added isolated Guard v2 contracts/domain/protocol/application layers and four safe harnesses. Setup now binds validated parent public-key material in the same CAS transaction that consumes the one-time challenge; signed parent decisions are canonical, typed and exact-request-bound; reducer, replay, readiness, identity, IPC timeout/quota and maintenance boundaries fail closed.
 - Verification: Release solution build; 84/84 safe tests; NuGet vulnerable-package scan clean; staged high-confidence secret scan clean; independent final review found no remaining P0/P1/P2.
 - No live Guard, installer, Cleaner, helper, AppLocker, firewall, hosts, registry, scheduled task, service or account action was run. Existing user artifacts remain unstaged.
-- Blocked gate for the next service increment: explicit permission to install official .NET 10 SDK and the Microsoft Windows-service package. Target was not downgraded to the installed .NET 8 SDK.
+- The next service increment required explicit permission to install official .NET 10 SDK and the Microsoft Windows-service package. Ivan later approved it; the resolved work is recorded in the Stage 2 entry above. The target was never downgraded to .NET 8.
 
 ## 2026-07-22 - Guard v2 Foundation checkpoint
 

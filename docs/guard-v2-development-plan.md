@@ -17,7 +17,10 @@
 - Рабочая ветка дальнейшей реализации: `codex/guard-v2-implementation`, создана из того же commit. Пользовательский `Output`, `.gstack`, review-артефакты и конфликтные копии Яндекс.Диска не включены и не откатывались.
 - Foundation системной границы зафиксирован commit `de4db2d`: отдельные `Contracts`, `Domain`, `Protocol`, `Application`, строгие bounded codecs, canonical signed commands, атомарный setup CAS с привязкой публичного ключа, commit-before-effect, replay/sequence guards, fail-closed readiness, app/site policy identity и maintenance leases.
 - Финальный Release build прошёл; 45 legacy и 39 новых безопасных проверок дают 84/84 PASS. Независимый security/correctness re-review не оставил P0/P1/P2. Ветка `codex/guard-v2-implementation` push в GitHub.
-- Следующий подэтап Stage 2 — реальная `.NET 10` служба, encrypted/atomic ProgramData store и named-pipe host. Он не начат до отдельного разрешения Ивана на установку официального .NET 10 SDK и Microsoft service package; архитектурного понижения до .NET 8 нет.
+- Иван отдельно разрешил toolchain gate: установлен официальный `.NET SDK 10.0.302`, репозиторий закреплён на нём через `global.json`, а `Guard.Service` использует официальный `Microsoft.Extensions.Hosting.WindowsServices` `10.0.10` с lock-файлом. Архитектурного понижения до .NET 8 не было.
+- Stage 2 зафиксирован implementation commit `078ffa1`: `.NET 10` Windows Service composition root, SCM/`LocalSystem` execution gate, SYSTEM-only `%ProgramData%\Guard\v2`, DPAPI-protected atomic authoritative store с CAS и hash-chained version journal, production ECDSA P-256 verifier, раздельные named pipes с token/SID/integrity/DACL validation и свежая admin-only церемония привязки точного SID ребёнка.
+- Release solution build, NuGet vulnerability audit и 159/159 безопасных проверок прошли. Два независимых финальных security/correctness review приняли точный staged tree без P0/P1/P2. Guard, служба, installer, Cleaner и системные механизмы на живом компьютере не запускались.
+- Кодовая часть Stage 2 завершена. Её Windows tamper-resistance gate остаётся VM-only: SCM/LocalSystem bootstrap, ProgramData ACL/DPAPI/reparse races, реальный named-pipe token/UAC, nested local groups, restart cutover, crash/power-loss и child tamper matrix. Совместный offline rollback одновременно state и journal требует будущего TPM/remote witness.
 
 ## Как ведётся этот план
 
@@ -276,7 +279,7 @@ Google Authenticator, Яндекс Ключ, TOTP, SMS и почтовые ко�
 
 Порядок cutover: contracts/domain tests → service с no-op adapters → secure storage/IPC → shadow migration → account/self-protection → app control → Edge web control → relay/PWA → installer/updater → удаление legacy tray authority/watchdog/LAN cabinet.
 
-Target остаётся `.NET 10 LTS`; установленный локально SDK `8.0.422` не используется как молчаливое архитектурное понижение. Установка .NET 10 является отдельным toolchain gate до создания `Guard.Service`.
+Target остаётся `.NET 10 LTS`; официальный SDK `10.0.302` установлен после отдельного разрешения Ивана и закреплён через `global.json`. `Guard.Service` использует официальный `Microsoft.Extensions.Hosting.WindowsServices` `10.0.10`; установленный ранее SDK `8.0.422` не стал молчаливым архитектурным понижением.
 
 ## Модель угроз
 
@@ -324,6 +327,8 @@ Guard должен выдерживать:
 
 - Новая служба, безопасное хранилище, restricted IPC и новый setup ceremony.
 - Gate: ребёнок не читает и не изменяет состояние, ключи или родительские команды.
+- Статус 2026-07-23: code-only реализация завершена в `078ffa1`; build, 159/159 safe tests, audit и два независимых review прошли.
+- Остаток gate: только disposable Windows 11 Pro VM; на рабочем компьютере служба не устанавливалась и не запускалась.
 
 ### Этап 3. Защитить Windows-аккаунты и сам Guard
 
@@ -372,6 +377,10 @@ Guard должен выдерживать:
 | 2026-07-23 | Продолжить реализацию всех этапов плана по отдельным проверяемым инкрементам | Прямое указание Ивана |
 | 2026-07-23 | Strangler migration: новая служба — единственный authoritative writer; legacy `guard.exe` остаётся quarantined до cutover | Security review системной границы |
 | 2026-07-23 | Отдельные child/admin/proxy IPC и низкопривилегированный proxy; payload identity никогда не считается доверием | Модель угроз LocalSystem и named-pipe ACL |
+| 2026-07-23 | Установить официальный `.NET SDK 10.0.302` и использовать `Microsoft.Extensions.Hosting.WindowsServices` `10.0.10` с lock-файлом | Прямое разрешение Ивана и воспроизводимый production toolchain |
+| 2026-07-23 | Bootstrap authoritative state разрешён только явным CLI-флагом после подтверждённых SCM+`LocalSystem`; существующие или повреждённые артефакты никогда не сбрасываются | Fail-closed storage boundary |
+| 2026-07-23 | Во время активного admin setup challenge можно атомарно привязать проверенный стандартный child SID; exact-SID child pipe появляется только после перезапуска службы | Закрывает свежую установку без child-side ownership claim |
+| 2026-07-23 | Public ParentRelay pipe не создаётся; родительские команды позже принимаются только внутренним outbound relay path | Минимизация привилегированной IPC-поверхности |
 
 ## Открытые решения
 
