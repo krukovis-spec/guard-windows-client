@@ -21,6 +21,9 @@
 - Stage 2 зафиксирован implementation commit `078ffa1`: `.NET 10` Windows Service composition root, SCM/`LocalSystem` execution gate, SYSTEM-only `%ProgramData%\Guard\v2`, DPAPI-protected atomic authoritative store с CAS и hash-chained version journal, production ECDSA P-256 verifier, раздельные named pipes с token/SID/integrity/DACL validation и свежая admin-only церемония привязки точного SID ребёнка.
 - Release solution build, NuGet vulnerability audit и 159/159 безопасных проверок прошли. Два независимых финальных security/correctness review приняли точный staged tree без P0/P1/P2. Guard, служба, installer, Cleaner и системные механизмы на живом компьютере не запускались.
 - Кодовая часть Stage 2 завершена. Её Windows tamper-resistance gate остаётся VM-only: SCM/LocalSystem bootstrap, ProgramData ACL/DPAPI/reparse races, реальный named-pipe token/UAC, nested local groups, restart cutover, crash/power-loss и child tamper matrix. Совместный offline rollback одновременно state и journal требует будущего TPM/remote witness.
+- Stage 3 code-only зафиксирован implementation commit `15b8b60`: admin-only observational `GetReadiness`, строгий bounded wire contract, Windows 11 Pro-only и Secure Boot read probes, повторная проверка стандартного child SID, bounded inventory отдельного локального администратора, ProgramData ACL recheck, query-only SCM adapter и полный pure self-protection/install contract.
+- Release solution build, NuGet vulnerability audit и 192/192 безопасных проверок прошли. Code-review-loop завершился чистым первым проходом после трёх небольших hardening fixes; независимый security/correctness review не нашёл P0/P1/P2.
+- Stage 3 намеренно не выдаёт ложную готовность: BitLocker, managed browsers и полный service-boundary proof остаются `Unknown`, пока не появятся доказанные адаптеры. SCM DACL/recovery/service SID/install-root, реальные account/Secure Boot probes, stop/delete, Safe Mode и escalation matrix остаются disposable-VM gate. На живом компьютере Guard и системные механизмы не запускались.
 
 ## Как ведётся этот план
 
@@ -334,6 +337,8 @@ Guard должен выдерживать:
 
 - Стандартный ребёнок, отдельный локальный администратор, контроль admin group, Secure Boot и BitLocker readiness.
 - Gate: матрица попыток остановки, удаления, Safe Mode и account escalation на VM.
+- Статус 2026-07-23: code-only readiness и self-protection contracts завершены в `15b8b60`; build, 192/192 safe tests, audit, code-review-loop и независимый review прошли.
+- Остаток gate: BitLocker/browser adapters, полный SCM/install-root/DACL/recovery/service-SID observer и вся tamper/account matrix проверяются только в disposable Windows 11 Pro VM. До этого `CanEnableProtection` остаётся `false`.
 
 ### Этап 4. Реализовать default-deny приложений
 

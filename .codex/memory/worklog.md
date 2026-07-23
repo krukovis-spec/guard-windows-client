@@ -1,5 +1,15 @@
 # Worklog
 
+## 2026-07-23 - Guard v2 Stage 3 fail-closed Windows readiness
+
+- Committed `15b8b60` (`feat(v2): add fail-closed Windows readiness`) on `codex/guard-v2-implementation`.
+- Added admin-only observational `GetReadiness`; strict bounded wire facts/findings; Windows 11 Pro-only and Secure Boot read probes; bound-child revalidation; bounded separate-local-admin inventory with indirect membership facts; ProgramData ACL recheck; query-only SCM facts; and a pure complete service installation/self-protection contract.
+- Production remains fail closed: BitLocker, managed browsers and full service installation proof are `Unknown`; partial SCM health cannot mark the service boundary ready or set `CanEnableProtection=true`.
+- Verification: Release solution build; 192/192 safe checks; clean NuGet vulnerability audit, staged diff and high-confidence secret scan. Independent security/correctness review found no P0/P1/P2.
+- Code review loop: 1/1 broad pass, clean on pass 1 after three P3 hardening fixes; score 8.8 to 9.4. Report: `.codex/review-loop-stage3/.codex/review-loop/runs/20260723-stage3-readiness/report.md` (review artifact intentionally unstaged).
+- No Guard, service executable, installer, Cleaner, helper, AppLocker, firewall, hosts, registry, scheduled-task or account-changing action was run. User-owned `Output`, `.gstack`, review files and Yandex.Disk conflict copies remain unstaged.
+- Remaining gate is disposable Windows 11 Pro VM evidence for the native probes, full SCM/install-root/DACL/recovery/service-SID contract, stop/delete/Safe Mode and account-escalation matrix.
+
 ## 2026-07-23 - Guard v2 Stage 2 secure service boundary
 
 - Ivan explicitly approved installing the official .NET 10 SDK and Microsoft Windows-service package. Installed SDK `10.0.302`, pinned it in `global.json`, and locked `Microsoft.Extensions.Hosting.WindowsServices` to `10.0.10`.

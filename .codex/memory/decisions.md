@@ -1,5 +1,14 @@
 # Decisions
 
+## 2026-07-23 - Readiness is observational and full service proof is indivisible
+
+- Decision: `GetReadiness` is admin-only and observational. It returns eight fixed bounded facts and stable finding codes; any `Unknown`, `Error` or `Unsatisfied` fact blocks `CanEnableProtection`. A future enable command must collect fresh facts again immediately before commit/apply.
+- Decision: service readiness requires both runtime health and one complete observed installation contract: exact LocalSystem own-process/noninteractive service, automatic start, service SID, recovery actions, no standard-user stop/change/delete rights, exact binary, protected non-reparse install root and disabled legacy authority. Partial SCM observations never count as ready.
+- Why: a green check based only on a running process or stale setup snapshot would turn missing security evidence into authority and create a TOCTOU bypass.
+- Alternatives: treat unavailable checks as warnings; accept a running LocalSystem service as sufficient; reuse legacy account/AppLocker state. Each alternative can certify protection that is absent or child-modifiable, so production currently reports BitLocker, browser coverage and the full service boundary as `Unknown`.
+- Risk: actual Windows edition, Secure Boot, account membership, SCM/DACL/recovery/service-SID and tamper behavior still require a disposable Windows 11 Pro VM. The checked-in SCM adapter is query-only and is not wired as complete service proof.
+- Check: implementation `15b8b60`; Release build; 192/192 safe checks; clean NuGet audit; code-review-loop clean on pass 1 and independent review with no P0/P1/P2. No live Windows action was run.
+
 ## 2026-07-23 - Guard v2 Stage 2 uses a fail-closed LocalSystem boundary
 
 - Decision: pin official `.NET SDK 10.0.302`; use official `Microsoft.Extensions.Hosting.WindowsServices` `10.0.10`; start production only through SCM as `LocalSystem`; allow initial authoritative-state creation only with one exact CLI bootstrap flag after that boundary; never reset existing/corrupt artifacts.
