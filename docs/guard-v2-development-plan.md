@@ -1,8 +1,8 @@
 # Guard v2: канонический план разработки
 
-Статус: в исполнении, первый инкремент Guard v2 Foundation / P0 containment. Безопасный GitHub checkpoint создан до изменений application code.
+Статус: в исполнении. P0 containment завершён; 2026-07-23 Иван поручил последовательно реализовать остальные этапы утверждённого плана.
 
-Последнее обновление: 2026-07-22.
+Последнее обновление: 2026-07-23.
 
 ## Журнал исполнения
 
@@ -13,6 +13,11 @@
 - P0 containment зафиксирован application commit `3e7e384d26864a5976da85652f160e0dd7da67ab`: legacy LAN/remote provisioning и telemetry заморожены, PIN fallback удалён, destructive diagnostic/Cleaner bypasses закрыты, cleanup получил fail-fast result/exit contract, Inno запускает cleanup только после подтверждения uninstall, неоднозначные ошибки scheduled-task query дают отказ, safe harness расширен с 35 до 45 проверок.
 - Независимый security-review принял кодовый delta без оставшихся P0/P1; точный staged allowlist и `git diff --cached --check` подтвердили отсутствие пользовательского installer, конфликтных копий и review-артефактов в commit.
 - Текущее поведение и временно недоступные функции описаны в `docs/guard-v2-p0-containment.md`.
+- 2026-07-23 перед новым application-code increment создан и push безопасный checkpoint `codex/checkpoint-20260723-0041-guard-v2-implementation` на commit `6bfcb15e50f05b9110e6c0227c927be683a5f293`.
+- Рабочая ветка дальнейшей реализации: `codex/guard-v2-implementation`, создана из того же commit. Пользовательский `Output`, `.gstack`, review-артефакты и конфликтные копии Яндекс.Диска не включены и не откатывались.
+- Foundation системной границы зафиксирован commit `de4db2d`: отдельные `Contracts`, `Domain`, `Protocol`, `Application`, строгие bounded codecs, canonical signed commands, атомарный setup CAS с привязкой публичного ключа, commit-before-effect, replay/sequence guards, fail-closed readiness, app/site policy identity и maintenance leases.
+- Финальный Release build прошёл; 45 legacy и 39 новых безопасных проверок дают 84/84 PASS. Независимый security/correctness re-review не оставил P0/P1/P2. Ветка `codex/guard-v2-implementation` push в GitHub.
+- Следующий подэтап Stage 2 — реальная `.NET 10` служба, encrypted/atomic ProgramData store и named-pipe host. Он не начат до отдельного разрешения Ивана на установку официального .NET 10 SDK и Microsoft service package; архитектурного понижения до .NET 8 нет.
 
 ## Как ведётся этот план
 
@@ -246,6 +251,33 @@ Google Authenticator, Яндекс Ключ, TOTP, SMS и почтовые ко�
 
 Проверенные чистые модели текущего проекта для запросов, разрешений, лимитов, задач и учёта активности можно переносить. Tray/watchdog, LAN HTTP-кабинет, child-visible pairing, известный PIN и UI-Automation web enforcement заменяются.
 
+### Исполнительные границы после P0
+
+Миграция идёт по strangler-схеме: новая архитектура создаётся рядом с quarantined legacy-клиентом и поэтапно забирает ответственность. Старый `guard.exe` и `Guard.Core` не превращаются в службу и не становятся источником истины для Guard v2.
+
+- `Guard.Contracts`: версионированные DTO для IPC и relay, bounded frames и закрытая схема без polymorphic deserialization.
+- `Guard.Domain`: чистые неизменяемые модели, решения и переходы состояния без Windows/API/UI зависимостей.
+- `Guard.Application`: use cases и порты для хранилища, времени, криптографии, Windows policy, relay и аудита.
+- `Guard.Windows`: привилегированные адаптеры ACL, account readiness, AppLocker, browser policy и сетевого containment.
+- `Guard.Service`: единственный composition root и authoritative writer состояния, ключей и desired policy под `LocalSystem`.
+- `Guard.Child`: непривилегированный UI детской сессии, зависящий только от разрешённого child IPC contract.
+- `Guard.Proxy`: отдельный низкопривилегированный процесс локального domain proxy; он не работает под `LocalSystem` и не расшифровывает TLS.
+- `Guard.Relay`, parent PWA и browser extension остаются отдельными внешними компонентами. Extension отвечает за UX, но не является enforcement authority.
+
+Обязательные security invariants:
+
+1. Только служба меняет authoritative state и применяет privileged policy; двух активных writers не бывает.
+2. Child, admin/setup и proxy используют разные named pipes с явными DACL. Роль, SID, путь, publisher и package identity из payload не считаются доказательством: служба проверяет client token и разрешает identity сама.
+3. `%ProgramData%\Guard` использует service-only ACL, атомарный commit/replace, шифрование с аутентификацией, durable sequence/idempotency state и журнал изменений. После crash desired state повторно сверяется с фактической policy.
+4. Setup QR короткоживущий и одноразовый, создаётся только из подтверждённой admin setup session. Детская сессия не может запросить новый QR или parent verb.
+5. Legacy PIN, pairing code, `DeviceId`, cabinet session и ownership secret автоматически не мигрируются. Старые allow-grants допускаются только как недоверенный preview для нового родительского подтверждения.
+6. App approval строится по проверенной службой identity: publisher/product/secure install root или SHA-256 fallback; child-selected path сам по себе ничего не разрешает.
+7. Relay переносит opaque payload. Любая разрешающая команда связана с точным device/request, имеет expiry, sequence и nonce, подписана родительским ключом и записывается как принятая до применения эффекта.
+
+Порядок cutover: contracts/domain tests → service с no-op adapters → secure storage/IPC → shadow migration → account/self-protection → app control → Edge web control → relay/PWA → installer/updater → удаление legacy tray authority/watchdog/LAN cabinet.
+
+Target остаётся `.NET 10 LTS`; установленный локально SDK `8.0.422` не используется как молчаливое архитектурное понижение. Установка .NET 10 является отдельным toolchain gate до создания `Guard.Service`.
+
 ## Модель угроз
 
 Строгий режим целится в Windows 11 Pro на устройстве с Secure Boot и BitLocker. Ребёнок является стандартным пользователем, имеет физический доступ к включённому компьютеру и может искать публичные инструкции по обходу.
@@ -337,6 +369,9 @@ Guard должен выдерживать:
 | 2026-07-22 | Первый строгий релиз: Windows 11 Pro; Edge, затем Chrome, затем проверка Яндекс Браузера | Снижение риска первой реализации |
 | 2026-07-22 | PWA реализуется первой; нативное приложение требуется только при провале biometric security gate | Быстрая проверка на Android/iPhone без ослабления защиты |
 | 2026-07-22 | План одобрен для исполнения; первый инкремент ограничен checkpoint и P0 containment | Прямой переход Ивана к реализации |
+| 2026-07-23 | Продолжить реализацию всех этапов плана по отдельным проверяемым инкрементам | Прямое указание Ивана |
+| 2026-07-23 | Strangler migration: новая служба — единственный authoritative writer; legacy `guard.exe` остаётся quarantined до cutover | Security review системной границы |
+| 2026-07-23 | Отдельные child/admin/proxy IPC и низкопривилегированный proxy; payload identity никогда не считается доверием | Модель угроз LocalSystem и named-pipe ACL |
 
 ## Открытые решения
 

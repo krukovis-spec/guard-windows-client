@@ -1,5 +1,18 @@
 # Worklog
 
+## 2026-07-23 - Guard v2 full-plan execution checkpoint
+
+- Ivan explicitly authorized continued execution of the approved Guard v2 plan beyond P0.
+- Safe remote checkpoint created before new application-code changes: `codex/checkpoint-20260723-0041-guard-v2-implementation` at `6bfcb15e50f05b9110e6c0227c927be683a5f293`.
+- Working branch: `codex/guard-v2-implementation`, created from the same commit.
+- Check: committed HEAD high-confidence secret scan passed; GitHub identity and push permission were verified. The direct Happ/TUN route timed out once, then the existing process-local Xray proxy completed API and push checks without changing Windows proxy settings.
+- Excluded unchanged: user-owned generated `Output`, `.gstack`, Yandex.Disk conflict copies and `.codex/review-loop` artifacts. No Guard executable or Windows enforcement action was run.
+- Committed and pushed `de4db2d` (`feat(v2): add secure protocol and domain foundation`) on `codex/guard-v2-implementation`.
+- Added isolated Guard v2 contracts/domain/protocol/application layers and four safe harnesses. Setup now binds validated parent public-key material in the same CAS transaction that consumes the one-time challenge; signed parent decisions are canonical, typed and exact-request-bound; reducer, replay, readiness, identity, IPC timeout/quota and maintenance boundaries fail closed.
+- Verification: Release solution build; 84/84 safe tests; NuGet vulnerable-package scan clean; staged high-confidence secret scan clean; independent final review found no remaining P0/P1/P2.
+- No live Guard, installer, Cleaner, helper, AppLocker, firewall, hosts, registry, scheduled task, service or account action was run. Existing user artifacts remain unstaged.
+- Blocked gate for the next service increment: explicit permission to install official .NET 10 SDK and the Microsoft Windows-service package. Target was not downgraded to the installed .NET 8 SDK.
+
 ## 2026-07-22 - Guard v2 Foundation checkpoint
 
 - Done: verified the existing dirty MVP baseline, created writable fork `krukovis-spec/guard-windows-client`, and pushed checkpoint branch `codex/checkpoint-20260722-1920-guard-v2-foundation` at `381afa54a067665b2977389d582ec3166bc8a4ef` before any Guard v2 application-code change.
