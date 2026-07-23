@@ -4,7 +4,9 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Guard.Application;
+using Guard.Application.Readiness;
 using Guard.Contracts;
+using Guard.Domain.Readiness;
 using Guard.Protocol;
 
 namespace Guard.Service
@@ -63,12 +65,14 @@ namespace Guard.Service
         private readonly IAuthoritativeStateStore _stateStore;
         private readonly SetupCoordinator _setupCoordinator;
         private readonly ChildAccountBindingCoordinator _bindingCoordinator;
+        private readonly GuardReadinessCoordinator _readinessCoordinator;
         private readonly IServiceUtcClock _clock;
 
         public GuardServiceIpcOperationHandler(
             IAuthoritativeStateStore stateStore,
             SetupCoordinator setupCoordinator,
             ChildAccountBindingCoordinator bindingCoordinator,
+            GuardReadinessCoordinator readinessCoordinator,
             IServiceUtcClock clock)
         {
             _stateStore = stateStore ??
@@ -77,6 +81,8 @@ namespace Guard.Service
                 throw new ArgumentNullException(nameof(setupCoordinator));
             _bindingCoordinator = bindingCoordinator ??
                 throw new ArgumentNullException(nameof(bindingCoordinator));
+            _readinessCoordinator = readinessCoordinator ??
+                throw new ArgumentNullException(nameof(readinessCoordinator));
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         }
 
@@ -97,6 +103,12 @@ namespace Guard.Service
                         request,
                         cancellationToken).ConfigureAwait(false);
 
+                case GuardVerb.GetReadiness:
+                    return await GetReadinessAsync(
+                        authenticatedRole,
+                        request,
+                        cancellationToken).ConfigureAwait(false);
+
                 case GuardVerb.BeginSetup:
                     return await BeginSetupAsync(
                         authenticatedRole,
@@ -114,6 +126,64 @@ namespace Guard.Service
                         request,
                         GuardIpcResponseStatus.Unavailable);
             }
+        }
+
+        private async Task<GuardIpcResponse> GetReadinessAsync(
+            ClientRole authenticatedRole,
+            GuardIpcRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (authenticatedRole != ClientRole.AdminSetup &&
+                authenticatedRole != ClientRole.ServiceInternal)
+            {
+                return Response(
+                    request,
+                    GuardIpcResponseStatus.Forbidden);
+            }
+
+            if (request.PayloadLength != 0)
+            {
+                return Response(
+                    request,
+                    GuardIpcResponseStatus.InvalidRequest);
+            }
+
+            var snapshot = await _readinessCoordinator
+                .ObserveAsync(_clock.UtcNow, cancellationToken)
+                .ConfigureAwait(false);
+            var findings = snapshot.Evaluation.Findings;
+            var wireFindings =
+                new GuardReadinessFindingPayload[findings.Count];
+            for (var index = 0; index < findings.Count; index++)
+            {
+                wireFindings[index] =
+                    new GuardReadinessFindingPayload(
+                        findings[index].Code,
+                        MapSeverity(findings[index].Severity));
+            }
+
+            var facts = snapshot.Facts;
+            var payload = GuardReadinessPayloadCodec.Encode(
+                new GuardReadinessPayload(
+                    snapshot.StateVersion,
+                    snapshot.ObservedAtUtc,
+                    MapFactState(facts.WindowsEdition.State),
+                    MapFactState(facts.ChildAccount.State),
+                    MapFactState(
+                        facts.SeparateLocalAdministrator.State),
+                    MapFactState(facts.SecureBoot.State),
+                    MapFactState(facts.BitLocker.State),
+                    MapFactState(facts.ServiceBoundary.State),
+                    MapFactState(facts.ProgramDataAcl.State),
+                    MapFactState(
+                        facts.SupportedManagedBrowser.State),
+                    facts.SupportedManagedBrowser.ManagedBrowserCount,
+                    snapshot.Evaluation.CanEnableProtection,
+                    wireFindings));
+            return Response(
+                request,
+                GuardIpcResponseStatus.Success,
+                payload);
         }
 
         private async Task<GuardIpcResponse> GetStatusAsync(
@@ -296,6 +366,49 @@ namespace Guard.Service
 
                 default:
                     return GuardIpcResponseStatus.InternalError;
+            }
+        }
+
+        private static GuardReadinessFactState MapFactState(
+            ReadinessFactState state)
+        {
+            switch (state)
+            {
+                case ReadinessFactState.Satisfied:
+                    return GuardReadinessFactState.Satisfied;
+
+                case ReadinessFactState.Unsatisfied:
+                    return GuardReadinessFactState.Unsatisfied;
+
+                case ReadinessFactState.Unknown:
+                    return GuardReadinessFactState.Unknown;
+
+                case ReadinessFactState.Error:
+                    return GuardReadinessFactState.Error;
+
+                default:
+                    throw new InvalidOperationException(
+                        "The readiness fact state is invalid.");
+            }
+        }
+
+        private static GuardReadinessFindingSeverity MapSeverity(
+            ReadinessFindingSeverity severity)
+        {
+            switch (severity)
+            {
+                case ReadinessFindingSeverity.Blocking:
+                    return GuardReadinessFindingSeverity.Blocking;
+
+                case ReadinessFindingSeverity.Warning:
+                    return GuardReadinessFindingSeverity.Warning;
+
+                case ReadinessFindingSeverity.Ready:
+                    return GuardReadinessFindingSeverity.Ready;
+
+                default:
+                    throw new InvalidOperationException(
+                        "The readiness finding severity is invalid.");
             }
         }
 

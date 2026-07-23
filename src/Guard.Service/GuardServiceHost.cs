@@ -1,9 +1,12 @@
 using System;
 using Guard.Application;
+using Guard.Application.Readiness;
 using Guard.Storage;
 using Guard.Windows.Accounts;
 using Guard.Windows.Cryptography;
 using Guard.Windows.Ipc;
+using Guard.Windows.Readiness;
+using Guard.Windows.Services;
 using Guard.Windows.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -21,7 +24,7 @@ namespace Guard.Service
             var builder = Host.CreateApplicationBuilder(hostArgs);
             builder.Services.AddWindowsService(options =>
             {
-                options.ServiceName = "Guard";
+                options.ServiceName = GuardServiceIdentity.ServiceName;
             });
             builder.Services.AddSingleton(startupOptions);
             builder.Services.AddSingleton<IServiceProcessContext, WindowsServiceProcessContext>();
@@ -81,12 +84,34 @@ namespace Guard.Service
             services.AddSingleton<EcdsaP256SignatureVerifier>();
             services.AddSingleton<IParentTrustAnchorValidator>(
                 provider => provider.GetRequiredService<EcdsaP256SignatureVerifier>());
-            services.AddSingleton<ILocalAccountSecurityFactsProvider, WindowsLocalAccountSecurityFactsProvider>();
+            services.AddSingleton<
+                WindowsLocalAccountSecurityFactsProvider>();
+            services.AddSingleton<ILocalAccountSecurityFactsProvider>(
+                provider => provider.GetRequiredService<
+                    WindowsLocalAccountSecurityFactsProvider>());
+            services.AddSingleton<
+                IWindowsEditionFactsSource,
+                NativeWindowsEditionFactsSource>();
+            services.AddSingleton<
+                ISecureBootStateSource,
+                RegistrySecureBootStateSource>();
+            services.AddSingleton<
+                IWindowsSeparateLocalAdministratorSource,
+                NativeWindowsSeparateLocalAdministratorSource>();
             services.AddSingleton<IManagedChildAccountValidator, ManagedChildAccountValidator>();
             services.AddSingleton<SetupCeremony>();
             services.AddSingleton<SetupCoordinator>();
             services.AddSingleton<ChildAccountBindingCoordinator>();
             services.AddSingleton<IServiceUtcClock, SystemServiceUtcClock>();
+            services.AddSingleton<IServiceHealthQuery, UnobservedServiceHealthQuery>();
+            services.AddSingleton(provider => new GuardServiceHealthInspector(
+                provider.GetRequiredService<IServiceHealthQuery>(),
+                GuardServiceIdentity.ServiceName,
+                GuardServiceIdentity.ExpectedBinaryPath));
+            services.AddSingleton<
+                IDeviceReadinessFactsProvider,
+                ProductionReadinessFactsProvider>();
+            services.AddSingleton<GuardReadinessCoordinator>();
             services.AddSingleton<IGuardIpcOperationHandler, GuardServiceIpcOperationHandler>();
             services.AddSingleton<SecureIpcRequestDispatcher>();
             services.AddSingleton<IpcConnectionLimiter>();

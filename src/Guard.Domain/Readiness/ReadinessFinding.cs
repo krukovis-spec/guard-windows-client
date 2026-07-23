@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Guard.Contracts;
 
 namespace Guard.Domain.Readiness
 {
@@ -12,23 +13,41 @@ namespace Guard.Domain.Readiness
 
     public static class ReadinessFindingCodes
     {
-        public const string WindowsEditionReady = "READINESS_WINDOWS_11_PRO_OR_SUPPORTED";
-        public const string WindowsEditionBlocking = "READINESS_WINDOWS_11_PRO_OR_SUPPORTED_REQUIRED";
-        public const string ChildAccountReady = "READINESS_CHILD_STANDARD_ACCOUNT";
-        public const string ChildAccountBlocking = "READINESS_CHILD_STANDARD_ACCOUNT_REQUIRED";
-        public const string SeparateLocalAdministratorReady = "READINESS_SEPARATE_LOCAL_ADMINISTRATOR";
-        public const string SeparateLocalAdministratorBlocking = "READINESS_SEPARATE_LOCAL_ADMINISTRATOR_REQUIRED";
-        public const string SecureBootReady = "READINESS_SECURE_BOOT_ENABLED";
-        public const string SecureBootBlocking = "READINESS_SECURE_BOOT_REQUIRED";
-        public const string BitLockerReady = "READINESS_BITLOCKER_ENABLED";
-        public const string BitLockerBlocking = "READINESS_BITLOCKER_REQUIRED";
-        public const string ServiceBoundaryReady = "READINESS_SERVICE_BOUNDARY_HEALTHY";
-        public const string ServiceBoundaryBlocking = "READINESS_SERVICE_BOUNDARY_HEALTHY_REQUIRED";
-        public const string ProgramDataAclReady = "READINESS_PROGRAMDATA_ACL_HEALTHY";
-        public const string ProgramDataAclBlocking = "READINESS_PROGRAMDATA_ACL_HEALTHY_REQUIRED";
-        public const string SupportedManagedBrowserReady = "READINESS_SUPPORTED_MANAGED_BROWSER";
-        public const string SupportedManagedBrowserBlocking = "READINESS_SUPPORTED_MANAGED_BROWSER_REQUIRED";
-        public const string LimitedBrowserCoverageWarning = "READINESS_LIMITED_MANAGED_BROWSER_COVERAGE";
+        public const string WindowsEditionReady =
+            GuardReadinessFindingCodes.WindowsEditionReady;
+        public const string WindowsEditionBlocking =
+            GuardReadinessFindingCodes.WindowsEditionBlocking;
+        public const string ChildAccountReady =
+            GuardReadinessFindingCodes.ChildAccountReady;
+        public const string ChildAccountBlocking =
+            GuardReadinessFindingCodes.ChildAccountBlocking;
+        public const string SeparateLocalAdministratorReady =
+            GuardReadinessFindingCodes.SeparateLocalAdministratorReady;
+        public const string SeparateLocalAdministratorBlocking =
+            GuardReadinessFindingCodes
+                .SeparateLocalAdministratorBlocking;
+        public const string SecureBootReady =
+            GuardReadinessFindingCodes.SecureBootReady;
+        public const string SecureBootBlocking =
+            GuardReadinessFindingCodes.SecureBootBlocking;
+        public const string BitLockerReady =
+            GuardReadinessFindingCodes.BitLockerReady;
+        public const string BitLockerBlocking =
+            GuardReadinessFindingCodes.BitLockerBlocking;
+        public const string ServiceBoundaryReady =
+            GuardReadinessFindingCodes.ServiceBoundaryReady;
+        public const string ServiceBoundaryBlocking =
+            GuardReadinessFindingCodes.ServiceBoundaryBlocking;
+        public const string ProgramDataAclReady =
+            GuardReadinessFindingCodes.ProgramDataAclReady;
+        public const string ProgramDataAclBlocking =
+            GuardReadinessFindingCodes.ProgramDataAclBlocking;
+        public const string SupportedManagedBrowserReady =
+            GuardReadinessFindingCodes.SupportedManagedBrowserReady;
+        public const string SupportedManagedBrowserBlocking =
+            GuardReadinessFindingCodes.SupportedManagedBrowserBlocking;
+        public const string LimitedBrowserCoverageWarning =
+            GuardReadinessFindingCodes.LimitedBrowserCoverageWarning;
     }
 
     public sealed class ReadinessFinding

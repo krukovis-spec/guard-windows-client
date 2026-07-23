@@ -37,7 +37,9 @@ namespace Guard.Service.Tests
                 ("rejects bootstrap outside the service execution boundary", BootstrapAndIpcChecks.RejectsBootstrapOutsideServiceBoundaryAsync),
                 ("bootstraps state in fail-closed boundary order", BootstrapAndIpcChecks.BootstrapsInFailClosedOrderAsync),
                 ("composes explicit bootstrap and a functional production handler", BootstrapAndIpcChecks.ComposesExplicitBootstrapAndFunctionalHandlerAsync),
-                ("handles bounded status setup and child binding operations", BootstrapAndIpcChecks.HandlesBoundedSetupStatusAndBindingAsync)
+                ("handles bounded status setup and child binding operations", BootstrapAndIpcChecks.HandlesBoundedSetupStatusAndBindingAsync),
+                ("returns an admin-only fail-closed readiness snapshot", BootstrapAndIpcChecks.ReturnsAdminOnlyReadinessSnapshotAsync),
+                ("keeps unobserved production readiness facts blocking", BootstrapAndIpcChecks.UsesOnlyObservedProductionReadinessFactsAsync)
             };
             var failures = 0;
             foreach (var test in tests)

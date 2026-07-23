@@ -14,6 +14,9 @@ namespace Guard.Contracts
         public const int MaximumConcurrentPipeConnections = 8;
         public const int DefaultIpcReadTimeoutMilliseconds = 5000;
         public const int MaximumIpcReadTimeoutMilliseconds = 30000;
+        public const int MaximumManagedBrowserCount = 16;
+        public const int MaximumReadinessFindings = 9;
+        public const int MaximumReadinessCodeCharacters = 96;
     }
 
     public static class GuardIdentifier
@@ -189,6 +192,409 @@ namespace Guard.Contracts
         public bool IsProvisioned { get; }
 
         public bool IsChildAccountBound { get; }
+    }
+
+    public enum GuardReadinessFactState
+    {
+        Satisfied = 0,
+        Unsatisfied = 1,
+        Unknown = 2,
+        Error = 3
+    }
+
+    public enum GuardReadinessFindingSeverity
+    {
+        Blocking = 0,
+        Warning = 1,
+        Ready = 2
+    }
+
+    public static class GuardReadinessFindingCodes
+    {
+        public const string WindowsEditionReady =
+            "READINESS_WINDOWS_11_PRO";
+        public const string WindowsEditionBlocking =
+            "READINESS_WINDOWS_11_PRO_REQUIRED";
+        public const string ChildAccountReady =
+            "READINESS_CHILD_STANDARD_ACCOUNT";
+        public const string ChildAccountBlocking =
+            "READINESS_CHILD_STANDARD_ACCOUNT_REQUIRED";
+        public const string SeparateLocalAdministratorReady =
+            "READINESS_SEPARATE_LOCAL_ADMINISTRATOR";
+        public const string SeparateLocalAdministratorBlocking =
+            "READINESS_SEPARATE_LOCAL_ADMINISTRATOR_REQUIRED";
+        public const string SecureBootReady =
+            "READINESS_SECURE_BOOT_ENABLED";
+        public const string SecureBootBlocking =
+            "READINESS_SECURE_BOOT_REQUIRED";
+        public const string BitLockerReady =
+            "READINESS_BITLOCKER_ENABLED";
+        public const string BitLockerBlocking =
+            "READINESS_BITLOCKER_REQUIRED";
+        public const string ServiceBoundaryReady =
+            "READINESS_SERVICE_BOUNDARY_HEALTHY";
+        public const string ServiceBoundaryBlocking =
+            "READINESS_SERVICE_BOUNDARY_HEALTHY_REQUIRED";
+        public const string ProgramDataAclReady =
+            "READINESS_PROGRAMDATA_ACL_HEALTHY";
+        public const string ProgramDataAclBlocking =
+            "READINESS_PROGRAMDATA_ACL_HEALTHY_REQUIRED";
+        public const string SupportedManagedBrowserReady =
+            "READINESS_SUPPORTED_MANAGED_BROWSER";
+        public const string SupportedManagedBrowserBlocking =
+            "READINESS_SUPPORTED_MANAGED_BROWSER_REQUIRED";
+        public const string LimitedBrowserCoverageWarning =
+            "READINESS_LIMITED_MANAGED_BROWSER_COVERAGE";
+    }
+
+    public sealed class GuardReadinessFindingPayload
+    {
+        public GuardReadinessFindingPayload(
+            string code,
+            GuardReadinessFindingSeverity severity)
+        {
+            if (string.IsNullOrWhiteSpace(code) ||
+                code.Length > GuardProtocol.MaximumReadinessCodeCharacters)
+            {
+                throw new ArgumentException(
+                    "A bounded readiness finding code is required.",
+                    nameof(code));
+            }
+
+            for (var index = 0; index < code.Length; index++)
+            {
+                if (code[index] > 0x7F || char.IsControl(code[index]))
+                {
+                    throw new ArgumentException(
+                        "Readiness finding codes must contain printable ASCII.",
+                        nameof(code));
+                }
+            }
+
+            if (!Enum.IsDefined(
+                    typeof(GuardReadinessFindingSeverity),
+                    severity))
+            {
+                throw new ArgumentOutOfRangeException(nameof(severity));
+            }
+
+            Code = code;
+            Severity = severity;
+        }
+
+        public string Code { get; }
+
+        public GuardReadinessFindingSeverity Severity { get; }
+    }
+
+    public sealed class GuardReadinessPayload
+    {
+        private readonly GuardReadinessFindingPayload[] _findings;
+
+        public GuardReadinessPayload(
+            long stateVersion,
+            DateTimeOffset observedAtUtc,
+            GuardReadinessFactState windowsEdition,
+            GuardReadinessFactState childAccount,
+            GuardReadinessFactState separateLocalAdministrator,
+            GuardReadinessFactState secureBoot,
+            GuardReadinessFactState bitLocker,
+            GuardReadinessFactState serviceBoundary,
+            GuardReadinessFactState programDataAcl,
+            GuardReadinessFactState supportedManagedBrowser,
+            int managedBrowserCount,
+            bool canEnableProtection,
+            GuardReadinessFindingPayload[] findings)
+        {
+            if (stateVersion < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(stateVersion));
+            }
+
+            RequireFactState(windowsEdition, nameof(windowsEdition));
+            RequireFactState(childAccount, nameof(childAccount));
+            RequireFactState(
+                separateLocalAdministrator,
+                nameof(separateLocalAdministrator));
+            RequireFactState(secureBoot, nameof(secureBoot));
+            RequireFactState(bitLocker, nameof(bitLocker));
+            RequireFactState(serviceBoundary, nameof(serviceBoundary));
+            RequireFactState(programDataAcl, nameof(programDataAcl));
+            RequireFactState(
+                supportedManagedBrowser,
+                nameof(supportedManagedBrowser));
+
+            if (managedBrowserCount < 0 ||
+                managedBrowserCount > GuardProtocol.MaximumManagedBrowserCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(managedBrowserCount));
+            }
+
+            if ((supportedManagedBrowser ==
+                 GuardReadinessFactState.Satisfied) !=
+                (managedBrowserCount > 0))
+            {
+                throw new ArgumentException(
+                    "Only a satisfied browser fact may carry a browser count.",
+                    nameof(managedBrowserCount));
+            }
+
+            var allFactsSatisfied =
+                windowsEdition == GuardReadinessFactState.Satisfied &&
+                childAccount == GuardReadinessFactState.Satisfied &&
+                separateLocalAdministrator ==
+                    GuardReadinessFactState.Satisfied &&
+                secureBoot == GuardReadinessFactState.Satisfied &&
+                bitLocker == GuardReadinessFactState.Satisfied &&
+                serviceBoundary == GuardReadinessFactState.Satisfied &&
+                programDataAcl == GuardReadinessFactState.Satisfied &&
+                supportedManagedBrowser ==
+                    GuardReadinessFactState.Satisfied;
+            if (canEnableProtection != allFactsSatisfied)
+            {
+                throw new ArgumentException(
+                    "The protection flag does not match the readiness facts.",
+                    nameof(canEnableProtection));
+            }
+
+            if (findings == null ||
+                findings.Length < 8 ||
+                findings.Length > GuardProtocol.MaximumReadinessFindings)
+            {
+                throw new ArgumentException(
+                    "A complete bounded readiness finding set is required.",
+                    nameof(findings));
+            }
+
+            _findings =
+                new GuardReadinessFindingPayload[findings.Length];
+            for (var index = 0; index < findings.Length; index++)
+            {
+                var finding = findings[index] ??
+                    throw new ArgumentException(
+                        "Readiness findings cannot contain null.",
+                        nameof(findings));
+                for (var earlier = 0; earlier < index; earlier++)
+                {
+                    if (string.Equals(
+                        findings[earlier].Code,
+                        finding.Code,
+                        StringComparison.Ordinal))
+                    {
+                        throw new ArgumentException(
+                            "Readiness finding codes must be unique.",
+                            nameof(findings));
+                    }
+                }
+
+                _findings[index] = finding;
+            }
+
+            ValidateFindingSet(
+                _findings,
+                windowsEdition,
+                childAccount,
+                separateLocalAdministrator,
+                secureBoot,
+                bitLocker,
+                serviceBoundary,
+                programDataAcl,
+                supportedManagedBrowser,
+                managedBrowserCount);
+
+            StateVersion = stateVersion;
+            ObservedAtUtc = observedAtUtc.ToUniversalTime();
+            WindowsEdition = windowsEdition;
+            ChildAccount = childAccount;
+            SeparateLocalAdministrator = separateLocalAdministrator;
+            SecureBoot = secureBoot;
+            BitLocker = bitLocker;
+            ServiceBoundary = serviceBoundary;
+            ProgramDataAcl = programDataAcl;
+            SupportedManagedBrowser = supportedManagedBrowser;
+            ManagedBrowserCount = managedBrowserCount;
+            CanEnableProtection = canEnableProtection;
+        }
+
+        public long StateVersion { get; }
+
+        public DateTimeOffset ObservedAtUtc { get; }
+
+        public GuardReadinessFactState WindowsEdition { get; }
+
+        public GuardReadinessFactState ChildAccount { get; }
+
+        public GuardReadinessFactState SeparateLocalAdministrator { get; }
+
+        public GuardReadinessFactState SecureBoot { get; }
+
+        public GuardReadinessFactState BitLocker { get; }
+
+        public GuardReadinessFactState ServiceBoundary { get; }
+
+        public GuardReadinessFactState ProgramDataAcl { get; }
+
+        public GuardReadinessFactState SupportedManagedBrowser { get; }
+
+        public int ManagedBrowserCount { get; }
+
+        public bool CanEnableProtection { get; }
+
+        public GuardReadinessFindingPayload[] GetFindingsCopy()
+        {
+            return (GuardReadinessFindingPayload[])_findings.Clone();
+        }
+
+        private static void RequireFactState(
+            GuardReadinessFactState state,
+            string parameterName)
+        {
+            if (!Enum.IsDefined(typeof(GuardReadinessFactState), state))
+            {
+                throw new ArgumentOutOfRangeException(parameterName);
+            }
+        }
+
+        private static void ValidateFindingSet(
+            GuardReadinessFindingPayload[] findings,
+            GuardReadinessFactState windowsEdition,
+            GuardReadinessFactState childAccount,
+            GuardReadinessFactState separateLocalAdministrator,
+            GuardReadinessFactState secureBoot,
+            GuardReadinessFactState bitLocker,
+            GuardReadinessFactState serviceBoundary,
+            GuardReadinessFactState programDataAcl,
+            GuardReadinessFactState supportedManagedBrowser,
+            int managedBrowserCount)
+        {
+            RequireOutcome(
+                findings,
+                windowsEdition,
+                GuardReadinessFindingCodes.WindowsEditionReady,
+                GuardReadinessFindingCodes.WindowsEditionBlocking);
+            RequireOutcome(
+                findings,
+                childAccount,
+                GuardReadinessFindingCodes.ChildAccountReady,
+                GuardReadinessFindingCodes.ChildAccountBlocking);
+            RequireOutcome(
+                findings,
+                separateLocalAdministrator,
+                GuardReadinessFindingCodes
+                    .SeparateLocalAdministratorReady,
+                GuardReadinessFindingCodes
+                    .SeparateLocalAdministratorBlocking);
+            RequireOutcome(
+                findings,
+                secureBoot,
+                GuardReadinessFindingCodes.SecureBootReady,
+                GuardReadinessFindingCodes.SecureBootBlocking);
+            RequireOutcome(
+                findings,
+                bitLocker,
+                GuardReadinessFindingCodes.BitLockerReady,
+                GuardReadinessFindingCodes.BitLockerBlocking);
+            RequireOutcome(
+                findings,
+                serviceBoundary,
+                GuardReadinessFindingCodes.ServiceBoundaryReady,
+                GuardReadinessFindingCodes.ServiceBoundaryBlocking);
+            RequireOutcome(
+                findings,
+                programDataAcl,
+                GuardReadinessFindingCodes.ProgramDataAclReady,
+                GuardReadinessFindingCodes.ProgramDataAclBlocking);
+            RequireOutcome(
+                findings,
+                supportedManagedBrowser,
+                GuardReadinessFindingCodes.SupportedManagedBrowserReady,
+                GuardReadinessFindingCodes
+                    .SupportedManagedBrowserBlocking);
+
+            var needsBrowserWarning =
+                supportedManagedBrowser ==
+                    GuardReadinessFactState.Satisfied &&
+                managedBrowserCount == 1;
+            var warningCount = CountFinding(
+                findings,
+                GuardReadinessFindingCodes
+                    .LimitedBrowserCoverageWarning,
+                GuardReadinessFindingSeverity.Warning);
+            if ((needsBrowserWarning && warningCount != 1) ||
+                (!needsBrowserWarning && warningCount != 0) ||
+                findings.Length != 8 + (needsBrowserWarning ? 1 : 0))
+            {
+                throw new ArgumentException(
+                    "The readiness finding set is inconsistent.",
+                    nameof(findings));
+            }
+        }
+
+        private static void RequireOutcome(
+            GuardReadinessFindingPayload[] findings,
+            GuardReadinessFactState state,
+            string readyCode,
+            string blockingCode)
+        {
+            var expectsReady =
+                state == GuardReadinessFactState.Satisfied;
+            var expectedCount = CountFinding(
+                findings,
+                expectsReady ? readyCode : blockingCode,
+                expectsReady
+                    ? GuardReadinessFindingSeverity.Ready
+                    : GuardReadinessFindingSeverity.Blocking);
+            var oppositeCount = CountCode(
+                findings,
+                expectsReady ? blockingCode : readyCode);
+            if (expectedCount != 1 || oppositeCount != 0)
+            {
+                throw new ArgumentException(
+                    "A readiness outcome does not match its fact.",
+                    nameof(findings));
+            }
+        }
+
+        private static int CountFinding(
+            GuardReadinessFindingPayload[] findings,
+            string code,
+            GuardReadinessFindingSeverity severity)
+        {
+            var count = 0;
+            for (var index = 0; index < findings.Length; index++)
+            {
+                if (string.Equals(
+                        findings[index].Code,
+                        code,
+                        StringComparison.Ordinal) &&
+                    findings[index].Severity == severity)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private static int CountCode(
+            GuardReadinessFindingPayload[] findings,
+            string code)
+        {
+            var count = 0;
+            for (var index = 0; index < findings.Length; index++)
+            {
+                if (string.Equals(
+                    findings[index].Code,
+                    code,
+                    StringComparison.Ordinal))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
     }
 
     public sealed class SetupTicketPayload

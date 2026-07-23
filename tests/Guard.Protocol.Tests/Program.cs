@@ -255,6 +255,27 @@ namespace Guard.Protocol.Tests
                 true,
                 binding.ServiceRestartRequired,
                 "Child binding restart requirement changed.");
+
+            var observedAt = new DateTimeOffset(
+                2026,
+                7,
+                23,
+                12,
+                15,
+                0,
+                TimeSpan.Zero);
+            var readiness = GuardReadinessPayloadCodec.Decode(
+                GuardReadinessPayloadCodec.Encode(
+                    CreateReadinessPayload(observedAt)));
+            AssertEqual(7L, readiness.StateVersion, "Readiness state version changed.");
+            AssertEqual(observedAt, readiness.ObservedAtUtc, "Readiness observation time changed.");
+            AssertEqual(
+                GuardReadinessFactState.Satisfied,
+                readiness.ProgramDataAcl,
+                "Readiness fact state changed.");
+            AssertEqual(2, readiness.ManagedBrowserCount, "Readiness browser count changed.");
+            AssertEqual(true, readiness.CanEnableProtection, "Ready snapshot became blocking.");
+            AssertEqual(8, readiness.GetFindingsCopy().Length, "Readiness findings changed.");
         }
 
         private static void RejectsMalformedServiceOperationPayloads()
@@ -286,6 +307,81 @@ namespace Guard.Protocol.Tests
             AssertThrowsInvalidData(
                 () => ChildAccountBindingPayloadCodec.Decode(binding),
                 "Unknown child-binding result flags were accepted.");
+
+            var readiness = GuardReadinessPayloadCodec.Encode(
+                CreateReadinessPayload(DateTimeOffset.UtcNow));
+            var unknownFact = (byte[])readiness.Clone();
+            var firstFactOffset = 4 + 4 + 8 + 8 + 1;
+            unknownFact[firstFactOffset] = 0x7F;
+            AssertThrowsInvalidData(
+                () => GuardReadinessPayloadCodec.Decode(unknownFact),
+                "Unknown readiness fact state was accepted.");
+
+            var inconsistentEnableFlag = (byte[])readiness.Clone();
+            var enableFlagOffset = 4 + 4 + 8 + 8;
+            inconsistentEnableFlag[enableFlagOffset] = 0;
+            AssertThrowsInvalidData(
+                () => GuardReadinessPayloadCodec.Decode(
+                    inconsistentEnableFlag),
+                "An enable flag inconsistent with the facts was accepted.");
+
+            var unknownFinding = (byte[])readiness.Clone();
+            var firstFindingCodeOffset =
+                4 + 4 + 8 + 8 + 1 + 8 + 4 + 4 + 1 + 4;
+            unknownFinding[firstFindingCodeOffset] = (byte)'X';
+            AssertThrowsInvalidData(
+                () => GuardReadinessPayloadCodec.Decode(unknownFinding),
+                "An unknown readiness finding code was accepted.");
+
+            var trailingReadiness = new byte[readiness.Length + 1];
+            Array.Copy(
+                readiness,
+                trailingReadiness,
+                readiness.Length);
+            AssertThrowsInvalidData(
+                () => GuardReadinessPayloadCodec.Decode(trailingReadiness),
+                "Trailing readiness data was accepted.");
+        }
+
+        private static GuardReadinessPayload CreateReadinessPayload(
+            DateTimeOffset observedAtUtc)
+        {
+            var findings = new[]
+            {
+                Finding(GuardReadinessFindingCodes.WindowsEditionReady),
+                Finding(GuardReadinessFindingCodes.ChildAccountReady),
+                Finding(
+                    GuardReadinessFindingCodes
+                        .SeparateLocalAdministratorReady),
+                Finding(GuardReadinessFindingCodes.SecureBootReady),
+                Finding(GuardReadinessFindingCodes.BitLockerReady),
+                Finding(GuardReadinessFindingCodes.ServiceBoundaryReady),
+                Finding(GuardReadinessFindingCodes.ProgramDataAclReady),
+                Finding(
+                    GuardReadinessFindingCodes
+                        .SupportedManagedBrowserReady)
+            };
+            return new GuardReadinessPayload(
+                stateVersion: 7,
+                observedAtUtc,
+                GuardReadinessFactState.Satisfied,
+                GuardReadinessFactState.Satisfied,
+                GuardReadinessFactState.Satisfied,
+                GuardReadinessFactState.Satisfied,
+                GuardReadinessFactState.Satisfied,
+                GuardReadinessFactState.Satisfied,
+                GuardReadinessFactState.Satisfied,
+                GuardReadinessFactState.Satisfied,
+                managedBrowserCount: 2,
+                canEnableProtection: true,
+                findings);
+        }
+
+        private static GuardReadinessFindingPayload Finding(string code)
+        {
+            return new GuardReadinessFindingPayload(
+                code,
+                GuardReadinessFindingSeverity.Ready);
         }
 
         private static void RoundTripsIpcResponse()

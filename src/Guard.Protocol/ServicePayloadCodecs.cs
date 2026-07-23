@@ -76,6 +76,240 @@ namespace Guard.Protocol
         }
     }
 
+    public static class GuardReadinessPayloadCodec
+    {
+        private static readonly byte[] Magic = { 0x47, 0x52, 0x44, 0x32 };
+        private static readonly Encoding Ascii = Encoding.ASCII;
+        private const int FixedBytes = 4 + 4 + 8 + 8 + 1 + 8 + 4 + 4;
+
+        public static byte[] Encode(GuardReadinessPayload payload)
+        {
+            if (payload == null)
+            {
+                throw new ArgumentNullException(nameof(payload));
+            }
+
+            var findings = payload.GetFindingsCopy();
+            using (var stream = new MemoryStream())
+            {
+                stream.Write(Magic, 0, Magic.Length);
+                ServicePayloadCodecPrimitives.WriteInt32(
+                    stream,
+                    GuardProtocol.CurrentVersion);
+                ServicePayloadCodecPrimitives.WriteInt64(
+                    stream,
+                    payload.StateVersion);
+                ServicePayloadCodecPrimitives.WriteInt64(
+                    stream,
+                    payload.ObservedAtUtc.ToUnixTimeMilliseconds());
+                stream.WriteByte(
+                    payload.CanEnableProtection
+                        ? (byte)0x01
+                        : (byte)0x00);
+                WriteFactState(stream, payload.WindowsEdition);
+                WriteFactState(stream, payload.ChildAccount);
+                WriteFactState(
+                    stream,
+                    payload.SeparateLocalAdministrator);
+                WriteFactState(stream, payload.SecureBoot);
+                WriteFactState(stream, payload.BitLocker);
+                WriteFactState(stream, payload.ServiceBoundary);
+                WriteFactState(stream, payload.ProgramDataAcl);
+                WriteFactState(
+                    stream,
+                    payload.SupportedManagedBrowser);
+                ServicePayloadCodecPrimitives.WriteInt32(
+                    stream,
+                    payload.ManagedBrowserCount);
+                ServicePayloadCodecPrimitives.WriteInt32(
+                    stream,
+                    findings.Length);
+                for (var index = 0; index < findings.Length; index++)
+                {
+                    stream.WriteByte((byte)findings[index].Severity);
+                    var code = Ascii.GetBytes(findings[index].Code);
+                    ServicePayloadCodecPrimitives.WriteInt32(
+                        stream,
+                        code.Length);
+                    stream.Write(code, 0, code.Length);
+                }
+
+                if (stream.Length > GuardProtocol.MaximumFrameBytes)
+                {
+                    throw new InvalidOperationException(
+                        "The readiness payload exceeded the frame limit.");
+                }
+
+                return stream.ToArray();
+            }
+        }
+
+        public static GuardReadinessPayload Decode(byte[] payload)
+        {
+            if (payload == null ||
+                payload.Length < FixedBytes ||
+                payload.Length > GuardProtocol.MaximumFrameBytes)
+            {
+                throw new InvalidDataException(
+                    "The readiness payload length is invalid.");
+            }
+
+            try
+            {
+                using (var stream = new MemoryStream(
+                    payload,
+                    writable: false))
+                {
+                    ServicePayloadCodecPrimitives.RequireMagic(
+                        stream,
+                        Magic,
+                        "readiness");
+                    ServicePayloadCodecPrimitives.RequireCurrentVersion(
+                        stream,
+                        "readiness");
+                    var stateVersion =
+                        ServicePayloadCodecPrimitives.ReadInt64(stream);
+                    var observedAtUnixMilliseconds =
+                        ServicePayloadCodecPrimitives.ReadInt64(stream);
+                    var flags = stream.ReadByte();
+                    if (flags < 0 || (flags & ~0x01) != 0)
+                    {
+                        throw new InvalidDataException(
+                            "The readiness payload flags are invalid.");
+                    }
+
+                    var windowsEdition = ReadFactState(stream);
+                    var childAccount = ReadFactState(stream);
+                    var separateLocalAdministrator =
+                        ReadFactState(stream);
+                    var secureBoot = ReadFactState(stream);
+                    var bitLocker = ReadFactState(stream);
+                    var serviceBoundary = ReadFactState(stream);
+                    var programDataAcl = ReadFactState(stream);
+                    var supportedManagedBrowser =
+                        ReadFactState(stream);
+                    var managedBrowserCount =
+                        ServicePayloadCodecPrimitives.ReadInt32(stream);
+                    var findingCount =
+                        ServicePayloadCodecPrimitives.ReadInt32(stream);
+                    if (findingCount < 8 ||
+                        findingCount >
+                            GuardProtocol.MaximumReadinessFindings)
+                    {
+                        throw new InvalidDataException(
+                            "The readiness finding count is invalid.");
+                    }
+
+                    var findings =
+                        new GuardReadinessFindingPayload[findingCount];
+                    for (var index = 0; index < findingCount; index++)
+                    {
+                        var severity = stream.ReadByte();
+                        if (severity < 0 ||
+                            !Enum.IsDefined(
+                                typeof(GuardReadinessFindingSeverity),
+                                severity))
+                        {
+                            throw new InvalidDataException(
+                                "A readiness finding severity is invalid.");
+                        }
+
+                        var codeLength =
+                            ServicePayloadCodecPrimitives.ReadInt32(
+                                stream);
+                        if (codeLength <= 0 ||
+                            codeLength >
+                                GuardProtocol
+                                    .MaximumReadinessCodeCharacters)
+                        {
+                            throw new InvalidDataException(
+                                "A readiness finding code length is invalid.");
+                        }
+
+                        var codeBytes =
+                            ServicePayloadCodecPrimitives.ReadExact(
+                                stream,
+                                codeLength);
+                        for (var codeIndex = 0;
+                             codeIndex < codeBytes.Length;
+                             codeIndex++)
+                        {
+                            if (codeBytes[codeIndex] > 0x7F ||
+                                codeBytes[codeIndex] < 0x20 ||
+                                codeBytes[codeIndex] == 0x7F)
+                            {
+                                throw new InvalidDataException(
+                                    "A readiness finding code is not printable ASCII.");
+                            }
+                        }
+
+                        findings[index] =
+                            new GuardReadinessFindingPayload(
+                                Ascii.GetString(codeBytes),
+                                (GuardReadinessFindingSeverity)severity);
+                    }
+
+                    if (stream.Position != stream.Length)
+                    {
+                        throw new InvalidDataException(
+                            "The readiness payload contains trailing data.");
+                    }
+
+                    return new GuardReadinessPayload(
+                        stateVersion,
+                        DateTimeOffset.FromUnixTimeMilliseconds(
+                            observedAtUnixMilliseconds),
+                        windowsEdition,
+                        childAccount,
+                        separateLocalAdministrator,
+                        secureBoot,
+                        bitLocker,
+                        serviceBoundary,
+                        programDataAcl,
+                        supportedManagedBrowser,
+                        managedBrowserCount,
+                        canEnableProtection: (flags & 0x01) != 0,
+                        findings);
+                }
+            }
+            catch (EndOfStreamException exception)
+            {
+                throw new InvalidDataException(
+                    "The readiness payload ended unexpectedly.",
+                    exception);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new InvalidDataException(
+                    "The readiness payload is invalid.",
+                    exception);
+            }
+        }
+
+        private static void WriteFactState(
+            Stream stream,
+            GuardReadinessFactState state)
+        {
+            stream.WriteByte((byte)state);
+        }
+
+        private static GuardReadinessFactState ReadFactState(
+            Stream stream)
+        {
+            var value = stream.ReadByte();
+            if (value < 0 ||
+                !Enum.IsDefined(
+                    typeof(GuardReadinessFactState),
+                    value))
+            {
+                throw new InvalidDataException(
+                    "A readiness fact state is invalid.");
+            }
+
+            return (GuardReadinessFactState)value;
+        }
+    }
+
     public static class SetupTicketPayloadCodec
     {
         private static readonly byte[] Magic = { 0x47, 0x53, 0x51, 0x32 };

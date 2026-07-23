@@ -5,10 +5,15 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Guard.Application;
+using Guard.Application.Readiness;
 using Guard.Contracts;
 using Guard.Domain;
+using Guard.Domain.Readiness;
 using Guard.Protocol;
 using Guard.Service;
+using Guard.Windows.Accounts;
+using Guard.Windows.Readiness;
+using Guard.Windows.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Guard.Service.Tests
@@ -269,10 +274,170 @@ namespace Guard.Service.Tests
                 "Fresh setup did not commit the child SID before relay provisioning.");
         }
 
+        public static async Task ReturnsAdminOnlyReadinessSnapshotAsync()
+        {
+            var now = new DateTimeOffset(
+                2026,
+                7,
+                23,
+                13,
+                0,
+                0,
+                TimeSpan.Zero);
+            var store = new MutableStateStore(
+                new DeviceSecurityState(
+                    "device-v2-ready001",
+                    version: 4,
+                    highestAcceptedSequence: 0,
+                    desiredPolicyRevision: 0));
+            var childSid = "S-1-5-21-1001-2002-3003-1004";
+            var handler = CreateHandler(
+                store,
+                new ExactChildValidator(childSid),
+                now,
+                new FixedReadinessFactsProvider(
+                    ReadinessFactState.Satisfied));
+            var request = Request(
+                GuardVerb.GetReadiness,
+                Array.Empty<byte>());
+
+            var childResponse = await handler
+                .HandleAsync(
+                    ClientRole.Child,
+                    request,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            Assert(
+                childResponse.Status ==
+                    GuardIpcResponseStatus.Forbidden &&
+                childResponse.PayloadLength == 0,
+                "A child role received readiness details.");
+
+            var invalid = await handler
+                .HandleAsync(
+                    ClientRole.AdminSetup,
+                    Request(
+                        GuardVerb.GetReadiness,
+                        new byte[] { 0x01 }),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            Assert(
+                invalid.Status ==
+                    GuardIpcResponseStatus.InvalidRequest,
+                "A non-empty readiness request was accepted.");
+
+            var response = await handler
+                .HandleAsync(
+                    ClientRole.AdminSetup,
+                    request,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            Assert(
+                response.Status == GuardIpcResponseStatus.Success,
+                "The authenticated admin could not inspect readiness.");
+            var payload = GuardReadinessPayloadCodec.Decode(
+                response.GetPayloadCopy());
+            Assert(
+                payload.StateVersion == 4 &&
+                payload.ObservedAtUtc == now &&
+                payload.CanEnableProtection &&
+                payload.GetFindingsCopy().Length == 8,
+                "The readiness response lost its bounded snapshot.");
+
+            var failingHandler = CreateHandler(
+                store,
+                new ExactChildValidator(childSid),
+                now,
+                new ThrowingReadinessFactsProvider());
+            var failingResponse = await failingHandler
+                .HandleAsync(
+                    ClientRole.AdminSetup,
+                    request,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            var failingPayload = GuardReadinessPayloadCodec.Decode(
+                failingResponse.GetPayloadCopy());
+            Assert(
+                failingResponse.Status ==
+                    GuardIpcResponseStatus.Success &&
+                !failingPayload.CanEnableProtection &&
+                failingPayload.WindowsEdition ==
+                    GuardReadinessFactState.Error &&
+                failingPayload.ProgramDataAcl ==
+                    GuardReadinessFactState.Error,
+                "A failed readiness provider produced a ready snapshot.");
+        }
+
+        public static Task UsesOnlyObservedProductionReadinessFactsAsync()
+        {
+            var childSid = new WindowsAccountSid(
+                "S-1-5-21-1001-2002-3003-1004");
+            var administratorSid = new WindowsAccountSid(
+                "S-1-5-21-1001-2002-3003-1005");
+            var provider = new ProductionReadinessFactsProvider(
+                new FixedLocalAccountFactsProvider(childSid),
+                new FixedWindowsEditionFactsSource(
+                    new WindowsEditionFacts(
+                        buildNumber: 22621,
+                        productType: 0x30)),
+                new FixedSecureBootStateSource(),
+                new FixedSeparateAdministratorSource(
+                    new[]
+                    {
+                        new WindowsSeparateLocalAdministratorSourceCandidate(
+                            administratorSid,
+                            isNormalLocalUser: true,
+                            isEnabled: true,
+                            isLocked: false,
+                            passwordRequired: true,
+                            isGuest: false,
+                            isServiceIdentity: false,
+                            isEffectiveAdministrator: true)
+                    }),
+                new PassingReadinessBoundaryGuard(),
+                new GuardServiceHealthInspector(
+                    new UnknownServiceHealthQuery(),
+                    GuardServiceIdentity.ServiceName,
+                    GuardServiceIdentity.ExpectedBinaryPath));
+            var facts = provider.Probe(
+                new DeviceSecurityState(
+                    "device-v2-ready002",
+                    version: 5,
+                    highestAcceptedSequence: 0,
+                    desiredPolicyRevision: 0,
+                    childAccountSid: childSid),
+                CancellationToken.None);
+
+            Assert(
+                facts.WindowsEdition.State ==
+                    ReadinessFactState.Satisfied &&
+                facts.ChildAccount.State ==
+                    ReadinessFactState.Satisfied &&
+                facts.SeparateLocalAdministrator.State ==
+                    ReadinessFactState.Satisfied &&
+                facts.SecureBoot.State ==
+                    ReadinessFactState.Satisfied &&
+                facts.ProgramDataAcl.State ==
+                    ReadinessFactState.Satisfied,
+                "Observed production readiness facts were not preserved.");
+            Assert(
+                facts.BitLocker.State ==
+                    ReadinessFactState.Unknown &&
+                facts.ServiceBoundary.State ==
+                    ReadinessFactState.Unknown &&
+                facts.SupportedManagedBrowser.State ==
+                    ReadinessFactState.Unknown &&
+                !ReadinessEvaluator.Evaluate(facts)
+                    .CanEnableProtection,
+                "An unobserved production fact was presented as ready.");
+            return Task.CompletedTask;
+        }
+
         private static GuardServiceIpcOperationHandler CreateHandler(
             MutableStateStore store,
             IManagedChildAccountValidator validator,
-            DateTimeOffset now)
+            DateTimeOffset now,
+            IDeviceReadinessFactsProvider? readinessFactsProvider = null)
         {
             var ceremony = new SetupCeremony(
                 new DeterministicSecretGenerator(),
@@ -282,6 +447,11 @@ namespace Guard.Service.Tests
                 store,
                 new SetupCoordinator(store, ceremony),
                 new ChildAccountBindingCoordinator(store, validator),
+                new GuardReadinessCoordinator(
+                    store,
+                    readinessFactsProvider ??
+                        new FixedReadinessFactsProvider(
+                            ReadinessFactState.Unknown)),
                 new FixedClock(now));
         }
 
@@ -664,6 +834,151 @@ namespace Guard.Service.Tests
             }
 
             public DateTimeOffset UtcNow { get; }
+        }
+
+        private sealed class FixedReadinessFactsProvider :
+            IDeviceReadinessFactsProvider
+        {
+            private readonly ReadinessFactState _state;
+
+            public FixedReadinessFactsProvider(
+                ReadinessFactState state)
+            {
+                _state = state;
+            }
+
+            public ReadinessProbeFacts Probe(
+                DeviceSecurityState authoritativeState,
+                CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var fact = new ReadinessProbeFact(_state);
+                var browser = _state == ReadinessFactState.Satisfied
+                    ? new SupportedManagedBrowserProbeFact(
+                        _state,
+                        managedBrowserCount: 2)
+                    : new SupportedManagedBrowserProbeFact(
+                        _state,
+                        managedBrowserCount: 0);
+                return new ReadinessProbeFacts(
+                    fact,
+                    fact,
+                    fact,
+                    fact,
+                    fact,
+                    fact,
+                    fact,
+                    browser);
+            }
+        }
+
+        private sealed class ThrowingReadinessFactsProvider :
+            IDeviceReadinessFactsProvider
+        {
+            public ReadinessProbeFacts Probe(
+                DeviceSecurityState authoritativeState,
+                CancellationToken cancellationToken)
+            {
+                throw new InvalidOperationException(
+                    "Synthetic readiness probe failure.");
+            }
+        }
+
+        private sealed class FixedLocalAccountFactsProvider :
+            ILocalAccountSecurityFactsProvider
+        {
+            private readonly WindowsAccountSid _childSid;
+
+            public FixedLocalAccountFactsProvider(
+                WindowsAccountSid childSid)
+            {
+                _childSid = childSid;
+            }
+
+            public bool TryGet(
+                WindowsAccountSid candidateSid,
+                out LocalAccountSecurityFacts facts)
+            {
+                facts = new LocalAccountSecurityFacts(
+                    _childSid,
+                    exists: true,
+                    isLocalUser: true,
+                    isEnabled: true,
+                    isGuest: false,
+                    isServiceIdentity: false,
+                    isAdministrator: false);
+                return candidateSid.Equals(_childSid);
+            }
+        }
+
+        private sealed class FixedWindowsEditionFactsSource :
+            IWindowsEditionFactsSource
+        {
+            private readonly WindowsEditionFacts _facts;
+
+            public FixedWindowsEditionFactsSource(
+                WindowsEditionFacts facts)
+            {
+                _facts = facts;
+            }
+
+            public WindowsEditionFacts Get()
+            {
+                return _facts;
+            }
+        }
+
+        private sealed class FixedSecureBootStateSource :
+            ISecureBootStateSource
+        {
+            public bool TryReadEnabled(out int enabled)
+            {
+                enabled = 1;
+                return true;
+            }
+        }
+
+        private sealed class FixedSeparateAdministratorSource :
+            IWindowsSeparateLocalAdministratorSource
+        {
+            private readonly IReadOnlyCollection<
+                WindowsSeparateLocalAdministratorSourceCandidate>
+                _candidates;
+
+            public FixedSeparateAdministratorSource(
+                IReadOnlyCollection<
+                    WindowsSeparateLocalAdministratorSourceCandidate>
+                    candidates)
+            {
+                _candidates = candidates;
+            }
+
+            public IReadOnlyCollection<
+                WindowsSeparateLocalAdministratorSourceCandidate>
+                Enumerate(CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return _candidates;
+            }
+        }
+
+        private sealed class PassingReadinessBoundaryGuard :
+            IServiceDataBoundaryGuard
+        {
+            public void DemandReady()
+            {
+            }
+        }
+
+        private sealed class UnknownServiceHealthQuery :
+            IServiceHealthQuery
+        {
+            public ServiceHealthProbeResult Query(string serviceName)
+            {
+                return new ServiceHealthProbeResult(
+                    ServiceHealthProbeState.Unknown,
+                    facts: null);
+            }
         }
     }
 }

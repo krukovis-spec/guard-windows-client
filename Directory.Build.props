@@ -2,7 +2,7 @@
   <PropertyGroup>
     <GenerateResourceMSBuildArchitecture>CurrentArchitecture</GenerateResourceMSBuildArchitecture>
     <GenerateResourceMSBuildRuntime>CurrentRuntime</GenerateResourceMSBuildRuntime>
-    <DefaultItemExcludes>$(DefaultItemExcludes);**/*копия с компьютера LG*.*</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/*копия с компьютера *.*</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48' Or '$(TargetFrameworkVersion)' == 'v4.8'">

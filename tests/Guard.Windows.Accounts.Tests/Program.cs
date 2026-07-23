@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Guard.Domain;
+using Guard.Domain.Readiness;
 using Guard.Windows.Accounts;
 
 namespace Guard.Windows.Accounts.Tests
@@ -14,7 +16,12 @@ namespace Guard.Windows.Accounts.Tests
                 ("accepts only an exact enabled local standard account", AcceptsOnlyEligibleAccount),
                 ("rejects malformed and unknown SID candidates", RejectsMalformedAndUnknown),
                 ("rejects disabled guest service domain and admin accounts", RejectsIneligibleAccounts),
-                ("fails closed when account inspection errors", FailsClosedOnInspectionError)
+                ("fails closed when account inspection errors", FailsClosedOnInspectionError),
+                ("accepts a qualifying separate local administrator", AcceptsQualifyingSeparateAdministrator),
+                ("rejects child-only and nonqualifying administrators", RejectsNonqualifyingAdministrators),
+                ("fails closed for invalid administrator inventory", FailsClosedForInvalidAdministratorInventory),
+                ("copies administrator inventory before evaluation", CopiesAdministratorInventory),
+                ("cancellation does not query administrator inventory", AdministratorInventoryCancellation)
             };
             var failures = 0;
             foreach (var test in tests)
@@ -74,6 +81,112 @@ namespace Guard.Windows.Accounts.Tests
             Assert(
                 !validator.TryValidate("S-1-5-21-1001-2002-3003-1004", out ignored),
                 "Account inspection failure produced a binding.");
+        }
+
+        private static void AcceptsQualifyingSeparateAdministrator()
+        {
+            var childSid = Sid(1004);
+            var probe = new SeparateLocalAdministratorReadiness(
+                new FixedAdministratorInventory(Inventory(childSid, Candidate(Sid(1005)))));
+            Assert(
+                probe.Probe(CancellationToken.None).State == ReadinessFactState.Satisfied,
+                "Qualifying separate local administrator was rejected.");
+        }
+
+        private static void RejectsNonqualifyingAdministrators()
+        {
+            var childSid = Sid(1004);
+            AssertAdministratorUnsatisfied(Inventory(childSid));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(childSid)));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(Sid(1005), local: false)));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(Sid(1005), enabled: false)));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(Sid(1005), locked: true)));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(Sid(1005), passwordRequired: false)));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(Sid(1005), guest: true)));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(Sid(1005), service: true)));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(Sid(1005), effectiveAdministrator: false)));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(new WindowsAccountSid("S-1-5-18"))));
+            AssertAdministratorUnsatisfied(Inventory(childSid, Candidate(Sid(501))));
+        }
+
+        private static void FailsClosedForInvalidAdministratorInventory()
+        {
+            var childSid = Sid(1004);
+            AssertAdministratorState(new FixedAdministratorInventory(null!), ReadinessFactState.Error);
+            AssertAdministratorState(new ThrowingAdministratorInventory(), ReadinessFactState.Error);
+            AssertAdministratorState(
+                new FixedAdministratorInventory(
+                    new SeparateLocalAdministratorInventory(
+                        childSid,
+                        new List<SeparateLocalAdministratorCandidateFacts> { null! })),
+                ReadinessFactState.Error);
+        }
+
+        private static void AdministratorInventoryCancellation()
+        {
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel();
+                var inventory = new FixedAdministratorInventory(Inventory(Sid(1004), Candidate(Sid(1005))));
+                var probe = new SeparateLocalAdministratorReadiness(inventory);
+                Assert(probe.Probe(cancellation.Token).State == ReadinessFactState.Unknown, "Cancellation did not return Unknown.");
+                Assert(inventory.CallCount == 0, "Cancelled probe queried administrator inventory.");
+            }
+        }
+
+        private static void CopiesAdministratorInventory()
+        {
+            var source =
+                new List<SeparateLocalAdministratorCandidateFacts>
+                {
+                    Candidate(Sid(1005))
+                };
+            var inventory = new SeparateLocalAdministratorInventory(
+                Sid(1004),
+                source);
+            source.Clear();
+            Assert(
+                inventory.Candidates.Count == 1,
+                "Administrator inventory retained a mutable caller collection.");
+        }
+
+        private static void AssertAdministratorUnsatisfied(SeparateLocalAdministratorInventory inventory)
+        {
+            AssertAdministratorState(new FixedAdministratorInventory(inventory), ReadinessFactState.Unsatisfied);
+        }
+
+        private static void AssertAdministratorState(
+            ISeparateLocalAdministratorInventory inventory,
+            ReadinessFactState expected)
+        {
+            var probe = new SeparateLocalAdministratorReadiness(inventory);
+            Assert(probe.Probe(CancellationToken.None).State == expected, "Administrator readiness state was unexpected.");
+        }
+
+        private static SeparateLocalAdministratorInventory Inventory(
+            WindowsAccountSid childSid,
+            params SeparateLocalAdministratorCandidateFacts[] candidates)
+        {
+            return new SeparateLocalAdministratorInventory(childSid, candidates);
+        }
+
+        private static SeparateLocalAdministratorCandidateFacts Candidate(
+            WindowsAccountSid sid,
+            bool local = true,
+            bool enabled = true,
+            bool locked = false,
+            bool passwordRequired = true,
+            bool guest = false,
+            bool service = false,
+            bool effectiveAdministrator = true)
+        {
+            return new SeparateLocalAdministratorCandidateFacts(
+                sid, local, enabled, locked, passwordRequired, guest, service, effectiveAdministrator);
+        }
+
+        private static WindowsAccountSid Sid(int rid)
+        {
+            return new WindowsAccountSid("S-1-5-21-1001-2002-3003-" + rid);
         }
 
         private static void AssertRejected(LocalAccountSecurityFacts facts)
@@ -138,6 +251,32 @@ namespace Guard.Windows.Accounts.Tests
             {
                 facts = null!;
                 throw new UnauthorizedAccessException("Synthetic account query failure.");
+            }
+        }
+
+        private sealed class FixedAdministratorInventory : ISeparateLocalAdministratorInventory
+        {
+            private readonly SeparateLocalAdministratorInventory _inventory;
+
+            public FixedAdministratorInventory(SeparateLocalAdministratorInventory inventory)
+            {
+                _inventory = inventory;
+            }
+
+            public int CallCount { get; private set; }
+
+            public SeparateLocalAdministratorInventory Get(CancellationToken cancellationToken)
+            {
+                CallCount++;
+                return _inventory;
+            }
+        }
+
+        private sealed class ThrowingAdministratorInventory : ISeparateLocalAdministratorInventory
+        {
+            public SeparateLocalAdministratorInventory Get(CancellationToken cancellationToken)
+            {
+                throw new UnauthorizedAccessException("Synthetic inventory query failure.");
             }
         }
     }

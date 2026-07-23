@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Guard.Domain.Readiness;
+using Guard.Domain.SelfProtection;
 
 namespace Guard.Readiness.Tests
 {
@@ -15,7 +16,10 @@ namespace Guard.Readiness.Tests
                 ("blocks protection when a required fact is unsatisfied", BlocksUnsatisfiedFact),
                 ("reports stable ready, warning, and blocking codes", ReportsStableFindingCodes),
                 ("keeps probe facts and evaluation findings immutable", PreservesImmutability),
-                ("fails closed for incomplete, ad-hoc, or duplicate findings", FailsClosedForMalformedPublicEvaluations)
+                ("fails closed for incomplete, ad-hoc, or duplicate findings", FailsClosedForMalformedPublicEvaluations),
+                ("accepts only the complete Guard service installation contract", AcceptsCompleteServiceInstallationContract),
+                ("rejects every service self-protection weakness", RejectsServiceSelfProtectionWeaknesses),
+                ("fails closed when service installation cannot be observed", FailsClosedForUnavailableServiceObservation)
             };
             var failures = 0;
             foreach (var test in tests)
@@ -97,6 +101,107 @@ namespace Guard.Readiness.Tests
             Assert(!new ReadinessEvaluation(duplicated).CanEnableProtection, "Duplicate findings enabled protection.");
         }
 
+        private static void AcceptsCompleteServiceInstallationContract()
+        {
+            var evaluation =
+                GuardServiceInstallationContract.Evaluate(
+                    ReadyServiceInstallation());
+            Assert(
+                evaluation.IsSatisfied &&
+                evaluation.Failures.Count == 0,
+                "The complete service installation contract was rejected.");
+        }
+
+        private static void RejectsServiceSelfProtectionWeaknesses()
+        {
+            var observation = new ObservedGuardServiceInstallation(
+                ServiceInstallationObservationState.Observed,
+                serviceName: "guard",
+                accountSid: "S-1-5-20",
+                isOwnProcess: false,
+                isInteractive: true,
+                GuardServiceStartPolicy.AutomaticDelayed,
+                GuardServiceSidPolicy.None,
+                recoveryActionsConfigured: false,
+                standardUsersCanStop: true,
+                standardUsersCanChangeConfiguration: true,
+                standardUsersCanDelete: true,
+                binaryPathMatchesExpected: false,
+                installRootProtected: false,
+                installRootIsReparsePoint: true,
+                legacyAuthorityDisabled: false);
+            var evaluation =
+                GuardServiceInstallationContract.Evaluate(observation);
+            Assert(!evaluation.IsSatisfied, "A weak service installation passed.");
+            Assert(
+                evaluation.Failures.Count == 12,
+                "The self-protection contract skipped a required failure.");
+            Assert(
+                Contains(
+                    evaluation.Failures,
+                    GuardServiceInstallationFailure.StandardUserServiceControl) &&
+                Contains(
+                    evaluation.Failures,
+                    GuardServiceInstallationFailure.LegacyAuthorityActive),
+                "Critical service-control failures were missing.");
+        }
+
+        private static void FailsClosedForUnavailableServiceObservation()
+        {
+            var unavailable = new[]
+            {
+                ServiceInstallationObservationState.NotInstalled,
+                ServiceInstallationObservationState.Unknown,
+                ServiceInstallationObservationState.Error
+            };
+            for (var index = 0; index < unavailable.Length; index++)
+            {
+                var observation =
+                    new ObservedGuardServiceInstallation(
+                        unavailable[index],
+                        string.Empty,
+                        string.Empty,
+                        isOwnProcess: false,
+                        isInteractive: false,
+                        GuardServiceStartPolicy.Unspecified,
+                        GuardServiceSidPolicy.None,
+                        recoveryActionsConfigured: false,
+                        standardUsersCanStop: false,
+                        standardUsersCanChangeConfiguration: false,
+                        standardUsersCanDelete: false,
+                        binaryPathMatchesExpected: false,
+                        installRootProtected: false,
+                        installRootIsReparsePoint: false,
+                        legacyAuthorityDisabled: false);
+                Assert(
+                    !GuardServiceInstallationContract
+                        .Evaluate(observation)
+                        .IsSatisfied,
+                    "An unavailable service observation passed.");
+            }
+        }
+
+        private static ObservedGuardServiceInstallation
+            ReadyServiceInstallation()
+        {
+            return new ObservedGuardServiceInstallation(
+                ServiceInstallationObservationState.Observed,
+                GuardServiceInstallationContract.ServiceName,
+                GuardServiceInstallationContract.LocalSystemSid,
+                isOwnProcess: true,
+                isInteractive: false,
+                GuardServiceStartPolicy.Automatic,
+                GuardServiceSidPolicy.Unrestricted,
+                recoveryActionsConfigured: true,
+                standardUsersCanStop: false,
+                standardUsersCanChangeConfiguration: false,
+                standardUsersCanDelete: false,
+                binaryPathMatchesExpected: true,
+                installRootProtected: true,
+                installRootIsReparsePoint: false,
+                legacyAuthorityDisabled: true);
+        }
+
         private static ReadinessProbeFacts CreateReadyFacts(int managedBrowserCount)
         {
             return CreateFacts(browser: new SupportedManagedBrowserProbeFact(ReadinessFactState.Satisfied, managedBrowserCount));
@@ -153,6 +258,21 @@ namespace Guard.Readiness.Tests
             }
 
             return count;
+        }
+
+        private static bool Contains(
+            IReadOnlyList<GuardServiceInstallationFailure> values,
+            GuardServiceInstallationFailure expected)
+        {
+            for (var index = 0; index < values.Count; index++)
+            {
+                if (values[index] == expected)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void Assert(bool value, string message)
