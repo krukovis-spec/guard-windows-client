@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Guard.Contracts\Guard.Contracts.csproj" />
+    <ProjectReference Include="..\Guard.Domain\Guard.Domain.csproj" />
+    <ProjectReference Include="..\Guard.Protocol\Guard.Protocol.csproj" />
+  </ItemGroup>
+</Project>
