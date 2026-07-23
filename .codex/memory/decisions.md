@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-07-23 - Guard v2 uses a side-by-side authoritative service architecture
+
+- Decision: build Guard v2 beside quarantined legacy code. `Guard.Service` will be the only authoritative writer; child/admin/proxy use separate restricted IPC; setup atomically consumes a one-time challenge and binds parent public-key material; signed decisions are exact-request-bound and committed before reconciliation.
+- Why: promoting the interactive tray, CurrentUser storage or LAN cabinet would preserve the same child-visible and same-user trust failures that P0 contained.
+- Alternatives: convert `guard.exe` into a service; reuse legacy DPAPI state and pairing IDs; use one role-bearing pipe. These make untrusted payload identity or child-readable legacy state part of the security boundary.
+- Risk: current commit is only the tested cross-platform foundation. Real ECDSA, ProgramData ACL/encryption, named-pipe token/DACL, AppLocker/proxy adapters and Windows VM attack tests remain required.
+- Check: checkpoint `6bfcb15e50f05b9110e6c0227c927be683a5f293`; implementation `de4db2d`; evidence `784ccd0`; Release build, 84/84 safe checks, clean NuGet/staged-secret scans and independent review with no remaining P0/P1/P2.
+
 ## 2026-07-22 - P0 quarantines legacy control and requires confirmed cleanup
 
 - Decision: until passkey provisioning and the `LocalSystem` boundary exist, hard-disable the LAN cabinet, child pairing/email, Assign API, legacy remote sync and telemetry for every persisted state. Local disable/uninstall accepts only an existing custom PIN other than `123456`; Inno removes binaries only after Cleaner confirms every cleanup stage and returns exit 0.
