@@ -1,5 +1,22 @@
 # Decisions
 
+## 2026-07-24 - Stage 4 grants and reconciliation stay exact and recoverable
+
+- Decision: unpackaged binaries can execute only through exact SHA-256 grants and packaged apps through exact PFN grants. Publisher/product/secure-root identity is service-attested provenance used to classify update candidates, never a broad executable allow.
+- Decision: a valid desired revision is committed before rule-catalog verification. Before every sink apply, the coordinator persists `min(now + 1 minute, natural deadline)`; failure or cancellation keeps that marker, and the natural deadline or clear replaces it only after successful apply.
+- Why: AppLocker cannot safely express the required publisher/product AND secure-root conjunction, and a transient catalog/scheduler/sink failure must never discard a revoke or strand an old allow without bounded retry.
+- Alternatives: broad publisher/path rules; trust child-supplied path/publisher/PFN; verify catalog before commit; clear expiry before sink apply. These widen authority or lose recovery invariants, so they are rejected.
+- Risk: production implementations of store/scheduler/catalog/AppLocker sink and updater carry-forward are still absent. Exact Windows semantics, atomic replacement, crash recovery and the arbitrary-launch matrix remain disposable-VM gates.
+- Check: implementation `35c79ca`; Release build; 236/236 safe checks; clean NuGet audit; code-review-loop fixed three P1 and finished clean on pass 1; independent final review found no remaining P0/P1/P2 in the code-only scope.
+
+## 2026-07-24 - PWA cabinet uses a native biometric-only approval key
+
+- Decision: retain one PWA for requests, status and non-permissive management, but require a compact native Android/iPhone approval module to sign `Allow`, disable, maintenance and recovery commands. Its Secure Enclave/Android Keystore key requires fresh strong biometry for every operation and excludes device PIN/passcode fallback.
+- Why: official Apple and Android passkeys may use the device passcode, PIN, pattern or password when biometrics are unavailable. That does not protect a family scenario where the child may know the phone unlock code.
+- Alternatives: PWA-only passkey; two complete native cabinets; hardware FIDO2 only. PWA-only fails the biometric-only boundary, full duplicate apps add unnecessary scope, and FIDO2 remains a fallback rather than the default daily UX.
+- Risk: the parent platform order and shared UI runtime remain open. Real-device tests must prove key invalidation after biometric changes and refusal when only device credentials are available. A child Android/iOS control agent remains outside the first Windows release.
+- Check: canonical details and official platform references are recorded in `docs/guard-v2-development-plan.md`.
+
 ## 2026-07-23 - Readiness is observational and full service proof is indivisible
 
 - Decision: `GetReadiness` is admin-only and observational. It returns eight fixed bounded facts and stable finding codes; any `Unknown`, `Error` or `Unsatisfied` fact blocks `CanEnableProtection`. A future enable command must collect fresh facts again immediately before commit/apply.
@@ -34,12 +51,12 @@
 - Risk: new pairing and old remote administration are unavailable; blank/default-PIN installations need a future parent-admin migration ceremony; system cleanup is not transactional and still needs disposable-VM lifecycle testing.
 - Check: remote checkpoint `381afa54a067665b2977389d582ec3166bc8a4ef`; application commit `3e7e384d26864a5976da85652f160e0dd7da67ab`; Release build, 45/45 safe checks, Inno syntax/package compile, NuGet audit, diff check, masked secret scan and independent security review accepted without remaining P0/P1.
 
-## 2026-07-22 - Guard v2 uses request-first default-deny and passkey parent approval
+## 2026-07-22 - Guard v2 uses request-first default-deny and parent approval (updated 2026-07-24)
 
-- Decision: everything unknown is blocked; the child requests an app or site; the parent decides `always`, `temporary`, `daily quota`, or `deny` in a Russian-default PWA. Every permissive decision uses a passkey with fresh fingerprint/Face ID. Parent PIN, TOTP, SMS and email codes are not used, including as the normal recovery route.
+- Decision: everything unknown is blocked; the child requests an app or site; the parent decides `always`, `temporary`, `daily quota`, or `deny` in a Russian-default PWA. Passkeys provide account entry, while every permissive or dangerous command uses the native biometric-only approval key defined by the 2026-07-24 decision. Parent PIN, TOTP, SMS and email codes are not used, including as the normal recovery route.
 - Why: this matches Ivan's real family workflow and prevents the observed reset-code bypass from an unlocked phone or notification preview.
-- Alternatives: parent-maintained blocklists; LAN-only cabinet and password/PIN; TOTP backup; a native mobile app first. Blocklists invert the desired workflow, LAN/PIN and TOTP can be observed or transferred, and native-first delays validation on both mobile platforms unless PWA cannot enforce biometric-only approval.
-- Risk: PWA push delivery is not the source of truth, so the request inbox and device queue must remain reliable; total loss of all passkeys still needs an approved recovery ceremony. If the child knows the phone unlock PIN and the platform lets a passkey fall back to it, PWA approval may be insufficient; this is a real-device security gate and may force a native parent app or hardware FIDO2 key.
+- Alternatives: parent-maintained blocklists; LAN-only cabinet and password/PIN; TOTP backup; duplicate full native cabinets. Blocklists invert the workflow, LAN/PIN and TOTP can be observed or transferred, and full duplicate apps add scope when only approval signing must be native.
+- Risk: PWA push delivery is not the source of truth, so the request inbox and device queue must remain reliable; total loss of all approval keys/passkeys still needs an approved recovery ceremony.
 - Check: canonical scenarios, threat model, stages and open questions are in `docs/guard-v2-development-plan.md`.
 
 ## 2026-07-22 - Guard v2 replaces global unlock and UI-Automation website blocking

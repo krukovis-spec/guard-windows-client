@@ -4,7 +4,7 @@
 
 - `guard-windows-client` is an open-source Windows parental-control/filtering client under `.NET Framework 4.8`.
 - Original upstream code contains sync/assign/log routes for `https://guard.alexweb.app`, but Guard v2 P0 hard-disables the complete legacy control plane and telemetry regardless of persisted state. Remote `pinCode` updates are ignored and legacy Assign/pairing UI is excluded from the active build.
-- Guard v2 is now a defined parent-first product: app/site default-deny, child requests, remote parent decisions, an outbound cloud relay and a passkey-protected PWA. The canonical living specification is `docs/guard-v2-development-plan.md`.
+- Guard v2 is now a defined parent-first product: app/site default-deny, child requests, remote parent decisions, an outbound cloud relay, a passkey-protected PWA and a compact native parent approval module for biometric-only signatures. The canonical living specification is `docs/guard-v2-development-plan.md`.
 
 ## How To Work
 
@@ -16,7 +16,7 @@
 
 ## Architecture
 
-- `src/Guard.Contracts`, `Guard.Domain`, `Guard.Protocol`, `Guard.Application` - side-by-side Guard v2 foundation. It owns canonical identifiers, bounded IPC/parent-decision codecs, immutable security/readiness/policy models, atomic setup and signed-command use cases. It does not run privileged Windows actions.
+- `src/Guard.Contracts`, `Guard.Domain`, `Guard.Protocol`, `Guard.Application` - side-by-side Guard v2 foundation. It owns canonical identifiers, bounded IPC/parent-decision codecs, immutable security/readiness/policy models, exact application identities and grants, atomic setup, child application requests and signed-command use cases. It does not run privileged Windows actions.
 - `src/Guard.Service` is the `.NET 10` SCM/`LocalSystem` composition root and sole authoritative writer. `src/Guard.Windows` owns SYSTEM-only ProgramData storage, LocalSystem DPAPI, ECDSA P-256, local-account/readiness probes, query-only SCM access and restricted named-pipe adapters. `Guard.Child` / `Guard.Proxy` remain later cutover layers; legacy `guard.exe` stays quarantined.
 - `guard/` - main WinForms/tray client, API sync, forms, rule application.
 - `Guard.Core/` - shared state, DPAPI storage, cleanup helpers, scheduled task helper, models.
@@ -32,8 +32,11 @@
 - Tooling: official `.NET SDK 10.0.302` was installed with Ivan's explicit approval on 2026-07-23 and is pinned by `global.json`; legacy Framework MSBuild `4.8.9221.0` remains available. `Guard.Service` locks the official `Microsoft.Extensions.Hosting.WindowsServices` package to `10.0.10`.
 - Baseline build on 2026-06-06 was fixed without installing Visual Studio Build Tools by adding `Directory.Build.props` with `Microsoft.NETFramework.ReferenceAssemblies.net48` and `GenerateResourceMSBuildArchitecture/Runtime = Current...`. Current gate: `dotnet msbuild guard.sln /p:Configuration=Release /p:Platform="Any CPU"` passes cleanly. No Guard app/cleaner/helper exe was launched.
 - Inno Setup is available at `C:\Users\kruko\AppData\Local\Programs\Inno Setup 6\ISCC.exe`.
-- Safe verification now consists of 192/192 checks after a Release solution build: 45 legacy, 22 v2, 13 protocol, 6 policy, 9 readiness-domain, 22 service, 22 storage, 9 Windows account, 7 Windows crypto, 10 Windows IPC, 4 Windows storage, 5 Windows readiness, 5 service-health, 6 platform-readiness and 7 SCM-query checks. NuGet audit is clean; no production executable was run.
-- Guard v2 foundation commits `de4db2d` / `784ccd0`, service-boundary implementation `078ffa1` and Stage 3 readiness/self-protection implementation `15b8b60` are on `codex/guard-v2-implementation`. Stage 3 code-review-loop reached clean on pass 1 after three P3 hardening fixes; independent review found no P0/P1/P2.
+- Safe verification now consists of 236/236 checks after a warning-free Release solution build: the prior 192 checks plus 8 application-identity, 6 AppControl-policy, 13 reconciliation, 11 application-request protocol and 6 application-request checks. NuGet audit is clean; no production executable was run.
+- Guard v2 foundation commits `de4db2d` / `784ccd0`, service-boundary implementation `078ffa1`, Stage 3 readiness/self-protection `15b8b60` and Stage 4 default-deny application foundation `35c79ca` are on `codex/guard-v2-implementation`.
+- Stage 4 permits unpackaged execution only by exact SHA-256 and packaged apps only by exact PFN. Publisher/product/secure-root identity is service-attested provenance, not an executable allow. Bundles and maintenance discovery create parent-approval candidates; the child payload contains only an opaque observation id and bounded reason.
+- Desired application-policy state commits before catalog verification. Every apply first persists a recovery marker at `min(now + 1 minute, natural deadline)`; sink failure or post-commit cancellation retains it, and it is finalized or cleared only after successful apply.
+- A normal mobile passkey may fall back to the phone PIN/passcode. The PWA remains the shared cabinet, while strict `Allow`, disable, maintenance and recovery commands require a compact native parent module whose Secure Enclave/Android Keystore signing key is biometric-only. A child Android/iOS agent is outside the first Windows release.
 - Setup challenge consumption and parent public-key trust are one CAS transaction; parent commands use canonical signed metadata, a strict request-bound decision payload, durable replay markers and commit-before-reconcile behavior. IPC reads require a deadline and have an eight-handler quota contract.
 - `Directory.Build.props` excludes Yandex.Disk conflict-copy files matching `**/*копия с компьютера *.*`; otherwise SDK-style `.csproj` auto-includes duplicate `.cs` files and the build can fail or compile stale duplicate definitions.
 - Admin-only `GetReadiness` returns only bounded states, stable finding codes and a managed-browser count. Windows 11 Pro edition, the bound standard child, a separate effective local administrator, Secure Boot and ProgramData ACL are re-observed read-only; BitLocker, managed browsers and the full service installation proof remain `Unknown`, so readiness cannot enable protection prematurely.
@@ -57,6 +60,7 @@
 
 - The Stage 2 service/storage/crypto/IPC boundary exists in code, but Windows tamper resistance is not yet proven. Disposable-VM tests must validate real SCM/LocalSystem bootstrap, ProgramData ACL/DPAPI/reparse behavior, named-pipe impersonation/UAC/integrity, nested local groups, restart cutover, crash durability and the child tamper matrix.
 - Stage 3 contains query-only SCM/account/Secure Boot adapters and a pure service installation contract, but production intentionally does not mark the service boundary ready until SCM DACL, recovery actions, service SID, own-process/noninteractive type, protected non-reparse install root and disabled legacy authority are all observed. BitLocker/browser adapters and all real stop/delete/Safe Mode/account-escalation evidence remain VM-only.
+- Stage 4 is accepted only as a code-only scaffold. Production still lacks the authoritative application-policy store/scheduler, cryptographically verified immutable rule catalog, Authenticode/PFN extraction, AppLocker sink, service/child wiring and updater carry-forward. These and the full arbitrary-launch/reboot/crash matrix remain disposable-VM gates.
 - The protected state and hash-chained journal detect ordinary rollback/substitution, but an attacker who can jointly restore both artifacts offline requires a future TPM or remote witness for stronger rollback proof.
 - The 2026-07-22 P0 source changes close the child-visible first-pairing takeover, known/missing PIN bypasses, legacy telemetry and unsafe Cleaner routes. Do not deploy to the child PC yet: installer/Cleaner and enforcement lifecycle still require disposable Windows VM validation.
 - The current admin tray process, HKCU autostart and interactive scheduled-task watchdog do not form a reliable boundary for a separate standard child account. The recommended architecture is a `LocalSystem` Windows service that owns policy/state plus a separate child-session UI over restricted IPC.
@@ -71,8 +75,8 @@
 ## Recommended Next
 
 - Active branch: `codex/guard-v2-implementation`; pre-change checkpoint: `codex/checkpoint-20260723-0041-guard-v2-implementation` at `6bfcb15e50f05b9110e6c0227c927be683a5f293`.
-- Next ordered code-only increment is Stage 4 default-deny applications: pure desired-state/AppLocker policy compilation, signed application identity and updater-bundle contracts behind injected adapters. Applying AppLocker or changing Windows policy remains disposable-VM-only.
-- Current product path remains: temporary passkey-gated maintenance, signed app identities, managed supported browsers, localhost domain proxy without HTTPS interception, parent PWA and four decisions (`always`, `temporary`, `daily quota`, `deny`).
+- Next ordered code-only increment is Stage 5 default-deny sites: low-privilege localhost domain-proxy contracts, managed-browser policy bundles, strict domain decisions and bypass-resistant reconciliation behind injected adapters. Browser policy, AppLocker and network changes remain disposable-VM-only.
+- Current product path remains: temporary biometric-gated maintenance, exact application identities, managed supported browsers, localhost domain proxy without HTTPS interception, parent PWA, native biometric-only approval signing and four decisions (`always`, `temporary`, `daily quota`, `deny`).
 - Ivan authorized execution of the full plan and separately approved the .NET 10/service-package toolchain. Continue in small verified code-only increments; do not skip to live Windows enforcement.
 - Do not install or live-test the current build on the child PC. After the P0 changes, validate only in disposable Windows 11 Pro VMs before any real-device pilot.
 - Reuse the tested request/grant/limit/task engines, but replace the privileged tray/watchdog boundary, child-known pairing/PIN recovery, UI-Automation web enforcement and one-page LAN cabinet.

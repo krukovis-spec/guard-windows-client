@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-07-24 - Guard v2 Stage 4 default-deny application foundation
+
+- Committed and pushed `35c79ca` (`feat(v2): add default-deny application foundation`) on `codex/guard-v2-implementation`.
+- Added mutually exclusive signed-provenance, exact SHA-256 and exact PFN identities; only SHA/PFN can become executable grants. Added exact Main/Updater/Helper bundles, service-attested inventories, maintenance delta candidates and default-deny EXE/MSI/Script/Appx/DLL plans.
+- Added a strict child application-request payload containing only an opaque observation id and bounded reason. Service-side observation resolution supplies the exact executable identity and authenticated device/child SID; atomic deduplication and audit fail closed.
+- Desired state now commits before catalog lookup. Expiry/quota deadlines are durable, and every apply retains a bounded pre-apply recovery marker until the sink and final schedule succeed. This closes revoke loss during catalog, scheduler, sink and post-commit cancellation failures.
+- Verification: warning-free Release solution build; 236/236 safe checks, including 44/44 Stage 4 and 13/13 reconciliation checks; clean NuGet vulnerability audit and staged secret/diff checks. Independent final review found no remaining P0/P1/P2 in the code-only scope.
+- Code review loop: 1/1 broad pass, clean on pass 1 after three P1 fixes; score 6.0 to 9.3. Report: `.codex/review-loop-stage4/.codex/review-loop/runs/20260724-013347/report.md` (review artifact intentionally unstaged).
+- Updated the canonical plan: the PWA remains the shared parent cabinet, but permissive/dangerous commands use a small native Android/iPhone approval module with a biometric-only hardware-backed signing key because ordinary mobile passkeys allow phone PIN/passcode fallback. A child mobile agent remains outside the first Windows release.
+- No Guard, service executable, installer, Cleaner, helper, AppLocker, firewall, hosts, registry, scheduled-task, account or other live system action was run. User-owned `Output`, `.gstack`, review files and Yandex.Disk conflict copies remain unstaged.
+- Remaining gate: production policy store/scheduler, signed immutable catalog, Authenticode/PFN extraction, AppLocker sink, service/child wiring, updater carry-forward and Windows 11 Pro VM attack/recovery matrix.
+
 ## 2026-07-23 - Guard v2 Stage 3 fail-closed Windows readiness
 
 - Committed `15b8b60` (`feat(v2): add fail-closed Windows readiness`) on `codex/guard-v2-implementation`.
