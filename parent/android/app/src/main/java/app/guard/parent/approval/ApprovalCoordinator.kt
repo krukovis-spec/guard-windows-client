@@ -23,6 +23,7 @@ class ApprovalCoordinator(private val keyStore: AndroidApprovalKeyStore, private
         sequence: Long, issued: Long, expiry: Long, choice: ApprovalChoice
     ): PendingSignedEnvelope {
         require(outbox.getPending(keyId) == null) { "terminal receipt required" }
+        AuthorityEpochBinding.requireMatch(snapshot, authorityEpoch)
         val unsigned = SignedApproval(authorityEpoch, keyId, sequence, UUID.randomUUID().toString(), UUID.randomUUID().toString(), issued, expiry,
             snapshot.deviceId, snapshot.deviceEpoch, snapshot.requestId, snapshot.requestRevision, GuardWire.sha256(GuardWire.encodeRequestSnapshot(snapshot)),
             snapshot.challenge, snapshot.targetKind, snapshot.targetIdentity, snapshot.policyRevision, choice.decision, choice.minutes, ByteArray(64))
@@ -31,5 +32,11 @@ class ApprovalCoordinator(private val keyStore: AndroidApprovalKeyStore, private
         signature.update(GuardWire.encodeApprovalSignatureInput(unsigned))
         val final = unsigned.copy(signatureP1363 = EcdsaP1363.fromDer(signature.sign()))
         return PendingSignedEnvelope(keyId, sequence, GuardWire.encodeSignedApproval(final)).also(outbox::persistBeforeSend)
+    }
+}
+
+object AuthorityEpochBinding {
+    fun requireMatch(snapshot: RequestSnapshot, authorityEpoch: Long) {
+        require(snapshot.authorityEpoch == authorityEpoch) { "authority epoch mismatch" }
     }
 }

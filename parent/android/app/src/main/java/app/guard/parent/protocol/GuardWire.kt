@@ -32,7 +32,7 @@ class WireException(message: String) : IllegalArgumentException(message)
 
 data class Evidence(val name: String, val value: String)
 data class RequestSnapshot(
-    val deviceId: String, val deviceEpoch: Long, val deviceEventId: String,
+    val deviceId: String, val deviceEpoch: Long, val authorityEpoch: Long, val deviceEventId: String,
     val requestId: String, val requestRevision: Long, val targetKind: TargetKind,
     val targetIdentity: String, val evidence: List<Evidence>, val reason: String,
     val createdUnixMillis: Long, val pendingExpiryUnixMillis: Long,
@@ -49,7 +49,7 @@ data class SignedApproval(
 )
 
 data class CommandReceipt(
-    val deviceId: String, val deviceEpoch: Long, val keyId: String, val sequence: Long,
+    val deviceId: String, val deviceEpoch: Long, val authorityEpoch: Long, val keyId: String, val sequence: Long,
     val commandId: String, val requestId: String, val requestRevision: Long, val status: ReceiptStatus,
     val processedUnixMillis: Long, val approvalHash: ByteArray, val committedPolicyRevision: Long,
     val reconciliation: Int, val detailCode: String
@@ -62,14 +62,14 @@ data class RelayFrameAad(
 
 object GuardWire {
     fun encodeRequestSnapshot(value: RequestSnapshot): ByteArray = Writer("GRRQ").apply {
-        id(value.deviceId); positive(value.deviceEpoch); id(value.deviceEventId); id(value.requestId); positive(value.requestRevision)
+        id(value.deviceId); positive(value.deviceEpoch); positive(value.authorityEpoch); id(value.deviceEventId); id(value.requestId); positive(value.requestRevision)
         i32(value.targetKind.wire); text(value.targetIdentity, MAX_IDENTITY_BYTES, false); i32(value.evidence.size.also { require(it <= MAX_EVIDENCE) })
         value.evidence.forEach { text(it.name, MAX_EVIDENCE_NAME_BYTES, false); text(it.value, MAX_EVIDENCE_VALUE_BYTES, true) }; text(value.reason, MAX_REASON_BYTES, true)
         i64(value.createdUnixMillis); i64(value.pendingExpiryUnixMillis); fixed(value.challenge, 32); i64(value.policyRevision)
     }.finish()
 
     fun decodeRequestSnapshot(encoded: ByteArray): RequestSnapshot = Reader(encoded, "GRRQ").run {
-        val value = RequestSnapshot(id(), positive(), id(), id(), positive(), TargetKind.from(i32()), text(MAX_IDENTITY_BYTES, false),
+        val value = RequestSnapshot(id(), positive(), positive(), id(), id(), positive(), TargetKind.from(i32()), text(MAX_IDENTITY_BYTES, false),
             List(i32().bounded(0, MAX_EVIDENCE)) { Evidence(text(MAX_EVIDENCE_NAME_BYTES, false), text(MAX_EVIDENCE_VALUE_BYTES, true)) }, text(MAX_REASON_BYTES, true), i64(), i64(), fixed(32), nonNegative())
         done(); validateSnapshot(value); value
     }
@@ -93,7 +93,7 @@ object GuardWire {
     }
 
     fun encodeCommandReceipt(value: CommandReceipt): ByteArray = Writer("GRRC").apply {
-        id(value.deviceId); positive(value.deviceEpoch); id(value.keyId); positive(value.sequence); id(value.commandId)
+        id(value.deviceId); positive(value.deviceEpoch); positive(value.authorityEpoch); id(value.keyId); positive(value.sequence); id(value.commandId)
         id(value.requestId); positive(value.requestRevision); i32(value.status.wire); i64(value.processedUnixMillis)
         fixed(value.approvalHash, 32); nonNegative(value.committedPolicyRevision); i32(value.reconciliation); id(value.detailCode)
     }.finish()
@@ -107,7 +107,7 @@ object GuardWire {
     fun sha256(value: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(value)
 
     private fun validateSnapshot(value: RequestSnapshot) {
-        require(value.deviceEpoch > 0 && value.requestRevision > 0 && value.policyRevision >= 0)
+        require(value.deviceEpoch > 0 && value.authorityEpoch > 0 && value.requestRevision > 0 && value.policyRevision >= 0)
         lifetime(value.createdUnixMillis, value.pendingExpiryUnixMillis, 7 * DAY_MILLIS)
     }
     fun validateApproval(value: SignedApproval) {

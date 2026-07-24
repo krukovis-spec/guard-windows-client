@@ -78,7 +78,14 @@ class AndroidApprovalKeyStore(private val keyStore: KeyStore = KeyStore.getInsta
         }
         val privateKey = keyStore.getKey(APPROVAL_KEY_ALIAS, null) as PrivateKey
         val keyInfo = KeyFactory.getInstance(privateKey.algorithm, "AndroidKeyStore").getKeySpec(privateKey, KeyInfo::class.java)
-        check(keyInfo.isInsideSecureHardware) { "software-backed key rejected" }
+        val hardwareBacked = if (android.os.Build.VERSION.SDK_INT >= 31) {
+            keyInfo.securityLevel == KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT ||
+                keyInfo.securityLevel == KeyProperties.SECURITY_LEVEL_STRONGBOX
+        } else {
+            @Suppress("DEPRECATION")
+            keyInfo.isInsideSecureHardware
+        }
+        check(hardwareBacked) { "software-backed key rejected" }
         val chain = keyStore.getCertificateChain(APPROVAL_KEY_ALIAS).map { it.encoded }
         check(chain.isNotEmpty()) { "attestation chain missing" }
         return EnrollmentMaterial(chain.first().let { (keyStore.getCertificate(APPROVAL_KEY_ALIAS) as X509Certificate).publicKey.encoded }, chain)
