@@ -21,6 +21,13 @@ namespace Guard.Windows.Storage
             StateBackupFile = StateFile + ".bak";
             JournalFile = Path.Combine(RootDirectory, "state.journal");
             WriterLeaseFile = StateFile + ".writer.lock";
+            RelayRootDirectory = Path.Combine(RootDirectory, "relay");
+            RelayStateFile = Path.Combine(RelayRootDirectory, "state.dat");
+            RelayStateBackupFile = RelayStateFile + ".bak";
+            RelayJournalFile = Path.Combine(
+                RelayRootDirectory,
+                "state.journal");
+            RelayWriterLeaseFile = RelayStateFile + ".writer.lock";
         }
 
         public string SecurityRootDirectory { get; }
@@ -34,6 +41,16 @@ namespace Guard.Windows.Storage
         public string JournalFile { get; }
 
         public string WriterLeaseFile { get; }
+
+        public string RelayRootDirectory { get; }
+
+        public string RelayStateFile { get; }
+
+        public string RelayStateBackupFile { get; }
+
+        public string RelayJournalFile { get; }
+
+        public string RelayWriterLeaseFile { get; }
 
         public static GuardDataPaths ForCurrentMachine()
         {
