@@ -1,5 +1,24 @@
 # Decisions
 
+## 2026-07-24 - Stage 6 starts Android-first on zero-cost pilot infrastructure
+
+- Decision: the first native parent approval client is Android/Kotlin on Ivan's real fingerprint device and permits signatures only through Android Keystore `AUTH_BIOMETRIC_STRONG`. The shared cabinet remains a PWA; iPhone waits for Mac/Xcode and a real device.
+- Decision: development and the closed family pilot use a separate Guard Cloudflare Workers Free deployment with SQLite Durable Objects/D1 on `workers.dev` and no-cost FCM push. VoicePaste database/namespaces are never reused, and Guard gets a separate least-privilege token. REG.RU is optional static/download hosting only, not relay, authoritative state or key storage.
+- Decision: Ivan authorized a disposable Hyper-V Windows 11 Pro VM for live Guard/SCM/AppLocker/WFP/browser/installer/Cleaner/tamper tests. The host PC remains prohibited; a test CA trusted only in the VM may validate signing mechanics until public release signing is purchased.
+- Why: the available Android device closes the biometric gate now, existing free quotas are ample for one family, and VM isolation allows real Windows evidence without risking Ivan's workstation.
+- Alternatives: wait for both mobile platforms; run a long-lived relay on REG.RU shared hosting; test on the host; buy production signing/hosting immediately. These delay validation, weaken operational isolation or spend before the product passes its gates.
+- Risk: free quotas have no promised public SLA and must fail closed. Hyper-V still needs an elevated feature/host check; public domain, iPhone build route, trusted Windows signing and store accounts remain release decisions.
+- Check: REG.RU/ISPmanager SFTP and existing Cloudflare connection are documented in the local service registry; current official Cloudflare Free/D1/Durable Objects and FCM limits support the closed-pilot design.
+
+## 2026-07-24 - Recovery uses a Guard key, not the Bitwarden master password
+
+- Decision: generate a Guard Recovery Kit with at least 256 bits of randomness. Store its master copy as a protected Bitwarden entry and a second sealed paper copy outside the parent phone and child PC; never send the Bitwarden master password to Guard or derive Guard authority from a human-chosen password.
+- Decision: using the kit requires physical access and a separate elevated local recovery ceremony with delay, revocation of all previous parent approval keys and notification of any still-registered parent device.
+- Why: Bitwarden is suitable protected storage, but reusing its master password would couple two security boundaries and create a memorable transferable Guard secret.
+- Alternatives: email/SMS/TOTP reset, a remembered Guard password/PIN, Bitwarden-only copy, or paid FIDO2 as a current requirement. The first two reproduce known bypasses, the third creates a single loss point, and paid hardware can remain an optional later layer.
+- Risk: compromise of both Bitwarden and the local parent-admin credential remains outside the promised threat boundary. Recovery implementation and destructive-key-rotation behavior still need protocol tests and VM evidence.
+- Check: Ivan confirmed Bitwarden availability; the canonical plan now specifies the separate recovery kit and offline backup.
+
 ## 2026-07-24 - Stage 5 web authority is signed, exact and recoverable
 
 - Decision: authorize only canonical DNS hosts with exact/subtree scope from a signed `guard.web-bundle.v2`. Its signed identity includes catalog, sequence, bundle version, issue/expiry, minimum Guard version, signing-key id and digest; durable catalog/per-bundle floors reject rollback and same-version digest substitution.
