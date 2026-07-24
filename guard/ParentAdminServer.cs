@@ -934,7 +934,8 @@ namespace Guard
                        settings.TaskManagerAllowedUntilUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
             }
 
-            if (ApplicationControlApplier.IsTaskManagerBlocked(settings, utcNow))
+            if (settings != null &&
+                ApplicationControlApplier.IsTaskManagerBlocked(settings, utcNow))
             {
                 return L("Диспетчер задач и системные инструменты заблокированы",
                          "Task Manager and system tools are blocked");
