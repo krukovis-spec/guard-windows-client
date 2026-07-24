@@ -350,6 +350,7 @@ Guard должен выдерживать:
 ### Этап 3. Защитить Windows-аккаунты и сам Guard
 
 - Стандартный ребёнок, отдельный локальный администратор, контроль admin group, Secure Boot и BitLocker readiness.
+- Защита от удаления и отключения обязательна: стандартный ребёнок не должен иметь права остановить, перенастроить или удалить службу, заменить файлы/состояние Guard, снять browser/network policy либо обойти авторизованный uninstall через legacy Cleaner. Обновление, обслуживание и удаление выполняются только по отдельному родительскому ceremony и подписанному release-path.
 - Gate: матрица попыток остановки, удаления, Safe Mode и account escalation на VM.
 - Статус 2026-07-23: code-only readiness и self-protection contracts завершены в `15b8b60`; build, 192/192 safe tests, audit, code-review-loop и независимый review прошли.
 - Остаток gate: BitLocker/browser adapters, полный SCM/install-root/DACL/recovery/service-SID observer и вся tamper/account matrix проверяются только в disposable Windows 11 Pro VM. До этого `CanEnableProtection` остаётся `false`.
@@ -366,11 +367,15 @@ Guard должен выдерживать:
 
 - Local proxy, managed extension, browser policies, service bundles и защита от сетевых обходов.
 - Gate: тестовая матрица браузеров, протоколов и сервисов проходит без HTTPS interception.
+- Статус 2026-07-24: code-only foundation завершён в `b685072`. Добавлены strict canonical DNS host/PSL scopes, подписанный `guard.web-bundle.v2` с monotonic acceptance floors, безопасный HTTP/CONNECT parser, exact Edge/Chrome policy plans, fail-closed readiness, разделение сетевого enforcement и extension UX, минимальный website-request protocol, durable audit outbox и atomic desired-state/reconcile workflow.
+- Проверка: warning-free Release build; 321/321 safe checks, включая 85/85 Stage 5; NuGet audit чист; code-review-loop исправил двенадцать findings и завершился чисто; независимые protocol/state/security reviews не нашли оставшихся P0/P1/P2 в code-only scope.
+- Остаток gate: production adapters для localhost proxy/listeners, DNS rebinding/private-IP checks, browser registry/effective-policy attestation, extension publication, WFP filters, подписанного catalog/PSL verifier, authoritative stores/scheduler/audit dispatcher и service wiring. Crash/recovery и browser/network bypass matrix принимаются только в disposable Windows 11 Pro VM; текущий production composition не может включить web enforcement.
 
 ### Этап 6. Добавить удалённый кабинет и мобильное подтверждение
 
 - Relay, PWA, passkeys, push, четыре решения, офлайн-очередь, русский и английский интерфейсы.
-- Компактный Android/iPhone approval-модуль хранит отдельный ключ подписи в аппаратно защищённом хранилище и требует свежую сильную биометрию на каждую разрешающую или опасную команду без PIN/device-credential fallback.
+- На первом Windows-релизе Android/iPhone используются как устройства родителя: общий кабинет остаётся PWA, а компактный approval-модуль хранит отдельный ключ подписи в аппаратно защищённом хранилище и требует свежую сильную биометрию на каждую разрешающую или опасную команду без PIN/device-credential fallback.
+- Полноценный Guard-агент для телефона ребёнка не нужен для первого Windows-релиза и остаётся отдельным будущим продуктом.
 - Gate: запрос и решение проходят через внешний интернет, повтор старой команды отклоняется, PWA не может самостоятельно создать разрешающую подпись, PIN/device credential и email code нигде не дают право разрешить или отключить защиту.
 
 ### Этап 7. Подготовить выпуск
@@ -407,6 +412,10 @@ Guard должен выдерживать:
 | 2026-07-24 | PWA остаётся общим кабинетом, но строгие `Allow`/disable/maintenance/recovery подписывает компактный Android/iPhone approval-модуль с biometric-only аппаратным ключом | Официальные passkey Android/iPhone допускают PIN/код устройства и не проходят Guard biometric-only gate |
 | 2026-07-24 | Unpackaged-приложение получает исполняемый grant только по exact SHA-256, packaged app — по exact PFN; publisher/product/root остаются service-attested provenance | AppLocker publisher-rule нельзя безопасно объединить с обязательным secure-root условием без расширения allow |
 | 2026-07-24 | Desired revoke коммитится до проверки каталога; перед каждым apply сохраняется deadline `min(now+1m, natural deadline)`, который снимается только после успеха | Сбой catalog/scheduler/sink не должен терять revoke или оставлять старый allow без bounded retry |
+| 2026-07-24 | Web default-deny доверяет только canonical host и exact/subtree scope из подписанного `guard.web-bundle.v2`; catalog и bundle защищены monotonic floors | Child payload, DNS ambiguity и rollback старого bundle не должны расширять разрешение |
+| 2026-07-24 | Website decision атомарно коммитит desired state и bounded reconcile intent; все исходы запроса имеют durable idempotent audit intent | Crash, cancellation или недоступный sink не должны терять revoke, retry или security audit |
+| 2026-07-24 | Защита от остановки, подмены и удаления Guard — обязательный release gate, но абсолютная защита при известном admin/recovery key или физическом offline-доступе не обещается | Реалистичная Windows threat boundary: standard child, Secure Boot, BitLocker и disposable-VM tamper matrix |
+| 2026-07-24 | Первый Windows-релиз использует Android/iPhone только для родительского PWA и biometric-only approval; child Android/iOS agent вынесен в отдельный будущий продукт | Мобильный child control требует самостоятельной архитектуры MDM/VPN/OS policy и не нужен для защиты Windows-ПК |
 
 ## Открытые решения
 

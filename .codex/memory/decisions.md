@@ -1,5 +1,23 @@
 # Decisions
 
+## 2026-07-24 - Stage 5 web authority is signed, exact and recoverable
+
+- Decision: authorize only canonical DNS hosts with exact/subtree scope from a signed `guard.web-bundle.v2`. Its signed identity includes catalog, sequence, bundle version, issue/expiry, minimum Guard version, signing-key id and digest; durable catalog/per-bundle floors reject rollback and same-version digest substitution.
+- Decision: enable network enforcement only with exact low-privilege proxy identity, loopback exclusivity, WFP closure and effective Edge/Chrome managed-policy evidence. Extension UX is a separate exact child-session/browser-digest dependency; future, stale or mismatched evidence blocks website requests without weakening independent enforcement.
+- Decision: accepted website decisions atomically commit desired policy plus a bounded reconcile intent. Accepted, rejected, rate-limited and dependency-failed request outcomes all create stable durable idempotent audit intents.
+- Why: child input, ambiguous HTTP framing, browser proxy overrides, stale extensions, bundle replay, process cancellation and sink/audit outages must not widen access or silently lose a revoke/security event.
+- Alternatives: trust the requested host, DNS-only blocking, HTTPS interception, broad browser proxy state, in-memory retry/audit. These either expand child authority, create bypasses/privacy risk or lose crash recovery, so they are rejected.
+- Risk: real proxy/DNS, registry/effective-policy, extension, WFP, catalog/PSL, store/scheduler/audit and service adapters are still absent. Exact browser/network/crash behavior remains a disposable Windows 11 Pro VM gate.
+- Check: implementation `b685072`; warning-free Release build; 321/321 safe checks including 85/85 Stage 5; clean NuGet audit; review loop fixed twelve findings; focused and independent final reviews found no remaining P0/P1/P2 in code-only scope.
+
+## 2026-07-24 - Windows anti-removal and mobile child control are separate boundaries
+
+- Decision: resisting stop, tamper and uninstall by the standard child is a mandatory Windows release gate. Authorized update/uninstall requires the parent ceremony and signed release path; absolute protection is not promised if the child has administrator/recovery credentials or physical offline access.
+- Decision: the first Windows release uses Android/iPhone only for the parent's PWA and compact biometric-only approval signer. A Guard agent for the child's Android/iPhone is a separate future product.
+- Why: Windows self-protection depends on SCM/DACL/signed installer/Secure Boot/BitLocker evidence, while mobile child control requires different OS facilities such as MDM/VPN/device policy and should not delay the Windows boundary.
+- Risk: Windows anti-removal is not proven until the full stop/delete/Safe Mode/offline/update/uninstall attack matrix passes in a disposable VM. Parent mobile platform order and shared runtime remain open.
+- Check: canonical scope and release gates are recorded in `docs/guard-v2-development-plan.md`; no live Windows or mobile-system action was run.
+
 ## 2026-07-24 - Stage 4 grants and reconciliation stay exact and recoverable
 
 - Decision: unpackaged binaries can execute only through exact SHA-256 grants and packaged apps through exact PFN grants. Publisher/product/secure-root identity is service-attested provenance used to classify update candidates, never a broad executable allow.

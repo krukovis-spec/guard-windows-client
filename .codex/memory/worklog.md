@@ -1,5 +1,16 @@
 # Worklog
 
+## 2026-07-24 - Guard v2 Stage 5 default-deny web foundation
+
+- Committed `b685072` (`feat(v2): add default-deny web foundation`) on `codex/guard-v2-implementation`.
+- Added strict canonical DNS host/PSL exact/subtree decisions; signed `guard.web-bundle.v2` envelopes with catalog/per-bundle rollback floors; a header-only HTTP/CONNECT parser; exact Edge/Chrome managed-policy plans; and fail-closed proxy/WFP/browser/extension readiness.
+- Kept authoritative network enforcement independent from extension UX. Future, stale or wrong-session extension evidence blocks child requests, while exact low-privilege proxy SID, loopback exclusivity, WFP closure and effective browser policy remain mandatory for enforcement.
+- Website request payloads stay opaque. Service-owned observations bind host/PSL/bundle identity; desired state and bounded reconciliation intent commit atomically; every request outcome has a durable idempotent audit intent.
+- Verification: warning-free Release solution build; 321/321 safe checks, including 85/85 Stage 5; clean NuGet vulnerability audit and staged secret/diff checks. The review loop fixed twelve findings and finished clean; focused protocol/state reviews and the independent final security review found no remaining P0/P1/P2 in the code-only scope.
+- No Guard, service executable, installer, Cleaner, helper, browser policy, AppLocker, WFP, firewall, hosts, registry, scheduled-task, account or other live system action was run. User-owned `Output`, `.gstack`, review files and Yandex.Disk conflict copies remain unstaged.
+- Remaining gate: production proxy/DNS/browser/extension/WFP/catalog/store/scheduler/audit/service adapters plus disposable Windows 11 Pro crash/recovery and browser/network bypass matrix.
+- Product boundary confirmed: anti-stop/tamper/uninstall is mandatory for the Windows release and remains a VM/release gate; the first mobile deliverable is parent PWA plus compact native Android/iPhone approval signing, not a child-phone Guard agent.
+
 ## 2026-07-24 - Guard v2 Stage 4 default-deny application foundation
 
 - Committed and pushed `35c79ca` (`feat(v2): add default-deny application foundation`) on `codex/guard-v2-implementation`.
