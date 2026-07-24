@@ -1,7 +1,7 @@
-import type { CiphertextSnapshot, RequestSnapshot, SnapshotVerifier } from "./types";
+import type { EncryptedRelayFrame, RequestSnapshot, SnapshotVerifier } from "./types";
 
 export async function verifiedSnapshots(
-  encrypted: readonly CiphertextSnapshot[],
+  encrypted: readonly EncryptedRelayFrame[],
   verifier: SnapshotVerifier
 ): Promise<readonly RequestSnapshot[]> {
   const results = await Promise.all(encrypted.map((snapshot) => verifier.decryptAndVerify(snapshot)));

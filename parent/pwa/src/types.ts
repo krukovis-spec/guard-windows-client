@@ -13,9 +13,9 @@ export interface RequestSnapshot {
   readonly status: "pending" | "resolved" | "expired";
 }
 
-export interface CiphertextSnapshot {
-  readonly requestId: string;
-  readonly ciphertext: Uint8Array;
+export interface EncryptedRelayFrame {
+  readonly frameId: string;
+  readonly encodedFrame: ArrayBuffer;
   readonly receivedAt: string;
 }
 
@@ -25,7 +25,7 @@ export interface VerificationResult {
 }
 
 export interface SnapshotVerifier {
-  decryptAndVerify(input: CiphertextSnapshot): Promise<VerificationResult>;
+  decryptAndVerify(input: EncryptedRelayFrame): Promise<VerificationResult>;
 }
 
 export interface ApprovalIntent {
@@ -63,6 +63,6 @@ export interface ParentTransport {
   completeRegistration(credential: PasskeyCredentialDto): Promise<void>;
   createLoginOptions(): Promise<PasskeyOptions>;
   completeLogin(credential: PasskeyCredentialDto): Promise<void>;
-  listSnapshots(): Promise<readonly CiphertextSnapshot[]>;
+  listSnapshots(): Promise<readonly EncryptedRelayFrame[]>;
   createApprovalIntent(input: ApprovalIntent): Promise<ApprovalIntentLocator>;
 }
