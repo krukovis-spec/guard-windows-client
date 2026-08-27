@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Guard.Application\Guard.Application.csproj" />
+    <ProjectReference Include="..\Guard.Contracts\Guard.Contracts.csproj" />
+    <ProjectReference Include="..\Guard.Domain\Guard.Domain.csproj" />
+    <ProjectReference Include="..\Guard.Protocol\Guard.Protocol.csproj" />
+    <ProjectReference Include="..\Guard.Storage\Guard.Storage.csproj" />
+    <ProjectReference Include="..\Guard.Windows\Guard.Windows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="[10.0.10]" />
+  </ItemGroup>
+</Project>

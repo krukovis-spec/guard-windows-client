@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "guard-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-07-26",
+  "durable_objects": {
+    "bindings": [{ "name": "DEVICE_MAILBOX", "class_name": "DeviceMailbox" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DeviceMailbox"] }]
+}

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "source": "tests/Guard.RelayProtocol.Tests",
+  "requestSnapshotSha256": "ff9e3ea5ba9748676252fc26fc56f8c6df0eba30a3107c4620917c770af8c62e",
+  "approvalSignatureInputSha256": "446bfde3db2af78d5d0d103d9583bb1693d8206287bcf43ff4aa2b3e14c84819",
+  "notes": "All values are deterministic fixtures; signatures are shaped P1363 test bytes and are not valid cryptographic signatures."
+}
