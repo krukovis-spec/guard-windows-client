@@ -24,8 +24,8 @@ import java.util.Base64
 
 const val APPROVAL_KEY_ALIAS = "guard.parent.approval.v1"
 
-fun interface SnapshotDecryptor { fun decrypt(locator: String): ByteArray }
-fun interface DeviceSnapshotVerifier { fun verify(snapshotEnvelope: ByteArray): VerifiedSnapshot }
+interface SnapshotDecryptor { fun decrypt(locator: String): ByteArray }
+interface DeviceSnapshotVerifier { fun verify(snapshotEnvelope: ByteArray): VerifiedSnapshot }
 data class VerifiedSnapshot(val snapshot: RequestSnapshot, val deviceKeyId: String)
 
 /** UI must call this before showing evidence. A decryptor alone is never sufficient. */

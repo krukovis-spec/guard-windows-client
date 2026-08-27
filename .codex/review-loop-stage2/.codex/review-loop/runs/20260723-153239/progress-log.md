@@ -1,0 +1,36 @@
+- 2026-07-23T12:32:39+00:00 START run mode=single max_passes=1 scope=diff
+- 2026-07-23T12:32:39+00:00 DONE discover
+- 2026-07-23T12:32:47+00:00 START pass 1
+- 2026-07-23T12:32:47+00:00 START aspect-plan pass=1 mode=broad
+- 2026-07-23T12:38:31+00:00 SET aspect requirements status=clean
+- 2026-07-23T12:38:31+00:00 SET aspect core_logic status=fixed
+- 2026-07-23T12:38:31+00:00 SET aspect edge_cases status=fixed
+- 2026-07-23T12:38:31+00:00 SET aspect tests status=clean
+- 2026-07-23T12:38:31+00:00 SET aspect security_privacy status=fixed
+- 2026-07-23T12:38:31+00:00 SET aspect tool_safety status=not_applicable
+- 2026-07-23T12:38:31+00:00 SET aspect data_encoding_backcompat status=clean
+- 2026-07-23T12:38:32+00:00 SET aspect integration_runtime status=fixed
+- 2026-07-23T12:38:32+00:00 SET aspect observability status=clean
+- 2026-07-23T12:38:32+00:00 SET aspect performance_cost status=clean
+- 2026-07-23T12:38:32+00:00 SET aspect ux_accessibility_i18n status=not_applicable
+- 2026-07-23T12:38:32+00:00 SET aspect devex_docs status=clean
+- 2026-07-23T12:38:32+00:00 SET aspect release_ci_rollback status=clean
+- 2026-07-23T12:38:32+00:00 SET aspect domain_compliance status=clean
+- 2026-07-23T12:39:28+00:00 SET aspect integration_runtime status=fixed
+- 2026-07-23T12:45:17+00:00 START command git diff check
+- 2026-07-23T12:45:17+00:00 DONE command git diff check exit=0
+- 2026-07-23T12:45:37+00:00 START command Release solution build
+- 2026-07-23T12:45:44+00:00 DONE command Release solution build exit=0
+- 2026-07-23T12:46:41+00:00 START command 152 safe tests
+- 2026-07-23T12:46:43+00:00 DONE command 152 safe tests exit=0
+- 2026-07-23T12:46:50+00:00 START command NuGet vulnerability scan
+- 2026-07-23T12:47:05+00:00 DONE command NuGet vulnerability scan exit=0
+- 2026-07-23T12:47:30+00:00 DONE pass 1 status=clean
+- 2026-07-23T16:16:09+00:00 START command Final staged diff check
+- 2026-07-23T16:16:09+00:00 DONE command Final staged diff check exit=0
+- 2026-07-23T16:16:09+00:00 START command Final Release solution build
+- 2026-07-23T16:16:11+00:00 DONE command Final Release solution build exit=0
+- 2026-07-23T16:16:11+00:00 START command Final NuGet vulnerability audit
+- 2026-07-23T16:16:21+00:00 DONE command Final NuGet vulnerability audit exit=0
+- 2026-07-23T16:16:38+00:00 START command Final 159 safe tests
+- 2026-07-23T16:16:49+00:00 DONE command Final 159 safe tests exit=0

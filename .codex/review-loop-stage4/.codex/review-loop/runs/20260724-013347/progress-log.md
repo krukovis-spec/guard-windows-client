@@ -1,0 +1,12 @@
+- 2026-07-23T22:33:47+00:00 START run mode=single max_passes=1 scope=diff
+- 2026-07-23T22:33:47+00:00 DONE discover
+- 2026-07-23T22:33:54+00:00 START pass 1
+- 2026-07-23T22:33:54+00:00 START aspect-plan pass=1 mode=broad
+- 2026-07-23T22:38:02+00:00 START command release-build
+- 2026-07-23T22:38:29+00:00 DONE command release-build exit=0
+- 2026-07-23T22:38:50+00:00 START command all-safe-tests
+- 2026-07-23T22:38:55+00:00 DONE command all-safe-tests exit=0
+- 2026-07-23T22:39:18+00:00 START command git-diff-check
+- 2026-07-23T22:39:18+00:00 DONE command git-diff-check exit=0
+- 2026-07-23T22:39:28+00:00 START command nuget-vulnerability-audit
+- 2026-07-23T22:39:50+00:00 DONE command nuget-vulnerability-audit exit=0

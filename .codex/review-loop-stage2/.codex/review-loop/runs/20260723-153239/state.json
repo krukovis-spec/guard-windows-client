@@ -1,0 +1,331 @@
+{
+  "status": "clean",
+  "run_id": "20260723-153239",
+  "mode": "single",
+  "max_passes": 1,
+  "current_pass": 1,
+  "scope": "diff",
+  "report_only": false,
+  "quality_score": true,
+  "aspect_policy": "broad_first_then_dirty",
+  "aspect_catalog": [
+    {
+      "id": "requirements",
+      "label": "Requirements and product fit",
+      "prompt": "Does the change satisfy the user request without scope drift?"
+    },
+    {
+      "id": "core_logic",
+      "label": "Core logic",
+      "prompt": "Are the main algorithms, data flow, and invariants correct?"
+    },
+    {
+      "id": "edge_cases",
+      "label": "Edge cases and contracts",
+      "prompt": "Do boundary values, empty inputs, errors, concurrency, and API contracts hold?"
+    },
+    {
+      "id": "tests",
+      "label": "Tests and regressions",
+      "prompt": "Do tests prove the changed behavior and relevant failure paths?"
+    },
+    {
+      "id": "security_privacy",
+      "label": "Security, privacy, and secrets",
+      "prompt": "Are auth, secrets, private data, injection, paths, and dependencies safe?"
+    },
+    {
+      "id": "tool_safety",
+      "label": "LLM and tool trust boundaries",
+      "prompt": "Are model/tool outputs treated as untrusted and are external actions bounded?"
+    },
+    {
+      "id": "data_encoding_backcompat",
+      "label": "Data integrity, encoding, migrations, and backcompat",
+      "prompt": "Are stored data, encodings, formats, migrations, and old outputs preserved?"
+    },
+    {
+      "id": "integration_runtime",
+      "label": "Integration, runtime, reliability, and cleanup",
+      "prompt": "Does this work in the real runtime with correct resource cleanup and retries?"
+    },
+    {
+      "id": "observability",
+      "label": "Observability, logs, metrics, and debuggability",
+      "prompt": "Can failures be diagnosed without leaking secrets or hiding root causes?"
+    },
+    {
+      "id": "performance_cost",
+      "label": "Performance, cost, and scalability",
+      "prompt": "Does the change avoid avoidable slow paths, duplicate work, and waste?"
+    },
+    {
+      "id": "ux_accessibility_i18n",
+      "label": "UX, UI, accessibility, and i18n",
+      "prompt": "Does the user-facing behavior remain clear, reachable, and language-safe?"
+    },
+    {
+      "id": "devex_docs",
+      "label": "Developer experience, docs, API, and examples",
+      "prompt": "Would a maintainer or caller know how to use and verify this change?"
+    },
+    {
+      "id": "release_ci_rollback",
+      "label": "Release, deploy, rollback, and CI",
+      "prompt": "Are deployment, CI, rollback, and versioning implications handled?"
+    },
+    {
+      "id": "domain_compliance",
+      "label": "Domain-specific risk and compliance",
+      "prompt": "Are domain rules, client data, legal/business constraints, and project policies respected?"
+    }
+  ],
+  "dirty_aspects": [],
+  "aspect_passes": [
+    {
+      "created_at": "2026-07-23T12:38:31+00:00",
+      "pass": 1,
+      "aspect": "requirements",
+      "status": "clean",
+      "notes": "Stage 2 scope matches the approved service-boundary increment; no live protection actions.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:31+00:00",
+      "pass": 1,
+      "aspect": "core_logic",
+      "status": "fixed",
+      "notes": "Role/name, authoritative-writer, startup, and state invariants reviewed; mismatch finding fixed.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:31+00:00",
+      "pass": 1,
+      "aspect": "edge_cases",
+      "status": "fixed",
+      "notes": "Malformed frames, disconnects, token failures, rollback, and concurrency are bounded and tested.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:31+00:00",
+      "pass": 1,
+      "aspect": "tests",
+      "status": "clean",
+      "notes": "Pure harnesses cover service, storage, crypto, account, IPC, policy, readiness, protocol, and legacy containment.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:31+00:00",
+      "pass": 1,
+      "aspect": "security_privacy",
+      "status": "fixed",
+      "notes": "Security guidance gate completed; pipe instance, ACL ordering, and critical leaf ACL findings fixed.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:31+00:00",
+      "pass": 1,
+      "aspect": "tool_safety",
+      "status": "not_applicable",
+      "notes": "Product code contains no LLM or agent tool boundary.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:31+00:00",
+      "pass": 1,
+      "aspect": "data_encoding_backcompat",
+      "status": "clean",
+      "notes": "Versioned bounded canonical state and protocol codecs fail closed on unknown or corrupt data.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:32+00:00",
+      "pass": 1,
+      "aspect": "integration_runtime",
+      "status": "fixed",
+      "notes": "SCM lifecycle, LocalSystem gate, zero-gap listener handoff, rollback cleanup, and disposal reviewed.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:32+00:00",
+      "pass": 1,
+      "aspect": "observability",
+      "status": "clean",
+      "notes": "Fatal startup/runtime failures produce nonzero status and host logging without payload or secret disclosure.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:32+00:00",
+      "pass": 1,
+      "aspect": "performance_cost",
+      "status": "clean",
+      "notes": "State and frame sizes are bounded; singleton limiter and serial endpoint lifecycle avoid unbounded work.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:32+00:00",
+      "pass": 1,
+      "aspect": "ux_accessibility_i18n",
+      "status": "not_applicable",
+      "notes": "This increment has no user interface.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:32+00:00",
+      "pass": 1,
+      "aspect": "devex_docs",
+      "status": "clean",
+      "notes": "Project layout, exact SDK/package lock, and explicit fail-closed placeholders are self-describing; plan update follows commit.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:32+00:00",
+      "pass": 1,
+      "aspect": "release_ci_rollback",
+      "status": "clean",
+      "notes": "Exact official package lock, vulnerability scan, checkpoint branch, and explicit VM/release gates are preserved.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:38:32+00:00",
+      "pass": 1,
+      "aspect": "domain_compliance",
+      "status": "clean",
+      "notes": "No Guard executable or Windows protection mechanism was run; user-owned files remain outside scope.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T12:39:28+00:00",
+      "pass": 1,
+      "aspect": "integration_runtime",
+      "status": "fixed",
+      "notes": "Endpoint stop now drains the actual run task before boundary release, independent of caller timeout.",
+      "finding_id": "S2-STOP-DRAIN",
+      "reopened": []
+    }
+  ],
+  "scores": [
+    {
+      "created_at": "2026-07-23T12:47:25+00:00",
+      "pass": 1,
+      "before_fixes": 6.0,
+      "after_fixes": 9.0,
+      "confidence": 9,
+      "reasons": "Before fixes, pipe-instance creation rights, listener handoff, leaf ACLs, and shutdown ordering left exploitable or reliability-critical gaps. After fixes, one authoritative writer, bounded codecs, LocalSystem-only DPAPI, exact SID ACLs, zero-gap listeners, and fail-closed startup are independently reviewed.",
+      "verification_summary": "Release solution build passed; 152/152 safe tests passed; NuGet vulnerable-package scan found none; independent focused review CLEAN."
+    },
+    {
+      "created_at": "2026-07-23T16:17:03+00:00",
+      "pass": 1,
+      "before_fixes": 5.5,
+      "after_fixes": 9.2,
+      "confidence": 9,
+      "reasons": "Before fixes, bootstrap, production IPC, fresh binding, native pipe rights, listener lifecycle, leaf ACLs, indirect admin membership, token integrity, and shutdown ordering contained exploitable or deployment-blocking gaps. After fixes, the code-only Stage 2 boundary is fail-closed and independently accepted.",
+      "verification_summary": "Exact staged tree 6a94830515b81a5ef0b53589b0aef615a86e772e; Release solution build; 159/159 safe tests; NuGet vulnerability audit clean; staged diff/allowlist/secret scans clean; two independent reviews found no P0/P1/P2. Real Windows behavior remains a disposable-VM gate."
+    }
+  ],
+  "heartbeat_id": null,
+  "phase": "pass_complete",
+  "last_started_step": "pass",
+  "last_completed_step": "pass",
+  "clean_pass_after_last_fix": true,
+  "passes_to_clean": 1,
+  "created_at": "2026-07-23T12:32:39+00:00",
+  "updated_at": "2026-07-23T16:17:03+00:00",
+  "last_aspect_plan": {
+    "pass": 1,
+    "mode": "broad",
+    "aspects": [
+      {
+        "id": "requirements",
+        "label": "Requirements and product fit",
+        "prompt": "Does the change satisfy the user request without scope drift?"
+      },
+      {
+        "id": "core_logic",
+        "label": "Core logic",
+        "prompt": "Are the main algorithms, data flow, and invariants correct?"
+      },
+      {
+        "id": "edge_cases",
+        "label": "Edge cases and contracts",
+        "prompt": "Do boundary values, empty inputs, errors, concurrency, and API contracts hold?"
+      },
+      {
+        "id": "tests",
+        "label": "Tests and regressions",
+        "prompt": "Do tests prove the changed behavior and relevant failure paths?"
+      },
+      {
+        "id": "security_privacy",
+        "label": "Security, privacy, and secrets",
+        "prompt": "Are auth, secrets, private data, injection, paths, and dependencies safe?"
+      },
+      {
+        "id": "tool_safety",
+        "label": "LLM and tool trust boundaries",
+        "prompt": "Are model/tool outputs treated as untrusted and are external actions bounded?"
+      },
+      {
+        "id": "data_encoding_backcompat",
+        "label": "Data integrity, encoding, migrations, and backcompat",
+        "prompt": "Are stored data, encodings, formats, migrations, and old outputs preserved?"
+      },
+      {
+        "id": "integration_runtime",
+        "label": "Integration, runtime, reliability, and cleanup",
+        "prompt": "Does this work in the real runtime with correct resource cleanup and retries?"
+      },
+      {
+        "id": "observability",
+        "label": "Observability, logs, metrics, and debuggability",
+        "prompt": "Can failures be diagnosed without leaking secrets or hiding root causes?"
+      },
+      {
+        "id": "performance_cost",
+        "label": "Performance, cost, and scalability",
+        "prompt": "Does the change avoid avoidable slow paths, duplicate work, and waste?"
+      },
+      {
+        "id": "ux_accessibility_i18n",
+        "label": "UX, UI, accessibility, and i18n",
+        "prompt": "Does the user-facing behavior remain clear, reachable, and language-safe?"
+      },
+      {
+        "id": "devex_docs",
+        "label": "Developer experience, docs, API, and examples",
+        "prompt": "Would a maintainer or caller know how to use and verify this change?"
+      },
+      {
+        "id": "release_ci_rollback",
+        "label": "Release, deploy, rollback, and CI",
+        "prompt": "Are deployment, CI, rollback, and versioning implications handled?"
+      },
+      {
+        "id": "domain_compliance",
+        "label": "Domain-specific risk and compliance",
+        "prompt": "Are domain rules, client data, legal/business constraints, and project policies respected?"
+      }
+    ],
+    "dirty_aspects": [],
+    "global_gates": [
+      "git diff --check",
+      "compile/lint",
+      "targeted tests"
+    ]
+  }
+}

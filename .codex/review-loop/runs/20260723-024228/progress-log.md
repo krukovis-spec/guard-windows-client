@@ -1,0 +1,36 @@
+- 2026-07-22T23:42:28+00:00 START run mode=single max_passes=1 scope=Guard v2 foundation diff: src/Guard.Contracts, src/Guard.Domain, src/Guard.Application, src/Guard.Protocol, matching tests, guard.sln; exclude user artifacts and legacy binary
+- 2026-07-22T23:42:33+00:00 DONE discover
+- 2026-07-22T23:42:33+00:00 START pass 1
+- 2026-07-22T23:42:33+00:00 START aspect-plan pass=1 mode=broad
+- 2026-07-23T00:50:43+00:00 SET aspect requirements status=clean
+- 2026-07-23T00:50:44+00:00 SET aspect core_logic status=fixed
+- 2026-07-23T00:50:44+00:00 SET aspect edge_cases status=fixed
+- 2026-07-23T00:50:44+00:00 SET aspect tests status=clean
+- 2026-07-23T00:50:44+00:00 SET aspect security_privacy status=fixed
+- 2026-07-23T00:50:44+00:00 SET aspect tool_safety status=not_applicable
+- 2026-07-23T00:50:45+00:00 SET aspect data_encoding_backcompat status=fixed
+- 2026-07-23T00:50:45+00:00 SET aspect integration_runtime status=fixed
+- 2026-07-23T00:50:45+00:00 SET aspect observability status=not_applicable
+- 2026-07-23T00:50:45+00:00 SET aspect performance_cost status=clean
+- 2026-07-23T00:50:45+00:00 SET aspect ux_accessibility_i18n status=not_applicable
+- 2026-07-23T00:50:46+00:00 SET aspect devex_docs status=clean
+- 2026-07-23T00:50:46+00:00 SET aspect release_ci_rollback status=not_applicable
+- 2026-07-23T00:50:46+00:00 SET aspect domain_compliance status=clean
+- 2026-07-23T00:50:53+00:00 DONE pass 1 status=single_pass_complete
+- 2026-07-23T00:51:23+00:00 START command release-build
+- 2026-07-23T00:51:24+00:00 DONE command release-build exit=0
+- 2026-07-23T00:51:24+00:00 START command legacy-tests
+- 2026-07-23T00:51:25+00:00 DONE command legacy-tests exit=0
+- 2026-07-23T00:51:25+00:00 START command v2-tests
+- 2026-07-23T00:51:25+00:00 DONE command v2-tests exit=0
+- 2026-07-23T00:51:25+00:00 START command protocol-tests
+- 2026-07-23T00:51:25+00:00 DONE command protocol-tests exit=0
+- 2026-07-23T00:51:26+00:00 START command policy-tests
+- 2026-07-23T00:51:26+00:00 DONE command policy-tests exit=0
+- 2026-07-23T00:51:26+00:00 START command readiness-tests
+- 2026-07-23T00:51:26+00:00 DONE command readiness-tests exit=0
+- 2026-07-23T00:51:34+00:00 SET aspect core_logic status=clean
+- 2026-07-23T00:51:35+00:00 SET aspect edge_cases status=clean
+- 2026-07-23T00:51:35+00:00 SET aspect security_privacy status=clean
+- 2026-07-23T00:51:35+00:00 SET aspect data_encoding_backcompat status=clean
+- 2026-07-23T00:51:35+00:00 SET aspect integration_runtime status=clean

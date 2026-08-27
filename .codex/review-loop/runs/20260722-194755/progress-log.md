@@ -1,0 +1,59 @@
+- 2026-07-22T16:47:55+00:00 START run mode=single max_passes=1 scope=diff
+- 2026-07-22T16:47:55+00:00 DONE discover
+- 2026-07-22T16:47:55+00:00 START pass 1
+- 2026-07-22T16:47:56+00:00 START aspect-plan pass=1 mode=broad
+- 2026-07-22T16:51:57+00:00 START verification
+- 2026-07-22T16:51:57+00:00 START command git diff --check
+- 2026-07-22T16:51:57+00:00 DONE command git diff --check exit=0
+- 2026-07-22T16:51:57+00:00 START command Release build
+- 2026-07-22T16:51:58+00:00 DONE command Release build exit=0
+- 2026-07-22T16:51:58+00:00 START command Guard.Tests 39 checks
+- 2026-07-22T16:51:59+00:00 DONE command Guard.Tests 39 checks exit=0
+- 2026-07-22T16:52:00+00:00 START command NuGet vulnerable packages
+- 2026-07-22T16:52:01+00:00 DONE command NuGet vulnerable packages exit=0
+- 2026-07-22T16:52:01+00:00 DONE verification
+- 2026-07-22T16:52:42+00:00 START command Masked secret scan
+- 2026-07-22T16:52:42+00:00 DONE command Masked secret scan exit=1
+- 2026-07-22T16:53:10+00:00 START command Masked secret scan retry
+- 2026-07-22T16:53:11+00:00 DONE command Masked secret scan retry exit=0
+- 2026-07-22T17:53:41+00:00 START command Final diff check
+- 2026-07-22T17:53:41+00:00 DONE command Final diff check exit=0
+- 2026-07-22T17:53:41+00:00 START command Final Release build
+- 2026-07-22T17:53:42+00:00 DONE command Final Release build exit=0
+- 2026-07-22T17:53:42+00:00 START command Guard.Tests 44 checks
+- 2026-07-22T17:53:43+00:00 DONE command Guard.Tests 44 checks exit=0
+- 2026-07-22T17:53:43+00:00 START command Final NuGet vulnerable packages
+- 2026-07-22T17:53:44+00:00 DONE command Final NuGet vulnerable packages exit=0
+- 2026-07-22T17:53:44+00:00 START command Final masked secret scan
+- 2026-07-22T17:53:44+00:00 DONE command Final masked secret scan exit=0
+- 2026-07-22T17:54:09+00:00 SET aspect requirements status=clean
+- 2026-07-22T17:54:09+00:00 SET aspect core_logic status=clean
+- 2026-07-22T17:54:09+00:00 SET aspect edge_cases status=clean
+- 2026-07-22T17:54:09+00:00 SET aspect tests status=clean
+- 2026-07-22T17:54:09+00:00 SET aspect security_privacy status=clean
+- 2026-07-22T17:54:09+00:00 SET aspect tool_safety status=clean
+- 2026-07-22T17:54:09+00:00 SET aspect data_encoding_backcompat status=clean
+- 2026-07-22T17:54:09+00:00 SET aspect integration_runtime status=clean
+- 2026-07-22T17:54:09+00:00 SET aspect observability status=clean
+- 2026-07-22T17:54:09+00:00 SET aspect performance_cost status=clean
+- 2026-07-22T17:54:10+00:00 SET aspect ux_accessibility_i18n status=clean
+- 2026-07-22T17:54:10+00:00 SET aspect devex_docs status=clean
+- 2026-07-22T17:54:10+00:00 SET aspect release_ci_rollback status=clean
+- 2026-07-22T17:54:10+00:00 SET aspect domain_compliance status=clean
+- 2026-07-22T18:03:03+00:00 START command Post-fix diff check
+- 2026-07-22T18:03:03+00:00 DONE command Post-fix diff check exit=0
+- 2026-07-22T18:03:03+00:00 START command Post-fix Release build
+- 2026-07-22T18:03:04+00:00 DONE command Post-fix Release build exit=0
+- 2026-07-22T18:03:04+00:00 START command Guard.Tests 45 checks
+- 2026-07-22T18:03:05+00:00 DONE command Guard.Tests 45 checks exit=0
+- 2026-07-22T18:03:05+00:00 START command Post-fix NuGet audit
+- 2026-07-22T18:03:06+00:00 DONE command Post-fix NuGet audit exit=0
+- 2026-07-22T18:03:06+00:00 START command Post-fix masked secret scan
+- 2026-07-22T18:03:06+00:00 DONE command Post-fix masked secret scan exit=0
+- 2026-07-22T18:03:06+00:00 START command UTF8 mojibake check
+- 2026-07-22T18:03:07+00:00 DONE command UTF8 mojibake check exit=2
+- 2026-07-22T18:03:26+00:00 START command UTF8 mojibake check retry
+- 2026-07-22T18:03:26+00:00 DONE command UTF8 mojibake check retry exit=0
+- 2026-07-22T18:03:26+00:00 START command Inno post-confirmation hook compile
+- 2026-07-22T18:03:28+00:00 DONE command Inno post-confirmation hook compile exit=0
+- 2026-07-22T18:11:34+00:00 DONE pass 1 status=clean

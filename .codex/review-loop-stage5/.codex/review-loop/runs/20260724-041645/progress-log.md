@@ -1,0 +1,35 @@
+- 2026-07-24T01:16:45+00:00 START run mode=single max_passes=1 scope=diff
+- 2026-07-24T01:16:50+00:00 DONE discover
+- 2026-07-24T01:16:55+00:00 START pass 1
+- 2026-07-24T01:16:56+00:00 START aspect-plan pass=1 mode=broad
+- 2026-07-24T02:08:43+00:00 START command safe-tests-321
+- 2026-07-24T02:08:46+00:00 DONE command safe-tests-321 exit=0
+- 2026-07-24T02:08:53+00:00 START command release-build-warnaserror
+- 2026-07-24T02:09:48+00:00 DONE command release-build-warnaserror exit=0
+- 2026-07-24T02:09:54+00:00 START command nuget-vulnerability-audit
+- 2026-07-24T02:10:02+00:00 DONE command nuget-vulnerability-audit exit=0
+- 2026-07-24T03:12:09+00:00 START command final-release-build-warnaserror
+- 2026-07-24T03:13:00+00:00 DONE command final-release-build-warnaserror exit=0
+- 2026-07-24T03:13:08+00:00 START command final-safe-tests-321
+- 2026-07-24T03:13:13+00:00 DONE command final-safe-tests-321 exit=0
+- 2026-07-24T03:13:21+00:00 START command final-nuget-vulnerability-audit
+- 2026-07-24T03:13:56+00:00 DONE command final-nuget-vulnerability-audit exit=0
+- 2026-07-24T03:31:58+00:00 START command post-review-release-build
+- 2026-07-24T03:32:52+00:00 DONE command post-review-release-build exit=0
+- 2026-07-24T03:33:01+00:00 START command post-review-safe-tests-321
+- 2026-07-24T03:33:06+00:00 DONE command post-review-safe-tests-321 exit=0
+- 2026-07-24T03:34:07+00:00 SET aspect requirements status=clean
+- 2026-07-24T03:34:07+00:00 SET aspect core_logic status=fixed
+- 2026-07-24T03:34:07+00:00 SET aspect edge_cases status=fixed
+- 2026-07-24T03:34:07+00:00 SET aspect tests status=fixed
+- 2026-07-24T03:34:08+00:00 SET aspect security_privacy status=fixed
+- 2026-07-24T03:34:08+00:00 SET aspect tool_safety status=clean
+- 2026-07-24T03:34:08+00:00 SET aspect data_encoding_backcompat status=fixed
+- 2026-07-24T03:34:08+00:00 SET aspect integration_runtime status=fixed
+- 2026-07-24T03:34:08+00:00 SET aspect observability status=fixed
+- 2026-07-24T03:34:08+00:00 SET aspect performance_cost status=clean
+- 2026-07-24T03:34:08+00:00 SET aspect ux_accessibility_i18n status=clean
+- 2026-07-24T03:34:08+00:00 SET aspect devex_docs status=clean
+- 2026-07-24T03:34:08+00:00 SET aspect release_ci_rollback status=clean
+- 2026-07-24T03:34:08+00:00 SET aspect domain_compliance status=clean
+- 2026-07-24T03:34:16+00:00 DONE pass 1 status=clean

@@ -1,0 +1,86 @@
+{
+  "version": "2.0.0",
+  "date": "2026-07-23T03:52:00+03:00",
+  "mode": "daily",
+  "scope": "code",
+  "diff_mode": true,
+  "phases_run": [0, 1, 7, 9, 10, 11, 12, 13, 14],
+  "architecture_summary": "Guard v2 foundation is a side-by-side strangler layer: bounded contracts and codecs, immutable domain state, CAS-oriented application use cases, and safe console tests. No Windows service, named-pipe host, cloud endpoint, browser extension, privileged adapter, or live enforcement action exists in this increment.",
+  "attack_surface": {
+    "code": {
+      "public_endpoints": 0,
+      "authenticated": 0,
+      "admin": 0,
+      "api": 0,
+      "uploads": 0,
+      "integrations": 0,
+      "background_jobs": 0,
+      "websockets": 0
+    },
+    "infrastructure": {
+      "ci_workflows": 0,
+      "webhook_receivers": 0,
+      "container_configs": 0,
+      "iac_configs": 0,
+      "deploy_targets": 0,
+      "secret_management": "No production secrets in scope; future service state and private keys remain behind unimplemented ports."
+    }
+  },
+  "stride_summary": {
+    "spoofing": "Canonical parent trust anchors and exact pending-request validation are modeled; real client-token and ECDSA verification remain service work.",
+    "tampering": "Signed canonical commands, CAS state transitions, strict codecs, and reducer invariants fail closed.",
+    "repudiation": "Sequence and command-id state is durable by contract; production audit journal remains service work.",
+    "information_disclosure": "Setup stores a secret hash and public trust anchor only; production encrypted storage remains service work.",
+    "denial_of_service": "IPC frames, read time, replay history, payload size, and concurrent handler count are bounded by contract.",
+    "elevation_of_privilege": "Child/admin/proxy verb allowlists exist; real named-pipe SID and DACL enforcement remains service work."
+  },
+  "data_classification": {
+    "restricted": ["setup secret before display", "future service private keys"],
+    "confidential": ["device identifiers", "access requests and parent decisions", "security readiness state"],
+    "internal": ["stable readiness codes", "reconciliation status"],
+    "public": ["parent public-key trust anchors", "protocol version metadata"]
+  },
+  "findings": [],
+  "supply_chain_summary": {
+    "direct_deps": 0,
+    "transitive_deps": 0,
+    "critical_cves": 0,
+    "high_cves": 0,
+    "install_scripts": 0,
+    "lockfile_present": false,
+    "lockfile_tracked": false,
+    "tools_skipped": []
+  },
+  "filter_stats": {
+    "candidates_scanned": 12,
+    "hard_exclusion_filtered": 0,
+    "confidence_gate_filtered": 0,
+    "verification_filtered": 12,
+    "reported": 0
+  },
+  "resolved_during_audit": 12,
+  "verification": {
+    "release_build": "passed",
+    "safe_tests": "84/84 passed",
+    "independent_review": "clean, no remaining P0/P1/P2",
+    "nuget_vulnerability_scan": "no vulnerable packages reported"
+  },
+  "totals": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "tentative": 0
+  },
+  "trend": {
+    "prior_report_date": "2026-07-22T01:03:54+03:00",
+    "resolved": 2,
+    "persistent": 11,
+    "new": 0,
+    "direction": "improving_with_scope_caveat"
+  },
+  "notes": [
+    "The prior report was comprehensive; this report is limited to the new Guard v2 foundation scope, so persistent legacy findings were not re-audited here.",
+    ".gstack is not ignored by the repository and remains deliberately unstaged with other user-owned review artifacts.",
+    "No Guard executable, installer, Cleaner, AppLocker, firewall, hosts, registry, scheduled-task, service, or other live system action was run."
+  ]
+}

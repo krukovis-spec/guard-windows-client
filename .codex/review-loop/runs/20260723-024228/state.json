@@ -1,0 +1,348 @@
+{
+  "status": "single_pass_complete",
+  "run_id": "20260723-024228",
+  "mode": "single",
+  "max_passes": 1,
+  "current_pass": 1,
+  "scope": "Guard v2 foundation diff: src/Guard.Contracts, src/Guard.Domain, src/Guard.Application, src/Guard.Protocol, matching tests, guard.sln; exclude user artifacts and legacy binary",
+  "report_only": false,
+  "quality_score": true,
+  "aspect_policy": "broad_first_then_dirty",
+  "aspect_catalog": [
+    {
+      "id": "requirements",
+      "label": "Requirements and product fit",
+      "prompt": "Does the change satisfy the user request without scope drift?"
+    },
+    {
+      "id": "core_logic",
+      "label": "Core logic",
+      "prompt": "Are the main algorithms, data flow, and invariants correct?"
+    },
+    {
+      "id": "edge_cases",
+      "label": "Edge cases and contracts",
+      "prompt": "Do boundary values, empty inputs, errors, concurrency, and API contracts hold?"
+    },
+    {
+      "id": "tests",
+      "label": "Tests and regressions",
+      "prompt": "Do tests prove the changed behavior and relevant failure paths?"
+    },
+    {
+      "id": "security_privacy",
+      "label": "Security, privacy, and secrets",
+      "prompt": "Are auth, secrets, private data, injection, paths, and dependencies safe?"
+    },
+    {
+      "id": "tool_safety",
+      "label": "LLM and tool trust boundaries",
+      "prompt": "Are model/tool outputs treated as untrusted and are external actions bounded?"
+    },
+    {
+      "id": "data_encoding_backcompat",
+      "label": "Data integrity, encoding, migrations, and backcompat",
+      "prompt": "Are stored data, encodings, formats, migrations, and old outputs preserved?"
+    },
+    {
+      "id": "integration_runtime",
+      "label": "Integration, runtime, reliability, and cleanup",
+      "prompt": "Does this work in the real runtime with correct resource cleanup and retries?"
+    },
+    {
+      "id": "observability",
+      "label": "Observability, logs, metrics, and debuggability",
+      "prompt": "Can failures be diagnosed without leaking secrets or hiding root causes?"
+    },
+    {
+      "id": "performance_cost",
+      "label": "Performance, cost, and scalability",
+      "prompt": "Does the change avoid avoidable slow paths, duplicate work, and waste?"
+    },
+    {
+      "id": "ux_accessibility_i18n",
+      "label": "UX, UI, accessibility, and i18n",
+      "prompt": "Does the user-facing behavior remain clear, reachable, and language-safe?"
+    },
+    {
+      "id": "devex_docs",
+      "label": "Developer experience, docs, API, and examples",
+      "prompt": "Would a maintainer or caller know how to use and verify this change?"
+    },
+    {
+      "id": "release_ci_rollback",
+      "label": "Release, deploy, rollback, and CI",
+      "prompt": "Are deployment, CI, rollback, and versioning implications handled?"
+    },
+    {
+      "id": "domain_compliance",
+      "label": "Domain-specific risk and compliance",
+      "prompt": "Are domain rules, client data, legal/business constraints, and project policies respected?"
+    }
+  ],
+  "dirty_aspects": [],
+  "aspect_passes": [
+    {
+      "created_at": "2026-07-23T00:50:43+00:00",
+      "pass": 1,
+      "aspect": "requirements",
+      "status": "clean",
+      "notes": "Foundation matches approved staged architecture and security invariants.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:44+00:00",
+      "pass": 1,
+      "aspect": "core_logic",
+      "status": "fixed",
+      "notes": "CAS setup, exact request binding, reducer invariants, maintenance interval and readiness completeness verified.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:44+00:00",
+      "pass": 1,
+      "aspect": "edge_cases",
+      "status": "fixed",
+      "notes": "Malformed, concurrent, replay, timeout, quota, collision and boundary cases now covered.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:44+00:00",
+      "pass": 1,
+      "aspect": "tests",
+      "status": "clean",
+      "notes": "Fresh Release build plus 84/84 safe tests; independent reviewer repeated 84/84.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:44+00:00",
+      "pass": 1,
+      "aspect": "security_privacy",
+      "status": "fixed",
+      "notes": "All reviewer P1/P2 security findings fixed; secret scan clean in scope.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:44+00:00",
+      "pass": 1,
+      "aspect": "tool_safety",
+      "status": "not_applicable",
+      "notes": "No LLM or external-action tool surface in this foundation.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:45+00:00",
+      "pass": 1,
+      "aspect": "data_encoding_backcompat",
+      "status": "fixed",
+      "notes": "Canonical identifiers/timestamps, strict typed payload and bounded framed IPC.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:45+00:00",
+      "pass": 1,
+      "aspect": "integration_runtime",
+      "status": "fixed",
+      "notes": "Commit-before-effect, reconciliation pending state, timeout and connection quota contracts verified.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:45+00:00",
+      "pass": 1,
+      "aspect": "observability",
+      "status": "not_applicable",
+      "notes": "No production runtime or logging adapter in this increment.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:45+00:00",
+      "pass": 1,
+      "aspect": "performance_cost",
+      "status": "clean",
+      "notes": "Bounded payloads, bounded replay history, bounded IPC connections.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:45+00:00",
+      "pass": 1,
+      "aspect": "ux_accessibility_i18n",
+      "status": "not_applicable",
+      "notes": "No user-facing UI in this foundation increment.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:46+00:00",
+      "pass": 1,
+      "aspect": "devex_docs",
+      "status": "clean",
+      "notes": "Projects and safe console harnesses are in the solution; canonical plan records architecture.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:46+00:00",
+      "pass": 1,
+      "aspect": "release_ci_rollback",
+      "status": "not_applicable",
+      "notes": "Release pipeline is a later approved stage; checkpoint and branch rollback exist.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:50:46+00:00",
+      "pass": 1,
+      "aspect": "domain_compliance",
+      "status": "clean",
+      "notes": "No live Guard or Windows enforcement actions; user artifacts preserved.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:51:34+00:00",
+      "pass": 1,
+      "aspect": "core_logic",
+      "status": "clean",
+      "notes": "All fixed findings rechecked by fresh build/tests and independent reviewer.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:51:35+00:00",
+      "pass": 1,
+      "aspect": "edge_cases",
+      "status": "clean",
+      "notes": "All boundary regressions pass in the final source snapshot.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:51:35+00:00",
+      "pass": 1,
+      "aspect": "security_privacy",
+      "status": "clean",
+      "notes": "No remaining P0/P1/P2 in independent final review.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:51:35+00:00",
+      "pass": 1,
+      "aspect": "data_encoding_backcompat",
+      "status": "clean",
+      "notes": "Strict codecs and canonical encodings pass final verification.",
+      "finding_id": "",
+      "reopened": []
+    },
+    {
+      "created_at": "2026-07-23T00:51:35+00:00",
+      "pass": 1,
+      "aspect": "integration_runtime",
+      "status": "clean",
+      "notes": "CAS, deadline, quota, commit-before-effect and pending reconciliation contracts pass final verification.",
+      "finding_id": "",
+      "reopened": []
+    }
+  ],
+  "scores": [],
+  "heartbeat_id": null,
+  "phase": "pass_complete",
+  "last_started_step": "pass",
+  "last_completed_step": "pass",
+  "clean_pass_after_last_fix": false,
+  "passes_to_clean": null,
+  "created_at": "2026-07-22T23:42:28+00:00",
+  "updated_at": "2026-07-23T00:51:35+00:00",
+  "last_aspect_plan": {
+    "pass": 1,
+    "mode": "broad",
+    "aspects": [
+      {
+        "id": "requirements",
+        "label": "Requirements and product fit",
+        "prompt": "Does the change satisfy the user request without scope drift?"
+      },
+      {
+        "id": "core_logic",
+        "label": "Core logic",
+        "prompt": "Are the main algorithms, data flow, and invariants correct?"
+      },
+      {
+        "id": "edge_cases",
+        "label": "Edge cases and contracts",
+        "prompt": "Do boundary values, empty inputs, errors, concurrency, and API contracts hold?"
+      },
+      {
+        "id": "tests",
+        "label": "Tests and regressions",
+        "prompt": "Do tests prove the changed behavior and relevant failure paths?"
+      },
+      {
+        "id": "security_privacy",
+        "label": "Security, privacy, and secrets",
+        "prompt": "Are auth, secrets, private data, injection, paths, and dependencies safe?"
+      },
+      {
+        "id": "tool_safety",
+        "label": "LLM and tool trust boundaries",
+        "prompt": "Are model/tool outputs treated as untrusted and are external actions bounded?"
+      },
+      {
+        "id": "data_encoding_backcompat",
+        "label": "Data integrity, encoding, migrations, and backcompat",
+        "prompt": "Are stored data, encodings, formats, migrations, and old outputs preserved?"
+      },
+      {
+        "id": "integration_runtime",
+        "label": "Integration, runtime, reliability, and cleanup",
+        "prompt": "Does this work in the real runtime with correct resource cleanup and retries?"
+      },
+      {
+        "id": "observability",
+        "label": "Observability, logs, metrics, and debuggability",
+        "prompt": "Can failures be diagnosed without leaking secrets or hiding root causes?"
+      },
+      {
+        "id": "performance_cost",
+        "label": "Performance, cost, and scalability",
+        "prompt": "Does the change avoid avoidable slow paths, duplicate work, and waste?"
+      },
+      {
+        "id": "ux_accessibility_i18n",
+        "label": "UX, UI, accessibility, and i18n",
+        "prompt": "Does the user-facing behavior remain clear, reachable, and language-safe?"
+      },
+      {
+        "id": "devex_docs",
+        "label": "Developer experience, docs, API, and examples",
+        "prompt": "Would a maintainer or caller know how to use and verify this change?"
+      },
+      {
+        "id": "release_ci_rollback",
+        "label": "Release, deploy, rollback, and CI",
+        "prompt": "Are deployment, CI, rollback, and versioning implications handled?"
+      },
+      {
+        "id": "domain_compliance",
+        "label": "Domain-specific risk and compliance",
+        "prompt": "Are domain rules, client data, legal/business constraints, and project policies respected?"
+      }
+    ],
+    "dirty_aspects": [],
+    "global_gates": [
+      "git diff --check",
+      "compile/lint",
+      "targeted tests"
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "created_at": "2026-07-22T23:42:33+00:00",
+  "repo": "C:\\Yandex.Disk\\Projects\\guard-windows-client",
+  "is_git_repo": true,
+  "git_status_short": " M .codex/memory/worklog.md\n M .codex/review-loop/active.json\n M Output/Guard-Setup-v1.0.0.exe\n M docs/guard-v2-development-plan.md\n M guard.sln\n?? \".codex/memory/features (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).md\"\n?? \".codex/memory/project (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).md\"\n?? \".codex/memory/worklog (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).md\"\n?? .codex/review-loop/runs/20260722-194755/\n?? .codex/review-loop/runs/20260723-024228/\n?? .gstack/\n?? \"Guard.Core/GuardState (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? \"Guard.Core/MaintenanceMode (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? \"Guard.Core/ParentCommand (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? \"Guard.Tests/Program (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? \"Output/Guard-Setup-v1.0.0 (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).exe\"\n?? \"docs/parent-mvp-checklist (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).md\"\n?? \"guard/ParentAdminServer (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? \"guard/Program (\\320\\272\\320\\276\\320\\277\\320\\270\\321\\217 \\321\\201 \\320\\272\\320\\276\\320\\274\\320\\277\\321\\214\\321\\216\\321\\202\\320\\265\\321\\200\\320\\260 LG).cs\"\n?? src/\n?? tests/\n",
+  "git_diff_stat": "warning: in the working copy of '.codex/memory/worklog.md', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'docs/guard-v2-development-plan.md', LF will be replaced by CRLF the next time Git touches it\n .codex/memory/worklog.md          |   8 ++++\n .codex/review-loop/active.json    |   6 +--\n Output/Guard-Setup-v1.0.0.exe     | Bin 2426924 -> 2732742 bytes\n docs/guard-v2-development-plan.md |  34 +++++++++++++-\n guard.sln                         |  94 ++++++++++++++++++++++++++++++++++++++\n 5 files changed, 138 insertions(+), 4 deletions(-)\n",
+  "git_changed_files": [
+    "warning: in the working copy of '.codex/memory/worklog.md', LF will be replaced by CRLF the next time Git touches it",
+    "warning: in the working copy of 'docs/guard-v2-development-plan.md', LF will be replaced by CRLF the next time Git touches it",
+    ".codex/memory/worklog.md",
+    ".codex/review-loop/active.json",
+    "Output/Guard-Setup-v1.0.0.exe",
+    "docs/guard-v2-development-plan.md",
+    "guard.sln"
+  ],
+  "command_candidates": [
+    {
+      "label": "git diff --check",
+      "command": "git diff --check"
+    },
+    {
+      "label": "pytest",
+      "command": "python -m pytest"
+    }
+  ]
+}

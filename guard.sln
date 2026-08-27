@@ -83,6 +83,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Guard.WebProtection.Tests",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Guard.WebControl.Tests", "tests\Guard.WebControl.Tests\Guard.WebControl.Tests.csproj", "{849F84CC-FB44-4720-B658-829412EB2D95}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Guard.RelayProtocol.Tests", "tests\Guard.RelayProtocol.Tests\Guard.RelayProtocol.Tests.csproj", "{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -395,6 +397,14 @@ Global
 		{849F84CC-FB44-4720-B658-829412EB2D95}.Release|Any CPU.Build.0 = Release|Any CPU
 		{849F84CC-FB44-4720-B658-829412EB2D95}.Release|x64.ActiveCfg = Release|Any CPU
 		{849F84CC-FB44-4720-B658-829412EB2D95}.Release|x64.Build.0 = Release|Any CPU
+		{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F}.Debug|x64.Build.0 = Debug|Any CPU
+		{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F}.Release|x64.ActiveCfg = Release|Any CPU
+		{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -436,5 +446,6 @@ Global
 		{5E951DDA-3CFA-4B91-8C51-2957DDD981EC} = {F7B1E832-60C1-43AB-B868-50A82C61E79C}
 		{B28E2ADB-F519-4594-9115-DDBC64D1F3D5} = {F7B1E832-60C1-43AB-B868-50A82C61E79C}
 		{849F84CC-FB44-4720-B658-829412EB2D95} = {F7B1E832-60C1-43AB-B868-50A82C61E79C}
+		{0C5BC6AF-C4FB-4F90-9EAA-D6BEC56A553F} = {F7B1E832-60C1-43AB-B868-50A82C61E79C}
 	EndGlobalSection
 EndGlobal

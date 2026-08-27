@@ -1,0 +1,37 @@
+- 2026-07-23T19:05:57+00:00 START run mode=single max_passes=1 scope=diff
+- 2026-07-23T19:05:57+00:00 DONE discover
+- 2026-07-23T19:05:57+00:00 START pass 1
+- 2026-07-23T19:05:57+00:00 START aspect-plan pass=1 mode=broad
+- 2026-07-23T19:26:10+00:00 START baseline
+- 2026-07-23T19:26:10+00:00 START command diff-check
+- 2026-07-23T19:26:10+00:00 DONE command diff-check exit=0
+- 2026-07-23T19:26:10+00:00 START command release-build
+- 2026-07-23T19:26:16+00:00 DONE command release-build exit=0
+- 2026-07-23T19:26:16+00:00 START command protocol-tests
+- 2026-07-23T19:26:16+00:00 DONE command protocol-tests exit=0
+- 2026-07-23T19:26:16+00:00 START command service-tests
+- 2026-07-23T19:26:16+00:00 DONE command service-tests exit=0
+- 2026-07-23T19:26:17+00:00 START command platform-readiness-tests
+- 2026-07-23T19:26:17+00:00 DONE command platform-readiness-tests exit=0
+- 2026-07-23T19:26:17+00:00 START command scm-query-tests
+- 2026-07-23T19:26:17+00:00 DONE command scm-query-tests exit=0
+- 2026-07-23T19:26:17+00:00 DONE baseline
+- 2026-07-23T19:27:01+00:00 SET aspect requirements status=clean
+- 2026-07-23T19:27:01+00:00 SET aspect core_logic status=clean
+- 2026-07-23T19:27:01+00:00 SET aspect edge_cases status=fixed
+- 2026-07-23T19:27:01+00:00 SET aspect tests status=fixed
+- 2026-07-23T19:27:01+00:00 SET aspect security_privacy status=fixed
+- 2026-07-23T19:27:01+00:00 SET aspect tool_safety status=not_applicable
+- 2026-07-23T19:27:01+00:00 SET aspect data_encoding_backcompat status=clean
+- 2026-07-23T19:27:01+00:00 SET aspect integration_runtime status=clean
+- 2026-07-23T19:27:01+00:00 SET aspect observability status=clean
+- 2026-07-23T19:27:01+00:00 SET aspect performance_cost status=clean
+- 2026-07-23T19:27:01+00:00 SET aspect ux_accessibility_i18n status=not_applicable
+- 2026-07-23T19:27:01+00:00 SET aspect devex_docs status=clean
+- 2026-07-23T19:27:02+00:00 SET aspect release_ci_rollback status=clean
+- 2026-07-23T19:27:02+00:00 SET aspect domain_compliance status=clean
+- 2026-07-23T19:28:17+00:00 START command all-safe-tests
+- 2026-07-23T19:28:20+00:00 DONE command all-safe-tests exit=0
+- 2026-07-23T19:28:42+00:00 START command nuget-vulnerability-audit
+- 2026-07-23T19:28:54+00:00 DONE command nuget-vulnerability-audit exit=0
+- 2026-07-23T19:29:06+00:00 DONE pass 1 status=clean
