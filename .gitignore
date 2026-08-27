@@ -362,3 +362,15 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Конфликтные копии клиента Яндекс.Диска — в репозиторий попадать не должны
+*копия с компьютера*
+*conflicted copy*
+
+# Кэши сборки и служебные данные инструментов
+.gradle/
+parent/android/build/
+parent/android/app/build/
+relay/worker/node_modules/
+.codex/review-loop-stage*/
+.codex/review-loop/runs/
+.gstack/
