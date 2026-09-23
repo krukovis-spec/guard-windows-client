@@ -8,7 +8,7 @@
 
 ## How To Work
 
-- Root: `C:\Yandex.Disk\Projects\guard-windows-client`.
+- Root: `C:\Projects\guard-windows-client`. Older Yandex.Disk paths below are historical; do not resume development there.
 - Start every future session with `AGENTS.md`, then this capsule.
 - During design discussion, update `docs/guard-v2-development-plan.md` in the same turn. Silence after a recommendation means acceptance; later Ivan corrections replace the old decision. Do not change application code until Ivan explicitly starts implementation.
 - Do not run the app, installer, cleaner, helper or admin-affecting code without Ivan's explicit approval.
@@ -25,6 +25,17 @@
 - `GuardInstaller.iss` - Inno Setup installer.
 
 ## Current State
+
+### Verified 2026-09-23 — readiness and Russian UI
+
+- Guard v2 is NOT release-ready. Current baseline `a55ca79` includes relay worker/HPKE, PWA and Android foundations, but service composition still uses `BoundaryOnlyPolicyReconciler` and unknown readiness probes. Production app/web enforcement, child UI, enrollment and remote approval are not connected end to end; VM/real-phone gates remain open.
+- Task branch `codex/guard-russian-ui`; pushed pre-edit checkpoint `codex/checkpoint-20260923-2155-guard-russian-ui` at `a55ca79fa5db700d8fc7de50d357a7c7514b25b3`. The starting working tree was clean. This task assessed readiness and localized existing UI; it did not implement the remaining product stages.
+- Russian UI covers remaining Windows/Cleaner messages, diagnostic summary, Inno source and Android shell. PWA clearly reports development/not-configured status and disables sign-in while the snapshot verifier adapter is absent. Existing optional English UI remains; technical logs/platform dialogs are not translated. README is now the Russian usage/status entry point and separates safe preview from the future installation workflow.
+- Verified: Release solution build with SDK 10.0.303; 45 legacy checks; all 29 v2 harnesses (including relay state/crypto outside the solution); PWA 26 tests and production build; browser RU→EN→RU and disabled sign-in. NuGet vulnerability audit and PWA production audit returned no findings.
+- Browser verification reproduced stale cached HTML referencing a removed hashed JS bundle after rebuild. The worker now caches only manifest/icon, not HTML/scripts/API; a fetch-handler regression test covers this. Already-broken local previews recover via one `/?verify=ru-v2` navigation, then the ordinary URL; verified in-browser. Full versioned offline shell is not implemented.
+- Android resource processing succeeded, but compile fails on pre-existing `ByteArray.ifEmpty` in `parent/android/app/src/main/java/app/guard/parent/protocol/RelayReceive.kt:125` (also present in checkpoint). Android unit tests/APK were not completed. Full PWA audit reports 3 dev findings (2 moderate Vitest/mocker, 1 high nanoid), left for a separate dependency update. Worker/deployment, VM enforcement and real biometrics were not tested in this task. No Guard/installer/Cleaner/service or privileged system action ran on the host.
+
+### Historical implementation evidence
 
 - Cloned from `https://github.com/ganjie/guard-windows-client.git`.
 - Moved to `C:\Yandex.Disk\Projects\guard-windows-client` on 2026-06-06.
@@ -81,9 +92,9 @@
 
 ## Recommended Next
 
-- Active branch: `codex/guard-v2-implementation`; pre-change checkpoint: `codex/checkpoint-20260723-0041-guard-v2-implementation` at `6bfcb15e50f05b9110e6c0227c927be683a5f293`.
-- Next ordered increment is Stage 6: outbound relay, parent PWA and compact native Android biometric-only approval signing. It must preserve the existing exact-request, replay and commit-before-reconcile boundaries; no child Android/iOS agent is part of the first Windows release.
-- Begin with separate Cloudflare dev namespaces, PWA/relay contracts and the native Android approval key; never reuse VoicePaste D1/namespaces or a broad cross-project token. Record the connection in the service registry only after the Guard project is created and masked access is verified.
+- Current task branch: `codex/guard-russian-ui`, UI commit `b57739a`; checkpoint `codex/checkpoint-20260923-2155-guard-russian-ui` at `a55ca79fa5db700d8fc7de50d357a7c7514b25b3`. The implementation baseline remains on `codex/guard-v2-implementation`; no merge or release was performed during this task.
+- Next implementation acceptance must be one real end-to-end scenario, not another foundation-only claim. Resolve the existing Android compile blocker, connect trusted enrollment/request/approval and production enforcement, then complete disposable-VM and real-fingerprint gates. The remaining requirements are Stage 3–7 in the canonical plan; no child Android/iOS agent is part of the first Windows release.
+- Any Cloudflare deployment must use separate Guard namespaces and credentials; never reuse VoicePaste D1/namespaces or a broad cross-project token. Record the connection in the service registry only after the Guard project is created and masked access is verified. This readiness task did not create or verify a deployment.
 - Before any live enforcement work, confirm/enable Hyper-V through an elevated host check, create a Generation 2 disposable Windows 11 Pro guest with Secure Boot/vTPM and snapshot it, then run all privileged tests inside that guest only.
 - Current product path remains: temporary biometric-gated maintenance, exact application identities, managed supported browsers, localhost domain proxy without HTTPS interception, parent PWA, native biometric-only approval signing and four decisions (`always`, `temporary`, `daily quota`, `deny`).
 - Ivan authorized execution of the full plan and separately approved the .NET 10/service-package toolchain. Continue in small verified code-only increments; do not skip to live Windows enforcement.
