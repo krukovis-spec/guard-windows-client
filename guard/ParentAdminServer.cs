@@ -525,7 +525,7 @@ namespace Guard
                    "<input type=\"hidden\" name=\"action\" value=\"set-language\">" +
                    "<div><label>" + Html(L("Язык", "Language")) + "</label><select name=\"language\">" +
                    "<option value=\"ru\"" + (language == UiLanguage.Russian ? " selected" : "") + ">Русский</option>" +
-                   "<option value=\"en\"" + (language == UiLanguage.English ? " selected" : "") + ">English</option>" +
+                   "<option value=\"en\"" + (language == UiLanguage.English ? " selected" : "") + ">" + Html(L("Английский", "English")) + "</option>" +
                    "</select></div>" +
                    "<button type=\"submit\">" + Html(L("Сохранить", "Save")) + "</button></form>";
         }
@@ -1062,7 +1062,7 @@ namespace Guard
                 case "Windows user cannot be removed from administrators safely.":
                     return "Этого пользователя Windows нельзя безопасно убрать из администраторов.";
                 default:
-                    return message;
+                    return UiLanguage.Message(Language, message);
             }
         }
 

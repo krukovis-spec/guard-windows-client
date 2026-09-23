@@ -426,7 +426,10 @@ namespace Guard.Tests
             Assert(!summary.Contains(payloadSecret), "diagnostics must not expose raw state payloads");
             Assert(!summary.Contains("AssignCode"), "diagnostics must not advertise a sensitive assignment field");
             Assert(!summary.Contains("DeviceId"), "diagnostics must not advertise a sensitive identifier field");
-            Assert(summary.Contains("ErrorCount: 1"), "diagnostics may expose safe aggregate counts");
+            Assert(summary.Contains("Ошибок: 1"), "Russian diagnostics may expose safe aggregate counts");
+            Assert(summary.Contains("Устройство привязано: нет"), "Russian diagnostics must translate boolean values");
+            state.UiLanguage = UiLanguage.English;
+            Assert(GuardDiagnosticSummary.Build(state).Contains("Error count: 1"), "English diagnostics remain available");
         }
 
         private static void TestLegacyRecoveryRoutesBlocked()
@@ -549,6 +552,22 @@ namespace Guard.Tests
             });
             Assert(fallback.Changed, "unknown languages should normalize to Russian");
             Assert(state.UiLanguage == UiLanguage.Russian, "unknown language should fall back to Russian");
+            var messages = new[] {
+                "Invalid application path.", "Invalid domain.", "Pending access request was not found.",
+                "Pending application request was not found.", "Task title is required.",
+                "Verified task requires an application path.", "Active task was not found.",
+                "Task is already completed for today.", "Task does not have enough verified active time yet."
+            };
+            foreach (var message in messages)
+            {
+                Assert(UiLanguage.Message(null, message) != message, "every child-facing error must have a Russian default");
+                Assert(UiLanguage.Message("en", message) == message, "error localization must preserve English");
+            }
+            foreach (GuardCleanupStep step in Enum.GetValues(typeof(GuardCleanupStep)))
+            {
+                Assert(UiLanguage.CleanupStep(step) != "неизвестный этап", "every cleanup failure must have a Russian label");
+            }
+            Assert(UiLanguage.CleanupStep(null) == "неизвестный этап", "missing cleanup stage must not report success");
         }
 
         private static void TestParentAdminAuth()

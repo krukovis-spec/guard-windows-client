@@ -3,6 +3,7 @@
 body { margin: 0; min-width: 320px; }
 button, input { font: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .6; }
 button:focus-visible, input:focus-visible { outline: 3px solid #b84f36; outline-offset: 3px; }
 .shell { width: min(100%, 780px); min-height: 100vh; margin: auto; padding: 28px 20px 56px; }
 .masthead { display: grid; grid-template-columns: auto 1fr auto; gap: 13px; align-items: center; border-bottom: 1px solid #bdc1b3; padding-bottom: 20px; }

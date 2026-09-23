@@ -20,7 +20,7 @@
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(420, 160);
             this.Name = "InformationForm";
-            this.Text = "Information";
+            this.Text = "Информация";
             this.ResumeLayout(false);
         }
         #endregion

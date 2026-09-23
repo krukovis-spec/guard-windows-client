@@ -33,7 +33,7 @@ namespace Guard
 
             // Create and configure the OK Button
             Button btnOk = new Button();
-            btnOk.Text = "OK";
+            btnOk.Text = "Понятно";
             btnOk.DialogResult = DialogResult.OK;
             btnOk.Size = new Size(85, 30);
             btnOk.Location = new Point(this.ClientSize.Width - btnOk.Width - 15, this.ClientSize.Height - btnOk.Height - 15);

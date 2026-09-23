@@ -1,5 +1,5 @@
 export type Language = "ru" | "en";
-export type ViewState = "loading" | "ready" | "offline" | "expired" | "already-resolved" | "error";
+export type ViewState = "loading" | "ready" | "offline" | "expired" | "already-resolved" | "error" | "not-configured";
 export type DecisionKind = "AllowAlways" | "AllowTemporary" | "AllowDailyQuota" | "Deny";
 
 export interface RequestSnapshot {

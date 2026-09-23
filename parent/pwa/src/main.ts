@@ -20,8 +20,6 @@ let language: Language = "ru";
 let state: ViewState = navigator.onLine ? "loading" : "offline";
 let snapshots: readonly RequestSnapshot[] = [];
 
-const unavailableVerifier: SnapshotVerifier = { decryptAndVerify: async () => ({ verified: false }) };
-
 declare global {
   interface Window {
     /** Installed only by the audited verification adapter; absent means fail closed. */
@@ -36,6 +34,7 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
 }
 
 function labelState(t: ReturnType<typeof copyFor>): string {
+  if (state === "not-configured") return t.notConfigured;
   if (state === "offline") return t.offline;
   if (state === "expired") return t.expired;
   if (state === "already-resolved") return t.resolved;
@@ -55,9 +54,14 @@ function render(): void {
   const toggle = element("button", "language"); toggle.type = "button"; toggle.textContent = t.language; toggle.addEventListener("click", () => { language = language === "ru" ? "en" : "ru"; render(); });
   header.append(mark, heading, toggle); shell.append(header);
 
+  const development = element("aside", "trust-note");
+  const developmentTitle = element("strong"); developmentTitle.textContent = t.development;
+  const developmentDetail = element("span"); developmentDetail.textContent = t.developmentDetail;
+  development.append(developmentTitle, developmentDetail); shell.append(development);
+
   const notice = element("aside", "trust-note"); notice.setAttribute("aria-live", "polite");
   const title = element("strong"); title.textContent = state === "ready" ? t.verified : labelState(t);
-  const detail = element("span"); detail.textContent = state === "ready" ? t.outage : `${labelState(t)} ${t.outage}`;
+  const detail = element("span"); detail.textContent = t.outage;
   notice.append(title, detail); shell.append(notice);
 
   if (state === "loading") shell.append(loadingView(t.loading));
@@ -75,9 +79,14 @@ function loadingView(text: string): HTMLElement {
 
 function accountView(t: ReturnType<typeof copyFor>): HTMLElement {
   const section = element("section", "account"); const h2 = element("h2"); h2.textContent = t.account;
+  section.append(h2);
   const login = element("button", "primary"); login.textContent = t.signIn; login.addEventListener("click", () => void passkey("login", transport));
   const register = element("button", "secondary"); register.textContent = t.register; register.addEventListener("click", () => void passkey("register", transport));
-  section.append(h2, login, register); return section;
+  if (!window.guardParentSnapshotVerifier) {
+    login.disabled = true; register.disabled = true;
+    const explanation = element("p"); explanation.textContent = t.accountUnavailable; section.append(explanation);
+  }
+  section.append(login, register); return section;
 }
 
 function inboxView(t: ReturnType<typeof copyFor>): HTMLElement {
@@ -127,9 +136,11 @@ async function passkey(mode: "login" | "register", api: ParentTransport): Promis
 }
 
 async function refresh(): Promise<void> {
+  const verifier = window.guardParentSnapshotVerifier;
+  if (!verifier) { state = "not-configured"; render(); return; }
   state = "loading"; render();
   try {
-    snapshots = await verifiedSnapshots(await transport.listSnapshots(), window.guardParentSnapshotVerifier ?? unavailableVerifier);
+    snapshots = await verifiedSnapshots(await transport.listSnapshots(), verifier);
     state = "ready";
   } catch (error) { state = stateForRelayError(error); }
   render();
