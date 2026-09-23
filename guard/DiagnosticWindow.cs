@@ -205,7 +205,7 @@ namespace Guard
                 {
                     if (logBox.Text.Length > 60000)
                     {
-                        logBox.Text = "--- LOGS TRIMMED ---\r\n";
+                        logBox.Text = L("--- Старые записи журнала скрыты ---\r\n", "--- LOGS TRIMMED ---\r\n");
                     }
                     logBox.AppendText(DateTime.Now.ToString("HH:mm:ss") + " " + msg + Environment.NewLine);
                     // This ensures the log box always shows the latest message

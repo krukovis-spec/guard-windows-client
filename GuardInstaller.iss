@@ -14,7 +14,7 @@ SolidCompression=yes
 WizardStyle=modern
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}";
@@ -37,7 +37,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
 
 
 [Run]
-Filename: "{app}\StartHelperG.exe"; Parameters: "/startup"; Description: "Launch Guard now"; Flags: postinstall skipifsilent runascurrentuser
+Filename: "{app}\StartHelperG.exe"; Parameters: "/startup"; Description: "Запустить Guard сейчас"; Flags: postinstall skipifsilent runascurrentuser
 
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -51,13 +51,13 @@ begin
   // usUninstall runs after the user confirms removal and before Inno deletes files.
   if not ShellExec('', ExpandConstant('{app}\Guard.Cleaner.exe'), '/authorize-and-clean', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
   begin
-    MsgBox('Unable to run the guarded cleanup. Uninstall cannot continue.', mbError, MB_OK);
+    MsgBox('Не удалось запустить безопасную очистку Guard. Продолжить удаление нельзя.', mbError, MB_OK);
     Abort;
   end;
 
   if ResultCode <> 0 then
   begin
-    MsgBox('Parent authorization or guarded cleanup failed. Uninstall aborted.', mbError, MB_OK);
+    MsgBox('Не получено разрешение родителя или не завершена безопасная очистка. Удаление остановлено.', mbError, MB_OK);
     Abort;
   end;
 end;

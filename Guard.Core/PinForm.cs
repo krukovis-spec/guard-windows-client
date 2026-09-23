@@ -7,14 +7,14 @@ namespace Guard
     {
         public string EnteredPin { get; private set; } = "";
 
-        public PinForm(string promptText, Icon? appIcon, string title = "Enter PIN")
+        public PinForm(string promptText, Icon? appIcon, string title = "Введите PIN", string language = UiLanguage.Russian)
         {
             InitializeComponent();
 
             if (appIcon!= null) this.Icon = appIcon;
             // 1.5x scale
             this.Width = 480;    // was 320
-            this.Height = 240;   // was 160 or 200
+            this.Height = 300;
             this.Text = title;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.StartPosition = FormStartPosition.CenterScreen; // Centered!
@@ -59,8 +59,8 @@ namespace Guard
             // Big OK button
             var ok = new Button()
             {
-                Text = "OK",
-                Width = 110,
+                Text = UiLanguage.Text(language, "Подтвердить", "Confirm"),
+                Width = 180,
                 Height = 40,
                 DialogResult = DialogResult.OK,
                 Anchor = AnchorStyles.None,

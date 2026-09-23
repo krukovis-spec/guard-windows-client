@@ -43,8 +43,8 @@ namespace Guard.Cleaner
             if (launchMode == CleanerLaunchMode.StartupFailureNotification)
             {
                 MessageBox.Show(
-                    "Guard failed to start repeatedly. P0 containment will not remove or weaken protection automatically. A parent administrator must diagnose the failure.",
-                    "Guard Startup Failure",
+                    "Guard несколько раз не смог запуститься. Защита не будет автоматически отключена или удалена. Родителю с правами администратора нужно проверить причину сбоя.",
+                    "Ошибка запуска Guard",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
                 Environment.Exit(1);
@@ -54,8 +54,8 @@ namespace Guard.Cleaner
             if (launchMode != CleanerLaunchMode.AuthorizedCleanup)
             {
                 MessageBox.Show(
-                    "Direct and legacy cleaner modes are disabled. Start removal from Windows Installed apps.",
-                    "Guard Removal Blocked",
+                    "Прямой запуск очистки и старые способы удаления отключены. Начните удаление через «Установленные приложения» в параметрах Windows.",
+                    "Удаление Guard заблокировано",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
                 Environment.Exit(1);
@@ -64,15 +64,15 @@ namespace Guard.Cleaner
 
             if (!SystemCleaner.IsAdministrator())
             {
-                MessageBox.Show("This utility requires administrator privileges to run.", "Permission Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Для удаления Guard нужны права администратора.", "Ошибка доступа", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(1);
                 return;
             }
             else if (!CanWriteToHostsFile())
             {
                 MessageBox.Show(
-                    "Guard does not have the necessary permissions to access the hosts file, likely due to an antivirus or security policy. The application cannot continue.",
-                    "Guard Permission Error",
+                    "Guard не может получить доступ к системному файлу hosts. Возможная причина — антивирус или политика безопасности. Продолжить удаление нельзя.",
+                    "Ошибка доступа Guard",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
                 Environment.Exit(1);
@@ -81,7 +81,7 @@ namespace Guard.Cleaner
 
             var state = GuardStateStorage.Load();
             bool isAuthorized;
-            using (var pinDialog = new PinForm("Enter the existing custom parent PIN to uninstall Guard", null))
+            using (var pinDialog = new PinForm("Введите ранее установленный PIN родителя для удаления Guard", null))
             {
                 if (pinDialog.ShowDialog() != DialogResult.OK)
                 {
@@ -95,20 +95,20 @@ namespace Guard.Cleaner
             if (!isAuthorized)
             {
                 MessageBox.Show(
-                    "The parent PIN is unavailable, known to be compromised, incorrect, or the operation was cancelled. Guard was not removed.",
-                    "Parent Authorization Required",
+                    "PIN родителя не задан, небезопасен или неверен, либо действие отменено. Guard не удалён.",
+                    "Нужно подтверждение родителя",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
                 Environment.Exit(1);
                 return;
             }
 
-            MessageBox.Show("Guard will now be completely removed from your system.", "Uninstalling Guard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Начинается удаление Guard. Если какой-либо этап завершится с ошибкой, удаление будет остановлено.", "Удаление Guard", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
             bool guardKilled = false, helperKilled = false;
             if (!SystemCleaner.TryWriteDisableFlag())
             {
-                AbortCleanupAndRestoreProtection("Guard could not enter the guarded cleanup state.");
+                AbortCleanupAndRestoreProtection("Не удалось подготовить Guard к безопасному удалению.");
                 return;
             }
 
@@ -146,7 +146,7 @@ namespace Guard.Cleaner
             helperKilled = NoProcessesNamed("StartHelperG");
             if (!guardKilled || !helperKilled)
             {
-                AbortCleanupAndRestoreProtection("Guard processes could not be stopped safely.");
+                AbortCleanupAndRestoreProtection("Не удалось безопасно остановить процессы Guard.");
                 return;
             }
 
@@ -159,14 +159,14 @@ namespace Guard.Cleaner
             }
             catch
             {
-                AbortCleanupAndRestoreProtection("Guard cleanup failed unexpectedly.");
+                AbortCleanupAndRestoreProtection("При удалении Guard произошла непредвиденная ошибка.");
                 return;
             }
 
             if (!cleanupResult.Succeeded)
             {
                 AbortCleanupAndRestoreProtection(
-                    "Guard cleanup did not complete the " + cleanupResult.FailedStep + " stage.");
+                    "Не завершён этап удаления: " + UiLanguage.CleanupStep(cleanupResult.FailedStep) + ".");
                 return;
             }
 
@@ -179,8 +179,8 @@ namespace Guard.Cleaner
             TryRestartProtection();
 
             MessageBox.Show(
-                reason + " Uninstall was aborted and Guard recovery was requested.",
-                "Guard Cleanup Failed",
+                reason + " Удаление остановлено. Выполнена попытка восстановить работу Guard.",
+                "Ошибка удаления Guard",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
             Environment.Exit(CleanerExitCodePolicy.CleanupFailed);

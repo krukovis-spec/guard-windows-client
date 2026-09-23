@@ -68,7 +68,7 @@ namespace Guard
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
                     MessageBox.Show(
-                        "Legacy Guard uninstall entry point is disabled. Use Windows Installed apps so Guard.Cleaner can authorize and complete the removal.",
+                        "Старый способ удаления Guard отключён. Откройте «Установленные приложения» в параметрах Windows: Guard проверит разрешение родителя перед удалением.",
                         "Guard",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
@@ -419,7 +419,7 @@ namespace Guard
 
                 if (!string.IsNullOrEmpty(result.Error))
                 {
-                    tray.ShowBalloonTip(2500, "Guard", result.Error, ToolTipIcon.Warning);
+                    tray.ShowBalloonTip(2500, "Guard", UiLanguage.Message(State?.UiLanguage, result.Error), ToolTipIcon.Warning);
                     return;
                 }
 
@@ -486,7 +486,7 @@ namespace Guard
 
                 if (!string.IsNullOrEmpty(result.Error))
                 {
-                    tray.ShowBalloonTip(2500, "Guard", result.Error, ToolTipIcon.Warning);
+                    tray.ShowBalloonTip(2500, "Guard", UiLanguage.Message(State?.UiLanguage, result.Error), ToolTipIcon.Warning);
                     return;
                 }
 
@@ -519,7 +519,7 @@ namespace Guard
             // Avoid duplicates
             foreach (ToolStripItem item in menu.Items)
             {
-                if (item is ToolStripMenuItem mi && mi.Text == "Request new instructions")
+                if (item is ToolStripMenuItem mi && mi.Text == L("Обновить правила", "Request new instructions"))
                 {
                     mi.Visible = true;
                     return;
@@ -543,7 +543,7 @@ namespace Guard
                 timer.Start();
             };
 
-            updateMenuItem = new ToolStripMenuItem("Request new instructions", null, handler);
+            updateMenuItem = new ToolStripMenuItem(L("Обновить правила", "Request new instructions"), null, handler);
 
             // Insert at the desired position
             menu.Items.Insert(0, updateMenuItem);
@@ -1032,7 +1032,7 @@ namespace Guard
                     utcNow);
                 if (!string.IsNullOrEmpty(requestResult.Error))
                 {
-                    tray.ShowBalloonTip(2500, "Guard", requestResult.Error, ToolTipIcon.Warning);
+                    tray.ShowBalloonTip(2500, "Guard", UiLanguage.Message(state.UiLanguage, requestResult.Error), ToolTipIcon.Warning);
                 }
                 else
                 {
@@ -1109,7 +1109,7 @@ namespace Guard
 
                         if (!string.IsNullOrEmpty(result.Error))
                         {
-                            MessageBox.Show(result.Error, "Guard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            MessageBox.Show(UiLanguage.Message(state.UiLanguage, result.Error), "Guard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                             return;
                         }
 
@@ -1358,7 +1358,7 @@ namespace Guard
             }
 
             isCheckingForUpdate = true;
-            tray.Text = "Guard: Checking for updates..."; // Give immediate feedback
+            tray.Text = L("Guard: проверка обновлений…", "Guard: Checking for updates...");
             try
             {
                 await RunMainLoopAsync(forceUpdate: true);
@@ -1691,22 +1691,22 @@ namespace Guard
                 if (!State.Assigned)
                 {
                     iconToSet = icon_Grayscale;
-                    textToSet = "Guard: Not Assigned";
+                    textToSet = L("Guard: не привязан", "Guard: Not Assigned");
                 }
                 else if (!State.SyncStatus)
                 {
                     iconToSet = icon_Inactive;
-                    textToSet = "Guard: Disabled";
+                    textToSet = L("Guard: отключён", "Guard: Disabled");
                 }
                 else if (State.DevUpdate)
                 {
                     iconToSet = icon_Updating;
-                    textToSet = "Guard: Updating...";
+                    textToSet = L("Guard: обновление…", "Guard: Updating...");
                 }
                 else // This is the default "active" state.
                 {
                     iconToSet = icon_Active;
-                    textToSet = "Guard: Active";
+                    textToSet = L("Guard: активен", "Guard: Active");
                 }
 
                 // Your existing logic here is already safe because of the 'iconToSet != null' check.
@@ -2049,7 +2049,7 @@ namespace Guard
 
             // --- The UI logic is now replaced with a call to our new PinForm ---
             string enteredPin = "";
-            using (var pinDialog = new PinForm(promptText, new Icon(new System.IO.MemoryStream(Properties.Resources.guard)), L("Введите PIN", "Enter PIN")))
+            using (var pinDialog = new PinForm(promptText, new Icon(new System.IO.MemoryStream(Properties.Resources.guard)), L("Введите PIN", "Enter PIN"), State?.UiLanguage ?? UiLanguage.Russian))
             {
                 // Show the reusable dialog and check if the user clicked OK
                 if (pinDialog.ShowDialog() != DialogResult.OK)

@@ -32,7 +32,7 @@
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(284, 161);
             this.Name = "PinForm";
-            this.Text = "PinForm";
+            this.Text = "Введите PIN";
             this.ResumeLayout(false);
 
         }
