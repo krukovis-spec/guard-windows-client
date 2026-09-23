@@ -1,37 +1,77 @@
-# Guard: A Windows Scheduling & Filtering Utility
+# Guard v2 — родительский контроль для Windows
 
-Guard is a Windows application that provides centralized control over internet access for any assigned device, managed securely through your online account at Guard.AlexWeb.app. Its core functionality is the ability to receive and apply instructions from your account, which define:
-- Rules: Flexible filters that can restrict access to specific websites or online resources according to a schedule you set (for example, only allowing access during homework hours).
-- Categories: Predefined groups—such as gambling, adult content, or social media—which are blocked at all times when selected.
+**Статус на 23 сентября 2026: проект не завершён и не готов для установки на компьютер ребёнка.**
 
-Once a device is assigned, Guard keeps all settings automatically synchronized with your account. The application enforces restrictions by managing the system hosts file and Windows firewall rules, ensuring that the selected resources are inaccessible as specified by your instructions.
+В репозитории есть старый Windows-клиент и новые компоненты Guard v2. Успешная сборка и тесты отдельных компонентов не означают, что защита уже работает целиком. Старый `Output/Guard-Setup-v1.0.0.exe` не является выпуском Guard v2; не запускайте его для проверки новой версии.
 
-Guard protects access to its admin panel, closing, and uninstallation with a PIN code. Its state is securely encrypted, and all configuration data received from HTTP requests is thoroughly sanitized. The application is resistant to tampering: it monitors and automatically restarts itself if terminated, prevents operation without the necessary system privileges, and periodically verifies the device’s clock using public time services to ensure accurate rule enforcement. These safeguards ensure that Guard’s restrictions remain active and reliable, providing robust control for both families and administrators.
+## Что готово, а что нет
 
-## Features
+| Часть | Фактическое состояние |
+|---|---|
+| Закрытие опасных обходов старой версии | Первичная привязка ребёнком и старое удалённое управление отключены. Пустой PIN и известный `123456` не разрешают отключение/удаление. |
+| Системная служба v2 | Есть код службы, хранилища, проверки команд и локального обмена. Полное применение защитных политик не подключено. |
+| Блокировка приложений и сайтов v2 | Есть модели правил и безопасные тесты. Реальные AppLocker, сетевые ограничения, локальный прокси, расширение браузера и детский интерфейс ещё не соединены в рабочую систему. |
+| Родительский сайт | Есть интерфейс запросов на русском и английском. В текущей сборке отсутствует адаптер проверки запросов; вход и регистрация поэтому недоступны. |
+| Android | Есть код криптографии и подтверждений, но главный экран пока только оболочка. Рабочей привязки компьютера и подтверждения отпечатком с этого экрана нет. Сборка дополнительно заблокирована прежней ошибкой Kotlin в обработке подписей. |
+| Доставка через интернет | Есть серверный компонент и зашифрованный протокол. Сквозной сценарий и настоящие push-уведомления не приняты. |
+| Защита от удаления, установка и обновления | Не завершены и не проверены на одноразовой Windows-машине. Готового безопасного установщика v2 нет. |
 
-- **Scheduled Rules:** Create rules that are active only during specific times or on specific days of the week.
-- **Category-Based Blocking:** Block entire categories of websites and services.
-- **Resilient:** The application runs as a background service with a watchdog to ensure it remains active.
-- **Secure:** Uses PIN protection for administrative actions and a secure uninstall process.
-- **Time-Sync Verification:** Uses network time servers to prevent bypassing time-based rules by changing the system clock.
-- **Auto-Update:** Can check for new versions and facilitate updates.
+Исходники старого LAN-кабинета сохранены для миграции, но его запуск намеренно заблокирован. Не открывайте его в интернет и не пытайтесь обходить этот запрет.
 
-## Installation
+## Как пользоваться сейчас
 
+Сейчас доступен **просмотр разрабатываемого родительского интерфейса**, а не управление защитой ребёнка. Он не устанавливает службу и не меняет настройки Windows.
 
+Для разработчика: из `C:\Projects\guard-windows-client\parent\pwa` выполнить:
 
-1.  Download the latest installer from the [https://guard.alexweb.app/download](https://github.com/ganjie/Guard.alexweb.app_client/releases).
-2.  Run the installer. The application requires administrator privileges to function.
-3.  The Guard icon will appear in your system tray.
+```powershell
+npm ci
+npm run dev
+```
 
-## Known Issues & Future Work
+Открыть локальный адрес, указанный в выводе (обычно `http://127.0.0.1:5173`). Страница по умолчанию русская. Кнопка «Английский» переключает язык, «Русский» возвращает его обратно. Предупреждение «Версия для разработки» и статус «Проверка запросов ещё не подключена» ожидаемы. Заблокированные кнопки входа — ограничение текущей сборки, а не ошибка пароля. Для остановки просмотра нажать `Ctrl+C` в запущенном терминале.
 
----
-## Code Signing Policy
+Если раньше на этом адресе открывалась старая сборка и теперь виден пустой экран, один раз добавьте к адресу `/?verify=ru-v2`, затем вернитесь на обычный адрес. Исправленный кэш больше не удерживает старую страницу со ссылкой на удалённый файл сборки. Полный офлайн-просмотр интерфейса пока не поддерживается; кэшируются только значок и описание приложения.
 
-This project uses a free code signing certificate provided by [SignPath.io](https://signpath.io), with the certificate issued by the SignPath Foundation.
+Не вводите настоящий PIN, мастер-пароль Bitwarden или данные ребёнка. Не запускайте `guard.exe`, `Guard.Cleaner.exe`, `StartHelperG.exe`, службу или установщик на основном компьютере. Проверки с изменением системных правил разрешены только в отдельно подготовленной одноразовой Windows 11 Pro VM.
 
-* **Committers and Reviewers**: [ganjie](https://github.com/ganjie)
-* **Approvers**: [ganjie](https://github.com/ganjie)
-* **Privacy Policy**: Please review the [Privacy Policy](PRIVACY.md) for details on how the application handles data.
+Русифицированы тексты существующих Windows-окон, меню, диагностической сводки, удаления и исходника установщика, сайта и Android-оболочки. Английский остаётся вторым языком там, где уже есть переключение. Технические журналы, названия протоколов и системные сообщения Windows/Android могут оставаться на языке платформы. Старые готовые EXE/APK автоматически от изменения исходников не обновляются.
+
+## Как будет работать готовая версия
+
+Это целевой сценарий, **не доступная сейчас инструкция по установке**:
+
+1. Родитель устанавливает Guard из своей отдельной учётной записи администратора Windows; ребёнок остаётся обычным пользователем.
+2. Родитель сканирует одноразовый QR-код Android-приложением, привязывает телефон и проходит проверку готовности компьютера.
+3. Ребёнок пытается открыть неизвестное приложение или сайт и нажимает «Запросить разрешение».
+4. Родитель видит запрос в кабинете, выбирает «Разрешить всегда», «Разрешить на время», «Дневной лимит» или «Запретить».
+5. Разрешение подтверждается свежим отпечатком пальца в Android-приложении. Открытого кабинета или знания кода телефона для этого недостаточно.
+6. Для установки программ родитель временно включает «Обслуживание»; по окончании защита возвращается. Удаление требует отдельного родительского подтверждения.
+
+Bitwarden предназначен для хранения отдельного случайно сгенерированного комплекта восстановления Guard. Его мастер-пароль Guard не получает. Родительский Android-клиент входит в первый Windows-релиз; приложение для телефона ребёнка и iPhone-клиент не готовы и не нужны для текущего этапа.
+
+## Что осталось до семейного пилота
+
+1. Подключить реальное применение политик, прокси, поддерживаемые браузеры и детский интерфейс к службе.
+2. Соединить безопасную привязку, сайт, Android, доставку запросов и решений, восстановление и уведомления.
+3. Подготовить установку, обновление и авторизованное удаление. Проверить остановку/подмену службы, перезагрузки, отсутствие сети и обходы на одноразовой Windows VM.
+4. Проверить сильную биометрию и отсутствие обхода через код телефона на реальном Android-устройстве. Только после этих проверок готовить семейный пилот.
+
+Полные требования и история: [канонический план](docs/guard-v2-development-plan.md). [Ограничения старой версии после закрытия обходов](docs/guard-v2-p0-containment.md). Старые MVP-инструкции в `docs` — исторические материалы, а не руководство по v2.
+
+## Безопасные проверки исходников
+
+Проверка 23 сентября: Release-сборка Windows, 45 проверок старого клиента, все 29 тестовых стендов v2 и 26 тестов сайта прошли; сайт собран и просмотрен в браузере на русском и английском, проверено обновление прежнего кэша. NuGet audit и аудит production-зависимостей сайта не нашли уязвимостей. Полный аудит сайта выявил три предупреждения в dev-зависимостях (`vitest/@vitest/mocker` и `nanoid`): их обновление остаётся отдельной задачей перед выпуском.
+
+Android: ресурсы и манифест обработаны, но компиляция прерывается в `parent/android/app/src/main/java/app/guard/parent/protocol/RelayReceive.kt:125` — `ByteArray.ifEmpty` недоступен. Эта строка уже присутствовала в исходной версии `a55ca79` и при переводе не изменялась. Android-тесты и сборка APK поэтому не завершились; русские Android-экраны не проверены на устройстве. Установщик не пересобирался, системные проверки Windows в VM не запускались.
+
+Используется .NET SDK 10 (версия определяется `global.json`); старые проекты собираются для .NET Framework 4.8.
+
+```powershell
+dotnet msbuild guard.sln /restore /p:Configuration=Release /p:Platform="Any CPU"
+& .\Guard.Tests\bin\Release\net48\Guard.Tests.exe
+```
+
+`Guard.Tests.exe` — тестовый стенд, а не приложение Guard: системные команды подменяются. В `tests` также находятся отдельные безопасные стенды v2. Для сайта: `npm test` и `npm run build` в `parent/pwa`. Для Android: `gradlew.bat :app:testDebugUnitTest :app:assembleDebug` при установленном Android SDK и подходящем JDK; это сборка без установки APK. Тесты не заменяют проверку защиты в VM и биометрии на телефоне.
+
+Проект основан на [ganjie/guard-windows-client](https://github.com/ganjie/guard-windows-client). Старые заявления upstream о работающем сервере, автоматическом обновлении и подписи установщика не считаются свойствами текущего Guard v2.

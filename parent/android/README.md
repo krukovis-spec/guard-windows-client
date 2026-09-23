@@ -1,5 +1,7 @@
-# Guard Parent for Android
+# Guard — родитель для Android
 
-Native approval client foundation. It accepts only locator-only deep links, verifies an encrypted/device-signed request snapshot before displaying it, and creates a P-256 approval only through `BIOMETRIC_STRONG`.
+Это незавершённый компонент Guard v2. Главный экран переведён на русский, но пока только распознаёт ссылку на запрос и предупреждает, что разрешение не выдано. Привязка компьютера, загрузка карточки и подтверждение отпечатком с этого экрана не подключены.
 
-No APK is installed by this repository. Real-device verification is mandatory before any pilot: Strong biometric only, no device credential fallback, enrollment invalidation, hardware/attestation verification, and receipt stop-and-wait recovery.
+Внутри есть отдельные модули шифрования, проверки подписанного запроса и подписи P-256 через `BIOMETRIC_STRONG`. Наличие этих модулей не означает готовность приложения. Проверка 2026-09-23: сборка заблокирована прежней ошибкой `ByteArray.ifEmpty` в `protocol/RelayReceive.kt:125`; APK не установлен, тесты не завершились.
+
+До пилота обязательны проверка аппаратного хранения ключа, сильной биометрии без кода телефона, отзыва ключа при добавлении отпечатка и восстановления очереди подтверждений на реальном устройстве. Полная русская инструкция и статус проекта: [README](../../README.md).

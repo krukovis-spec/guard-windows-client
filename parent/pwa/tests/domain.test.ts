@@ -43,9 +43,9 @@ describe("display trust boundary", () => {
 });
 
 describe("localization", () => {
-  it("has explicit Russian and English outage copy", () => {
-    expect(copyFor("ru").outage).toContain("по умолчанию запрещены");
-    expect(copyFor("en").outage).toContain("default to deny");
+  it("does not claim that the child computer is protected", () => {
+    expect(copyFor("ru").outage).toContain("не подтверждает");
+    expect(copyFor("en").outage).toContain("does not confirm");
   });
 });
 
