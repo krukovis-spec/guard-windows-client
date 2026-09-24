@@ -11,5 +11,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Guard.Windows\Guard.Windows.csproj" />
+    <Content Include="..\..\protocol\test-vectors\relay-exchange-v1.properties" Link="relay-exchange-v1.properties" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\protocol\test-vectors\relay-exchange-v1.properties')" />
   </ItemGroup>
 </Project>

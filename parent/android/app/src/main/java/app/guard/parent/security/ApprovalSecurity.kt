@@ -9,6 +9,11 @@ import app.guard.parent.protocol.ApprovalDecision
 import app.guard.parent.protocol.GuardWire
 import app.guard.parent.protocol.RequestSnapshot
 import app.guard.parent.protocol.SignedApproval
+import app.guard.parent.protocol.CommandReceipt
+import app.guard.parent.protocol.RelayDeviceTrust
+import app.guard.parent.protocol.RelayRecipient
+import app.guard.parent.protocol.RelayReceive
+import app.guard.parent.protocol.ReceiptStatus
 import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
@@ -56,7 +61,7 @@ data class EnrollmentMaterial(val publicKeySpki: ByteArray, val certificateChain
 class AndroidApprovalKeyStore(private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }) {
     fun enroll(attestationChallenge: ByteArray): EnrollmentMaterial {
         require(attestationChallenge.size in 16..128)
-        keyStore.deleteEntry(APPROVAL_KEY_ALIAS)
+        check(!keyStore.containsAlias(APPROVAL_KEY_ALIAS)) { "existing approval key requires explicit recovery" }
         val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
         val builder = KeyGenParameterSpec.Builder(APPROVAL_KEY_ALIAS, KeyProperties.PURPOSE_SIGN)
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
@@ -106,9 +111,10 @@ object EcdsaP1363 {
         fun next(): Int = der.getOrNull(p++)?.toInt()?.and(0xff) ?: throw IllegalArgumentException("der truncated")
         fun len(): Int { val first = next(); if (first < 0x80) return first; val n = first and 0x7f; require(n in 1..2); var v = 0; repeat(n) { v = (v shl 8) or next() }; require(v >= 0x80); return v }
         require(next() == 0x30); val sequenceLength = len(); require(sequenceLength == der.size - p)
-        fun integer(): ByteArray { require(next() == 0x02); val n = len(); require(n in 1..33); val raw = der.copyOfRange(p, p + n); p += n
+        fun integer(): ByteArray { require(next() == 0x02); val n = len(); require(n in 1..33 && n <= der.size - p); val raw = der.copyOfRange(p, p + n); p += n
             require(raw.isNotEmpty() && ((raw[0].toInt() and 0x80) == 0)) { "negative" }
             require(raw.size == 1 || raw[0].toInt() != 0 || ((raw[1].toInt() and 0x80) != 0)) { "noncanonical" }
+            require(raw.size != 33 || raw[0] == 0.toByte()) { "P-256 integer overflow" }
             val unsigned = if (raw.size == 33) raw.copyOfRange(1, 33) else raw
             require(unsigned.size <= 32); return unsigned
         }
@@ -119,15 +125,33 @@ object EcdsaP1363 {
 }
 
 data class PendingSignedEnvelope(val keyId: String, val sequence: Long, val exactBytes: ByteArray)
-interface ApprovalOutbox { fun load(keyId: String): PendingSignedEnvelope?; fun save(envelope: PendingSignedEnvelope); fun remove(keyId: String, sequence: Long) }
+interface ApprovalOutbox {
+    fun load(keyId: String): PendingSignedEnvelope?
+    fun nextSequence(keyId: String): Long
+    fun save(envelope: PendingSignedEnvelope)
+    fun complete(envelope: PendingSignedEnvelope)
+}
 class StopAndWaitApprovals(private val outbox: ApprovalOutbox) {
     fun getPending(keyId: String): PendingSignedEnvelope? = outbox.load(keyId)
+    fun nextSequence(keyId: String): Long = outbox.nextSequence(keyId)
     fun persistBeforeSend(value: PendingSignedEnvelope) {
+        val approval = GuardWire.decodeSignedApproval(value.exactBytes)
+        require(value.keyId == approval.keyId && value.sequence == approval.sequence && value.sequence == outbox.nextSequence(value.keyId)) { "approval sequence" }
         val existing = outbox.load(value.keyId)
         require(existing == null || existing.sequence == value.sequence && existing.exactBytes.contentEquals(value.exactBytes)) { "receipt required before next approval" }
         if (existing == null) outbox.save(value)
     }
-    fun acceptReceipt(keyId: String, sequence: Long) { outbox.remove(keyId, sequence) }
+    fun acceptReceipt(rawFrame: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long): CommandReceipt {
+        val receipt = RelayReceive.receiveReceipt(rawFrame, recipient, trust, now).receipt
+        val pending = requireNotNull(outbox.load(receipt.keyId)) { "no pending approval" }
+        val approval = GuardWire.decodeSignedApproval(pending.exactBytes)
+        require(receipt.sequence == pending.sequence && receipt.commandId == approval.commandId && receipt.requestId == approval.requestId &&
+            receipt.requestRevision == approval.requestRevision && receipt.deviceId == approval.deviceId && receipt.deviceEpoch == approval.deviceEpoch &&
+            receipt.authorityEpoch == approval.authorityEpoch && receipt.processedUnixMillis >= approval.issuedUnixMillis &&
+            java.security.MessageDigest.isEqual(receipt.approvalHash, GuardWire.sha256(GuardWire.encodeApprovalSignatureInput(approval)))) { "receipt does not bind pending approval" }
+        if (receipt.status != ReceiptStatus.ACCEPTED_PENDING_RECONCILIATION) outbox.complete(pending)
+        return receipt
+    }
 }
 
 data class RecoveryKit(val bytes: ByteArray, val printable: String)

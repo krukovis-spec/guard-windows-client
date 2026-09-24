@@ -62,6 +62,7 @@ data class RelayFrameAad(
 
 object GuardWire {
     fun encodeRequestSnapshot(value: RequestSnapshot): ByteArray = Writer("GRRQ").apply {
+        validateSnapshot(value)
         id(value.deviceId); positive(value.deviceEpoch); positive(value.authorityEpoch); id(value.deviceEventId); id(value.requestId); positive(value.requestRevision)
         i32(value.targetKind.wire); text(value.targetIdentity, MAX_IDENTITY_BYTES, false); i32(value.evidence.size.also { require(it <= MAX_EVIDENCE) })
         value.evidence.forEach { text(it.name, MAX_EVIDENCE_NAME_BYTES, false); text(it.value, MAX_EVIDENCE_VALUE_BYTES, true) }; text(value.reason, MAX_REASON_BYTES, true)
@@ -75,6 +76,7 @@ object GuardWire {
     }
 
     fun encodeApprovalSignatureInput(value: SignedApproval): ByteArray = Writer("GRAP").apply {
+        validateApproval(value)
         positive(value.authorityEpoch); id(value.keyId); positive(value.sequence); id(value.commandId); id(value.nonce)
         i64(value.issuedUnixMillis); i64(value.expiryUnixMillis); lifetime(value.issuedUnixMillis, value.expiryUnixMillis, 15 * 60 * 1000L)
         id(value.deviceId); positive(value.deviceEpoch); id(value.requestId); positive(value.requestRevision); fixed(value.snapshotHash, 32); fixed(value.challenge, 32)
@@ -93,10 +95,17 @@ object GuardWire {
     }
 
     fun encodeCommandReceipt(value: CommandReceipt): ByteArray = Writer("GRRC").apply {
+        validateReceipt(value)
         id(value.deviceId); positive(value.deviceEpoch); positive(value.authorityEpoch); id(value.keyId); positive(value.sequence); id(value.commandId)
         id(value.requestId); positive(value.requestRevision); i32(value.status.wire); i64(value.processedUnixMillis)
         fixed(value.approvalHash, 32); nonNegative(value.committedPolicyRevision); i32(value.reconciliation); id(value.detailCode)
     }.finish()
+
+    fun decodeCommandReceipt(encoded: ByteArray): CommandReceipt = Reader(encoded, "GRRC").run {
+        val value = CommandReceipt(id(), positive(), positive(), id(), positive(), id(), id(), positive(), ReceiptStatus.from(i32()),
+            i64(), fixed(32), nonNegative(), i32(), id())
+        done(); validateReceipt(value); value
+    }
 
     fun encodeRelayFrameAssociatedData(value: RelayFrameAad): ByteArray = Writer("GRF1").apply {
         require(value.kind in 1..4 && value.cursor >= 0 && value.ack >= 0 && value.ack <= value.cursor)
@@ -105,6 +114,15 @@ object GuardWire {
     }.finish()
 
     fun sha256(value: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(value)
+
+    private fun validateReceipt(value: CommandReceipt) {
+        require(value.processedUnixMillis in -62135596800000L..253402300799999L) { "time" }
+        require(when (value.status) {
+            ReceiptStatus.APPLIED -> value.reconciliation == 3
+            ReceiptStatus.ACCEPTED_PENDING_RECONCILIATION -> value.reconciliation == 2 || value.reconciliation == 4
+            else -> value.reconciliation == 1
+        }) { "receipt reconciliation" }
+    }
 
     private fun validateSnapshot(value: RequestSnapshot) {
         require(value.deviceEpoch > 0 && value.authorityEpoch > 0 && value.requestRevision > 0 && value.policyRevision >= 0)
@@ -116,7 +134,12 @@ object GuardWire {
         val timed = value.decision == ApprovalDecision.ALLOW_TEMPORARY || value.decision == ApprovalDecision.ALLOW_DAILY_QUOTA
         require(if (timed) value.minutes in 1..1440 else value.minutes == 0)
     }
-    private fun lifetime(start: Long, end: Long, max: Long) { require(end > start && end - start <= max) { "lifetime" } }
+    internal fun requireLifetime(start: Long, end: Long, max: Long) {
+        // Match .NET DateTimeOffset's range before subtracting untrusted timestamps.
+        require(start in -62135596800000L..253402300799999L && end in -62135596800000L..253402300799999L) { "time" }
+        require(end > start && end - start <= max) { "lifetime" }
+    }
+    private fun lifetime(start: Long, end: Long, max: Long) { requireLifetime(start, end, max) }
 }
 
 private class Writer(magic: String) {

@@ -21,6 +21,7 @@ import javax.crypto.spec.SecretKeySpec
 /** Full, fail-closed GRF1 receive boundary. Locator/networking deliberately stays outside it. */
 data class RelayFrame(val aad: RelayFrameAad, val encapsulatedKey: ByteArray, val ciphertext: ByteArray)
 data class DeviceSignedRequest(val snapshot: RequestSnapshot, val deviceKeyId: String, val signature: ByteArray, val signatureInput: ByteArray)
+data class DeviceSignedReceipt(val receipt: CommandReceipt, val deviceKeyId: String, val signature: ByteArray, val signatureInput: ByteArray)
 data class RelayRecipient(val mailboxId: String, val keyId: String, val authorityEpoch: Long, val privateKey: RelayEncryptionKey)
 data class RelayDeviceTrust(val deviceId: String, val deviceEpoch: Long, val authorityEpoch: Long, val deviceKeyId: String, val devicePublicKeySec1: ByteArray)
 
@@ -32,31 +33,48 @@ object RelayReceive {
     private const val MAX_FRAME = 64 * 1024
     private const val MAX_CIPHER = 60 * 1024
     private const val DAY = 86_400_000L
-    private val infoLabel = "guard-relay-request-hpke-v1".toByteArray(Charsets.US_ASCII)
 
     fun decodeFrame(raw: ByteArray): RelayFrame {
         val r = StrictReader(raw, "GRF1")
         val aad = RelayFrameAad(r.enum(1, 4), r.id(), r.id(), r.id(), r.nonNegative(), r.nonNegative(), r.i64(), r.i64())
         require(aad.ack <= aad.cursor) { "ack" }; lifetime(aad.createdUnixMillis, aad.expiryUnixMillis, 7 * DAY)
-        val enc = r.bytes(65, false); require(enc.size == 65 && enc[0].toInt() == 4) { "enc" }
+        val enc = r.bytes(65, false); P256.publicKey(enc)
         val ciphertext = r.bytes(MAX_CIPHER, false); require(ciphertext.size >= 16) { "ciphertext" }
         r.done(); return RelayFrame(aad, enc, ciphertext)
     }
 
     fun receiveRequest(rawFrame: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, nowUnixMillis: Long, verifier: DeviceRequestSignatureVerifier = P256DeviceSignatureVerifier): DeviceSignedRequest {
-        val frame = decodeFrame(rawFrame)
-        require(frame.aad.kind == 1 && frame.aad.mailboxId == recipient.mailboxId && frame.aad.recipientKeyId == recipient.keyId) { "recipient" }
-        require(recipient.authorityEpoch == trust.authorityEpoch) { "authority epoch" }
-        require(nowUnixMillis in frame.aad.createdUnixMillis..frame.aad.expiryUnixMillis) { "frame expiry" }
-        val aad = GuardWire.encodeRelayFrameAssociatedData(frame.aad)
-        val plaintext = HpkeP256.decrypt(recipient.privateKey, frame.encapsulatedKey, frame.ciphertext, aad, infoLabel + aad)
+        val plaintext = openFrame(rawFrame, recipient, trust, nowUnixMillis, 1, "guard-relay-request-hpke-v1")
         val signed = decodeDeviceSignedRequest(plaintext)
+        require(signed.deviceKeyId == trust.deviceKeyId) { "device key" }
         val snapshot = signed.snapshot
         require(snapshot.deviceId == trust.deviceId && snapshot.deviceEpoch == trust.deviceEpoch && snapshot.authorityEpoch == trust.authorityEpoch) { "snapshot binding" }
         require(nowUnixMillis in snapshot.createdUnixMillis until snapshot.pendingExpiryUnixMillis) { "snapshot expiry" }
         val hash = GuardWire.sha256(signed.signatureInput)
         require(verifier.verify(trust.devicePublicKeySec1, hash, signed.signature)) { "device signature" }
         return signed
+    }
+
+    fun receiveReceipt(rawFrame: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, nowUnixMillis: Long): DeviceSignedReceipt {
+        val plaintext = openFrame(rawFrame, recipient, trust, nowUnixMillis, 3, "guard-relay-receipt-hpke-v1")
+        val r = StrictReader(plaintext, "GRDC")
+        val receipt = GuardWire.decodeCommandReceipt(r.bytes(MAX_FRAME, false))
+        val keyId = r.id()
+        val signature = r.bytes(64, false); require(signature.size == 64); r.done()
+        require(keyId == trust.deviceKeyId && receipt.deviceId == trust.deviceId && receipt.deviceEpoch == trust.deviceEpoch && receipt.authorityEpoch == trust.authorityEpoch) { "receipt binding" }
+        require(receipt.processedUnixMillis <= nowUnixMillis) { "future receipt" }
+        val input = plaintext.copyOfRange(0, plaintext.size - 68)
+        require(P256DeviceSignatureVerifier.verify(trust.devicePublicKeySec1, GuardWire.sha256(input), signature)) { "receipt signature" }
+        return DeviceSignedReceipt(receipt, keyId, signature, input)
+    }
+
+    private fun openFrame(raw: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long, kind: Int, label: String): ByteArray {
+        val frame = decodeFrame(raw)
+        require(frame.aad.kind == kind && frame.aad.mailboxId == recipient.mailboxId && frame.aad.recipientKeyId == recipient.keyId) { "recipient" }
+        require(recipient.authorityEpoch == trust.authorityEpoch) { "authority epoch" }
+        require(now in frame.aad.createdUnixMillis until frame.aad.expiryUnixMillis) { "frame expiry" }
+        val aad = GuardWire.encodeRelayFrameAssociatedData(frame.aad)
+        return HpkeP256.decrypt(recipient.privateKey, frame.encapsulatedKey, frame.ciphertext, aad, label.toByteArray(Charsets.US_ASCII) + aad)
     }
 
     fun decodeDeviceSignedRequest(raw: ByteArray): DeviceSignedRequest {
@@ -92,7 +110,7 @@ object RelayReceive {
         private fun take(n: Int): ByteArray { require(n >= 0 && n <= raw.size - position) { "truncated" }; return raw.copyOfRange(position, position + n).also { position += n } }
     }
     private fun canonicalId(value: String) = value.length in 16..128 && value.all { it.isLetterOrDigit() && it.code < 128 || it == '-' || it == '_' || it == '.' || it == ':' }
-    private fun lifetime(start: Long, end: Long, maximum: Long) { require(end > start && end - start <= maximum) { "lifetime" } }
+    private fun lifetime(start: Long, end: Long, maximum: Long) { GuardWire.requireLifetime(start, end, maximum) }
 }
 
 /** RFC 9180 base mode: DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-256-GCM. */
@@ -122,7 +140,7 @@ private object HpkeP256 {
 
 private object P256 {
     fun publicKey(sec1: ByteArray): PublicKey { require(sec1.size == 65 && sec1[0].toInt() == 4) { "P-256 point" }; val params = AlgorithmParameters.getInstance("EC").apply { init(ECGenParameterSpec("secp256r1")) }.getParameterSpec(java.security.spec.ECParameterSpec::class.java); val field = params.curve.field as java.security.spec.ECFieldFp; val p = field.p; val x = BigInteger(1, sec1.copyOfRange(1,33)); val y = BigInteger(1, sec1.copyOfRange(33,65)); require(x < p && y < p) { "point range" }; require(y.multiply(y).mod(p) == x.multiply(x).multiply(x).add(params.curve.a.multiply(x)).add(params.curve.b).mod(p)) { "off curve" }; return KeyFactory.getInstance("EC").generatePublic(ECPublicKeySpec(ECPoint(x,y),params)) }
-    fun p1363ToDer(raw: ByteArray): ByteArray { fun integer(part: ByteArray): ByteArray { val stripped = part.dropWhile { it == 0.toByte() }.toByteArray().ifEmpty { byteArrayOf(0) }; val normalized = if (stripped[0].toInt() and 0x80 != 0) byteArrayOf(0) + stripped else stripped; return byteArrayOf(2, normalized.size.toByte()) + normalized }; val body = integer(raw.copyOfRange(0,32)) + integer(raw.copyOfRange(32,64)); return byteArrayOf(0x30, body.size.toByte()) + body }
+    fun p1363ToDer(raw: ByteArray): ByteArray { fun integer(part: ByteArray): ByteArray { val stripped = part.dropWhile { it == 0.toByte() }.toByteArray().let { if (it.isEmpty()) byteArrayOf(0) else it }; val normalized = if (stripped[0].toInt() and 0x80 != 0) byteArrayOf(0) + stripped else stripped; return byteArrayOf(2, normalized.size.toByte()) + normalized }; val body = integer(raw.copyOfRange(0,32)) + integer(raw.copyOfRange(32,64)); return byteArrayOf(0x30, body.size.toByte()) + body }
 }
 
 private fun strictUtf8(bytes: ByteArray): String = try { Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString() } catch (_: CharacterCodingException) { throw WireException("utf8") }

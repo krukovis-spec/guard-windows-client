@@ -6,10 +6,12 @@ import app.guard.parent.protocol.*
 import app.guard.parent.security.*
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.security.SecureRandom
 
 class GuardFoundationTest {
+    @TempDir lateinit var approvalDirectory: File
     private val challenge = ByteArray(32) { (it + 1).toByte() }
     private val snapshot = RequestSnapshot("device-alpha-0001", 2, 4, "event-alpha-000001", "request-alpha-001", 3,
         TargetKind.WEBSITE, "https://example.test/path", listOf(Evidence("host", "example.test")), "homework",
@@ -58,10 +60,22 @@ class GuardFoundationTest {
     }
 
     @Test fun `stop and wait keeps exact bytes until receipt`() {
-        val store = MemoryOutbox(); val queue = StopAndWaitApprovals(store); val one = PendingSignedEnvelope("key", 4, byteArrayOf(1))
+        val approval = ExchangeVector.approval()
+        val store = FileApprovalOutbox(approvalDirectory); val queue = StopAndWaitApprovals(store)
+        val one = PendingSignedEnvelope(approval.keyId, 1, GuardWire.encodeSignedApproval(approval))
         queue.persistBeforeSend(one); queue.persistBeforeSend(one)
-        assertThrows(IllegalArgumentException::class.java) { queue.persistBeforeSend(PendingSignedEnvelope("key", 5, byteArrayOf(2))) }
-        queue.acceptReceipt("key", 4); queue.persistBeforeSend(PendingSignedEnvelope("key", 5, byteArrayOf(2)))
+        val second = PendingSignedEnvelope(approval.keyId, 2, GuardWire.encodeSignedApproval(approval.copy(sequence = 2)))
+        assertThrows(IllegalArgumentException::class.java) { queue.persistBeforeSend(second) }
+        val restarted = StopAndWaitApprovals(FileApprovalOutbox(approvalDirectory))
+        assertArrayEquals(one.exactBytes, restarted.getPending(approval.keyId)!!.exactBytes)
+        restarted.acceptReceipt(ExchangeVector.bytes("receipt.frame"), ExchangeVector.recipient, ExchangeVector.trust, ExchangeVector.now + 2000)
+        assertNotNull(restarted.getPending(approval.keyId))
+        assertEquals(1L, restarted.nextSequence(approval.keyId))
+        restarted.acceptReceipt(ExchangeVector.bytes("applied.frame"), ExchangeVector.recipient, ExchangeVector.trust, ExchangeVector.now + 2000)
+        val afterReceipt = StopAndWaitApprovals(FileApprovalOutbox(approvalDirectory))
+        assertNull(afterReceipt.getPending(approval.keyId)); assertEquals(2L, afterReceipt.nextSequence(approval.keyId))
+        afterReceipt.persistBeforeSend(second)
+        assertThrows(IllegalArgumentException::class.java) { afterReceipt.acceptReceipt(ExchangeVector.bytes("applied.frame"), ExchangeVector.recipient, ExchangeVector.trust, ExchangeVector.now + 2000) }
     }
 
     @Test fun `recovery kit has checksum and needs two copies`() {
@@ -85,5 +99,31 @@ class GuardFoundationTest {
 
     private fun hex(value: String): ByteArray = value.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
-    private class MemoryOutbox : ApprovalOutbox { private val data = mutableMapOf<String, PendingSignedEnvelope>(); override fun load(keyId: String) = data[keyId]; override fun save(envelope: PendingSignedEnvelope) { data[envelope.keyId] = envelope }; override fun remove(keyId: String, sequence: Long) { if (data[keyId]?.sequence == sequence) data.remove(keyId) } }
+    @Test fun `corrupt outbox fails closed instead of resetting sequence`() {
+        val approval = ExchangeVector.approval()
+        val store = FileApprovalOutbox(approvalDirectory)
+        store.save(PendingSignedEnvelope(approval.keyId, 1, GuardWire.encodeSignedApproval(approval)))
+        val path = approvalDirectory.listFiles()!!.single()
+        val bytes = path.readBytes(); bytes[8] = (bytes[8].toInt() xor 1).toByte(); path.writeBytes(bytes)
+        assertThrows(IllegalArgumentException::class.java) { FileApprovalOutbox(approvalDirectory).nextSequence(approval.keyId) }
+    }
+
+    @Test fun `separate outbox instances cannot overwrite competing decisions`() {
+        val approval = ExchangeVector.approval()
+        val first = PendingSignedEnvelope(approval.keyId, 1, GuardWire.encodeSignedApproval(approval))
+        val second = PendingSignedEnvelope(approval.keyId, 1, GuardWire.encodeSignedApproval(approval.copy(decision = ApprovalDecision.DENY, minutes = 0)))
+        val start = java.util.concurrent.CountDownLatch(1)
+        val wins = java.util.concurrent.atomic.AtomicInteger()
+        val threads = listOf(first, second).map { envelope -> Thread {
+            start.await()
+            try { FileApprovalOutbox(approvalDirectory).save(envelope); wins.incrementAndGet() } catch (_: IllegalArgumentException) { }
+        }.apply { start() } }
+        start.countDown(); threads.forEach { it.join(5000); assertFalse(it.isAlive) }
+        assertEquals(1, wins.get()); assertNotNull(FileApprovalOutbox(approvalDirectory).load(approval.keyId))
+    }
+
+    @Test fun `DER rejects a positive integer larger than P256 instead of truncating it`() {
+        val oversized = byteArrayOf(0x30, 0x26, 0x02, 0x21, 0x01) + ByteArray(32) { 1 } + byteArrayOf(0x02, 0x01, 0x01)
+        assertThrows(IllegalArgumentException::class.java) { EcdsaP1363.fromDer(oversized) }
+    }
 }

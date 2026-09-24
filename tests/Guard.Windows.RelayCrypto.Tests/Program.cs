@@ -7,10 +7,21 @@ namespace Guard.Windows.RelayCrypto.Tests
 {
     internal static class Program
     {
-        private static int Main()
+        private static int Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == "--export-interop")
+            {
+                InteropExchange.Export(args[1]);
+                return 0;
+            }
+            if (args.Length == 2 && args[0] == "--verify-android")
+            {
+                InteropExchange.VerifyAndroid(args[1]);
+                return 0;
+            }
             var tests = new List<(string Name, Action Run)>
             {
+                ("shared encrypted request and receipt verify", InteropExchange.VerifyFixture),
                 ("RFC 9180 P-256/AES-256-GCM vector decrypts exactly", DecryptsRfcVector),
                 ("relay HPKE round-trips", RoundTrips),
                 ("wrong recipient key fails closed", RejectsWrongRecipientKey),
