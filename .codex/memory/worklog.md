@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-09-25 — Guard Cloudflare access bootstrap, token pending
+
+- Confirmed VoicePaste's separate User API Token → process-only `CLOUDFLARE_API_TOKEN` → CurrentUser DPAPI pattern. The in-app browser could not complete Wrangler's localhost OAuth callback; repeated two-minute sessions expired.
+- Created `guard-relay` as a separate Worker in account `7135a2335784ee593d8942ef1d79525f`; replaced the public Hello World template with a fail-closed HTTP 404 stub and verified it from a new request. No production relay code or Guard installation was run.
+- Prepared but did not issue the account-owned `Guard relay deployment` token: `Specified Workers: guard-relay`, `Individual Workers Editor`, 90-day expiry. User approval for the final credential-creation action is pending; VoicePaste's token and Worker remain untouched. Plan and service-connection registry updated without secret values.
+
 ## 2026-09-24 — verified completion increment, overall product still incomplete
 
 - Code commits on `codex/guard-completion`: `3d2c936` Android, `8d1c94f` account-readiness, `f9da083` dependency patches; docs/memory follow separately. Pre-edit GitHub checkpoint verified at `bd8e7a8ed024c23b1402eeebeec71532bbda0e30`.
