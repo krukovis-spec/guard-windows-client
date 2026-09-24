@@ -10,7 +10,7 @@ Signing-intent state is an availability hint only, never authority. A finalize c
 
 ## Parent WebAuthn BFF
 
-The parent BFF uses exact-pinned `@simplewebauthn/server` `13.3.1`. It fails closed with `503 webauthn_bff_not_configured` unless all four deployment values are present and valid:
+The parent BFF uses exact-pinned `@simplewebauthn/server` `13.3.3`. It fails closed with `503 webauthn_bff_not_configured` unless all four deployment values are present and valid:
 
 - `RP_ID`: WebAuthn relying-party DNS name, with no scheme.
 - `RP_ORIGIN`: one exact HTTPS origin whose host is the RP ID or its subdomain.
