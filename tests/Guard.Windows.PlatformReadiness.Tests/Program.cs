@@ -109,7 +109,7 @@ namespace Guard.Windows.PlatformReadiness.Tests
 
         private static WindowsSeparateLocalAdministratorSourceCandidate Candidate(int rid, bool normal = true, bool enabled = true, bool locked = false, bool passwordRequired = true, bool guest = false, bool effectiveAdministrator = true)
         {
-            return new WindowsSeparateLocalAdministratorSourceCandidate(Sid(rid), normal, enabled, locked, passwordRequired, guest, false, effectiveAdministrator);
+            return new WindowsSeparateLocalAdministratorSourceCandidate(Sid(rid), normal, enabled, locked, passwordRequired, guest, false, effectiveAdministrator, isInternetIdentity: false);
         }
 
         private static WindowsAccountSid Sid(int rid) => new WindowsAccountSid("S-1-5-21-111-222-333-" + rid);
