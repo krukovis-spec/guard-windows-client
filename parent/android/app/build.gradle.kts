@@ -18,6 +18,7 @@ android {
     buildFeatures { buildConfig = true }
 
     testOptions { unitTests.all { it.useJUnitPlatform() } }
+    sourceSets.getByName("test").resources.directories.add("../../../protocol/test-vectors")
 }
 
 dependencies {

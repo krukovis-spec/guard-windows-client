@@ -17,7 +17,8 @@ namespace Guard.Windows.Accounts
             bool passwordRequired,
             bool isGuest,
             bool isServiceIdentity,
-            bool isEffectiveAdministrator)
+            bool isEffectiveAdministrator,
+            bool? isInternetIdentity = null)
         {
             Sid = sid ?? throw new ArgumentNullException(nameof(sid));
             IsNormalLocalUser = isNormalLocalUser;
@@ -27,6 +28,7 @@ namespace Guard.Windows.Accounts
             IsGuest = isGuest;
             IsServiceIdentity = isServiceIdentity;
             IsEffectiveAdministrator = isEffectiveAdministrator;
+            IsInternetIdentity = isInternetIdentity;
         }
 
         public WindowsAccountSid Sid { get; }
@@ -37,6 +39,7 @@ namespace Guard.Windows.Accounts
         public bool IsGuest { get; }
         public bool IsServiceIdentity { get; }
         public bool IsEffectiveAdministrator { get; }
+        public bool? IsInternetIdentity { get; }
     }
 
     public interface IWindowsSeparateLocalAdministratorSource
@@ -84,7 +87,8 @@ namespace Guard.Windows.Accounts
                     sourceCandidate.PasswordRequired,
                     sourceCandidate.IsGuest,
                     sourceCandidate.IsServiceIdentity,
-                    sourceCandidate.IsEffectiveAdministrator));
+                    sourceCandidate.IsEffectiveAdministrator,
+                    sourceCandidate.IsInternetIdentity));
             }
 
             return new SeparateLocalAdministratorInventory(_authoritativeChildSid, candidates);
@@ -166,7 +170,7 @@ namespace Guard.Windows.Accounts
                         LocalAccountSecurityFacts facts;
                         if (!_securityFactsProvider.TryGet(sid, out facts) || facts == null || !facts.IsLocalUser)
                         {
-                            continue;
+                            throw new InvalidOperationException("A local account could not be classified safely.");
                         }
 
                         var flags = information.Flags;
@@ -178,7 +182,8 @@ namespace Guard.Windows.Accounts
                             (flags & UserPasswordNotRequired) == 0,
                             HasRelativeId(sid.Value, GuestRelativeId),
                             facts.IsServiceIdentity,
-                            facts.IsAdministrator));
+                            facts.IsAdministrator,
+                            facts.IsAdministrator ? ReadInternetIdentity(information.Name) : null));
                     }
                 }
                 finally
@@ -198,6 +203,35 @@ namespace Guard.Windows.Accounts
 
             return candidates;
         }
+
+        private static bool? ReadInternetIdentity(IntPtr namePointer)
+        {
+            var accountName = Marshal.PtrToStringUni(namePointer);
+            if (string.IsNullOrEmpty(accountName)) return null;
+            // USER_INFO_24 distinguishes a SAM account from a Microsoft/Internet-linked identity.
+            // Never read or log the provider address, email or password.
+            var status = NetUserGetInfo(null, accountName, 24, out var buffer);
+            try
+            {
+                if (status != ErrorSuccess || buffer == IntPtr.Zero) return null;
+                var information = Marshal.PtrToStructure<UserInfo24>(buffer);
+                return information.InternetIdentity != 0;
+            }
+            finally { if (buffer != IntPtr.Zero) NetApiBufferFree(buffer); }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct UserInfo24
+        {
+            public int InternetIdentity;
+            public uint Flags;
+            public IntPtr ProviderName;
+            public IntPtr PrincipalName;
+            public IntPtr UserSid;
+        }
+
+        [DllImport("netapi32.dll", CharSet = CharSet.Unicode)]
+        private static extern int NetUserGetInfo(string? serverName, string userName, int level, out IntPtr buffer);
 
         private static bool HasRelativeId(string sid, uint relativeId)
         {

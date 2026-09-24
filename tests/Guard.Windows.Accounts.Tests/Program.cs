@@ -18,6 +18,7 @@ namespace Guard.Windows.Accounts.Tests
                 ("rejects disabled guest service domain and admin accounts", RejectsIneligibleAccounts),
                 ("fails closed when account inspection errors", FailsClosedOnInspectionError),
                 ("accepts a qualifying separate local administrator", AcceptsQualifyingSeparateAdministrator),
+                ("rejects cloud recovery and additional enabled administrators", RejectsCloudRecoveryAndExtraAdministrators),
                 ("rejects child-only and nonqualifying administrators", RejectsNonqualifyingAdministrators),
                 ("fails closed for invalid administrator inventory", FailsClosedForInvalidAdministratorInventory),
                 ("copies administrator inventory before evaluation", CopiesAdministratorInventory),
@@ -91,6 +92,16 @@ namespace Guard.Windows.Accounts.Tests
             Assert(
                 probe.Probe(CancellationToken.None).State == ReadinessFactState.Satisfied,
                 "Qualifying separate local administrator was rejected.");
+        }
+
+        private static void RejectsCloudRecoveryAndExtraAdministrators()
+        {
+            var child = Sid(1004);
+            AssertAdministratorUnsatisfied(Inventory(child, Candidate(Sid(1005), internetIdentity: true)));
+            AssertAdministratorUnsatisfied(Inventory(child, Candidate(Sid(1005)), Candidate(Sid(1006), internetIdentity: true)));
+            AssertAdministratorUnsatisfied(Inventory(child, Candidate(Sid(1005)), Candidate(Sid(1006))));
+            AssertAdministratorState(new FixedAdministratorInventory(Inventory(child, Candidate(Sid(1005), internetIdentity: null))), ReadinessFactState.Unknown);
+            AssertAdministratorState(new FixedAdministratorInventory(Inventory(child, Candidate(Sid(1005)), Candidate(Sid(1006), enabled: false))), ReadinessFactState.Satisfied);
         }
 
         private static void RejectsNonqualifyingAdministrators()
@@ -178,10 +189,11 @@ namespace Guard.Windows.Accounts.Tests
             bool passwordRequired = true,
             bool guest = false,
             bool service = false,
-            bool effectiveAdministrator = true)
+            bool effectiveAdministrator = true,
+            bool? internetIdentity = false)
         {
             return new SeparateLocalAdministratorCandidateFacts(
-                sid, local, enabled, locked, passwordRequired, guest, service, effectiveAdministrator);
+                sid, local, enabled, locked, passwordRequired, guest, service, effectiveAdministrator, internetIdentity);
         }
 
         private static WindowsAccountSid Sid(int rid)

@@ -23,6 +23,7 @@ class ApprovalCoordinator(private val keyStore: AndroidApprovalKeyStore, private
         sequence: Long, issued: Long, expiry: Long, choice: ApprovalChoice
     ): PendingSignedEnvelope {
         require(outbox.getPending(keyId) == null) { "terminal receipt required" }
+        require(sequence == outbox.nextSequence(keyId)) { "sequence must come from durable local state" }
         AuthorityEpochBinding.requireMatch(snapshot, authorityEpoch)
         val unsigned = SignedApproval(authorityEpoch, keyId, sequence, UUID.randomUUID().toString(), UUID.randomUUID().toString(), issued, expiry,
             snapshot.deviceId, snapshot.deviceEpoch, snapshot.requestId, snapshot.requestRevision, GuardWire.sha256(GuardWire.encodeRequestSnapshot(snapshot)),

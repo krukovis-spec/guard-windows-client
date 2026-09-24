@@ -392,7 +392,8 @@ namespace Guard.Service.Tests
                             passwordRequired: true,
                             isGuest: false,
                             isServiceIdentity: false,
-                            isEffectiveAdministrator: true)
+                            isEffectiveAdministrator: true,
+                            isInternetIdentity: false)
                     }),
                 new PassingReadinessBoundaryGuard(),
                 new GuardServiceHealthInspector(

@@ -1,5 +1,13 @@
 # Worklog
 
+## 2026-09-24 — verified completion increment, overall product still incomplete
+
+- Code commits on `codex/guard-completion`: `3d2c936` Android, `8d1c94f` account-readiness, `f9da083` dependency patches; docs/memory follow separately. Pre-edit GitHub checkpoint verified at `bd8e7a8ed024c23b1402eeebeec71532bbda0e30`.
+- Fixed Android compilation, real .NET/Kotlin signed encrypted request/receipt interop, exact-receipt acceptance and atomic one-process approval outbox; hardened expiry/device-key binding/DER and non-destructive enrollment.
+- Tightened existing Windows readiness against Internet-linked and extra enabled administrators. Ivan approved the daily-standard/local-recovery-admin model; full containment after gaining admin rights remains a signed-policy/VM gate.
+- Verified Release build, 29 v2 harnesses, 45 legacy checks, Android 18 tests + APK, PWA 26 tests/build, relay 15 tests/typecheck. PWA and relay production audits clean; Cloudflare dev tools retain five high findings. No live Guard, account changes or enforcement.
+- External prerequisites verified missing: Hyper-V access denied to this process, Cloudflare CLI unauthenticated. No deployment/VM/phone acceptance, no claim of a finished application. Memory: PROJECT_ONLY; canonical status in `docs/guard-v2-development-plan.md`.
+
 ## 2026-07-24 - Guard v2 Stage 5 default-deny web foundation
 
 - Committed `b685072` (`feat(v2): add default-deny web foundation`) on `codex/guard-v2-implementation`.

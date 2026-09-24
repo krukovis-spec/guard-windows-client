@@ -18,7 +18,8 @@ namespace Guard.Windows.Accounts
             bool passwordRequired,
             bool isGuest,
             bool isServiceIdentity,
-            bool isEffectiveAdministrator)
+            bool isEffectiveAdministrator,
+            bool? isInternetIdentity = null)
         {
             Sid = sid ?? throw new ArgumentNullException(nameof(sid));
             IsLocalUser = isLocalUser;
@@ -28,6 +29,7 @@ namespace Guard.Windows.Accounts
             IsGuest = isGuest;
             IsServiceIdentity = isServiceIdentity;
             IsEffectiveAdministrator = isEffectiveAdministrator;
+            IsInternetIdentity = isInternetIdentity;
         }
 
         public WindowsAccountSid Sid { get; }
@@ -38,6 +40,7 @@ namespace Guard.Windows.Accounts
         public bool IsGuest { get; }
         public bool IsServiceIdentity { get; }
         public bool IsEffectiveAdministrator { get; }
+        public bool? IsInternetIdentity { get; }
     }
 
     public sealed class SeparateLocalAdministratorInventory
@@ -95,6 +98,7 @@ namespace Guard.Windows.Accounts
                     return Error();
                 }
 
+                var qualifyingAdministrators = 0;
                 foreach (var candidate in inventory.Candidates)
                 {
                     if (cancellationToken.IsCancellationRequested)
@@ -107,13 +111,18 @@ namespace Guard.Windows.Accounts
                         return Error();
                     }
 
-                    if (IsQualifying(candidate, inventory.AuthoritativeChildSid))
+                    if (!candidate.IsEnabled || !candidate.IsEffectiveAdministrator)
                     {
-                        return Satisfied();
+                        continue;
                     }
+                    if (!candidate.IsInternetIdentity.HasValue) return Unknown();
+                    if (candidate.IsInternetIdentity.Value ||
+                        !IsQualifying(candidate, inventory.AuthoritativeChildSid)) return Unsatisfied();
+                    qualifyingAdministrators++;
                 }
 
-                return Unsatisfied();
+                // A second enabled admin (including a newly created one) is not a harmless extra account.
+                return qualifyingAdministrators == 1 ? Satisfied() : Unsatisfied();
             }
             catch (OperationCanceledException)
             {
