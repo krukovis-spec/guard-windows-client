@@ -1,5 +1,10 @@
 # Worklog
 
+## 2026-09-26 — Guard Cloudflare token and fail-closed relay publication
+
+- Created no-expiry `Guard relay deployment` account token scoped only to `guard-relay` Individual Workers Editor. Verified from fresh process: token and Guard HTTP 200, VoicePaste HTTP 403. Stored a separate CurrentUser DPAPI operational copy with user-only ACL outside Git; cleared clipboard. Bitwarden master copy is pending Ivan's manual save.
+- Relay 15/15 tests, typecheck and production audit passed. Wrangler uploaded and activated `guard-relay` with SQLite Durable Object, then exited 1 because the token cannot read account-wide Workers subdomain settings. External endpoint proves live fail-closed code: 404 root, 401 unauthenticated mailbox, 403 unconfigured bootstrap, 503 unconfigured parent BFF. No broad permission added; no Guard system action on host. Full product remains incomplete.
+
 ## 2026-09-25 — Guard Cloudflare access bootstrap, token pending
 
 - Confirmed VoicePaste's separate User API Token → process-only `CLOUDFLARE_API_TOKEN` → CurrentUser DPAPI pattern. The in-app browser could not complete Wrangler's localhost OAuth callback; repeated two-minute sessions expired.
