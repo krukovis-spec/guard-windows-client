@@ -79,6 +79,7 @@ export class DeviceMailbox implements DurableObject {
       if (path.endsWith("/ack") && request.method === "POST") return await this.ack(request, auth);
       if (path.endsWith("/tokens") && request.method === "POST") return await this.provisionToken(request, auth);
       if (path.endsWith("/tokens") && request.method === "DELETE") return await this.revokeToken(request, auth);
+      if (path === `/v1/mailboxes/${this.state.id.name}/locators/redeem` && request.method === "POST") return await this.redeemLocator(request, auth);
       if (path.endsWith("/intents/reserve") && request.method === "POST") return await this.intent(request, auth, "reserve");
       if (path.endsWith("/intents/finalize") && request.method === "POST") return await this.intent(request, auth, "finalize");
       if (path.endsWith("/intents/cancel") && request.method === "POST") return await this.intent(request, auth, "cancel");
@@ -99,6 +100,34 @@ export class DeviceMailbox implements DurableObject {
   private async bootstrap(request: Request): Promise<Response> { const body = await request.json() as { accessToken?: string }; if (!validToken(body.accessToken)) return fail(400, "invalid_bootstrap"); const exists = [...this.sql.exec("SELECT 1 FROM tokens LIMIT 1")].length > 0; if (exists) return fail(409, "already_bootstrapped"); const hash = await sha256(body.accessToken); this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,?,?)", hash.buffer, "admin", Date.now() + 365 * 86400000); return json({ role: "admin" }, 201); }
   private async provisionToken(request: Request, auth: Auth): Promise<Response> { if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden"); const b = await request.json() as { accessToken?: string; role?: Role; expiresAt?: number }; if (!validToken(b.accessToken) || !roles.includes(b.role as Role) || typeof b.expiresAt !== "number" || !Number.isSafeInteger(b.expiresAt) || b.expiresAt <= Date.now()) throw new RelayHttpError(400, "invalid_token_provisioning"); const hash = await sha256(b.accessToken); this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,?,?) ON CONFLICT(hash) DO UPDATE SET role=excluded.role,expires_at=excluded.expires_at", hash.buffer, b.role!, b.expiresAt); return json({ role: b.role, expiresAt: b.expiresAt }, 201); }
   private async revokeToken(request: Request, auth: Auth): Promise<Response> { if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden"); const b = await request.json() as { accessToken?: string }; if (!validToken(b.accessToken)) throw new RelayHttpError(400, "invalid_token_revocation"); const hash = await sha256(b.accessToken); this.sql.exec("DELETE FROM tokens WHERE hash=?", hash.buffer); return new Response(null, { status: 204, headers }); }
+  private async redeemLocator(request: Request, auth: Auth): Promise<Response> {
+    if (auth.role !== "approval") throw new RelayHttpError(403, "role_forbidden");
+    if (request.headers.get("content-type") !== "application/json") throw new RelayHttpError(415, "json_content_type_required");
+    const declared = request.headers.get("content-length");
+    if (declared && (!/^[0-9]+$/.test(declared) || Number(declared) > 512)) throw new RelayHttpError(413, "request_too_large");
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    if (bytes.length > 512) throw new RelayHttpError(413, "request_too_large");
+    let body: { locator?: unknown };
+    try { body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as typeof body; }
+    catch { throw new RelayHttpError(400, "invalid_json"); }
+    if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.locator !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(body.locator)) {
+      throw new RelayHttpError(400, "invalid_locator");
+    }
+    const locatorHash = await sha256(body.locator);
+    return this.state.storage.transaction(async () => {
+      const row = [...this.sql.exec<{ request_id_hash: ArrayBuffer }>(
+        "SELECT request_id_hash FROM parent_locators WHERE locator_hash=? AND expires_at>?",
+        locatorHash.buffer,
+        Date.now(),
+      )][0];
+      if (!row || new Uint8Array(row.request_id_hash).length !== 32) {
+        throw new RelayHttpError(410, "approval_locator_expired");
+      }
+      this.sql.exec("DELETE FROM parent_locators WHERE locator_hash=?", locatorHash.buffer);
+      const requestIdHash = Array.from(new Uint8Array(row.request_id_hash), byte => byte.toString(16).padStart(2, "0")).join("");
+      return json({ requestIdSha256: requestIdHash, nonAuthoritative: true });
+    });
+  }
   private async authenticate(request: Request): Promise<Auth | null> { const token = request.headers.get("x-guard-token"); if (!token || !validToken(token)) return null; const hash = await sha256(token); const row = [...this.sql.exec<{ role: Role }>("SELECT role FROM tokens WHERE hash=? AND expires_at>?", hash.buffer, Date.now())][0]; return row && roles.includes(row.role) ? { hash, role: row.role } : null; }
   private async publish(request: Request, auth: Auth): Promise<Response> { const raw = new Uint8Array(await request.arrayBuffer()); if (raw.byteLength > MAX_FRAME_BYTES) throw new RelayHttpError(413, "frame_too_large"); let frame: RelayFrame; try { frame = parseRelayFrame(raw); } catch (e) { throw new RelayHttpError(400, e instanceof FrameError ? "malformed_frame" : "invalid_frame"); }
     const mailbox = mailboxPath(new URL(request.url).pathname); if (frame.mailboxId !== mailbox) throw new RelayHttpError(400, "mailbox_mismatch");

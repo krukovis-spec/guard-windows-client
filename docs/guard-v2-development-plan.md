@@ -60,6 +60,10 @@
 
 ### M0. Воспроизводимая база и изолированный стенд
 
+Старт исполнения 2026-09-29: согласованный baseline и план зафиксированы коммитом `a46b73d628ecb5128f1069578f1e184483d6b0bf` и отправлены в GitHub как `codex/checkpoint-20260929-2325-guard-integrated`. Рабочая ветка: `codex/guard-v2-integrated`. На основной Windows приложение и политики не запускались.
+
+Проверка 2026-09-29: Release solution build PASS; новый `scripts/run-safe-tests.ps1 -SkipBuild` выполнил все 29 v2 console harness и legacy P0 checks PASS; PWA 26/26 + build PASS, Worker 15/15 + typecheck PASS, Android 18/18 JVM + debug APK PASS. Повторная VM-приёмка M0 ещё **NOT RUN**: elevated `Get-VM` вернул пустой список. Для предварительной лаборатории загружается официальный Windows 11 Enterprise Evaluation ISO (90 дней); это не подмена требуемого финального теста на Windows 11 Pro и не семейная лицензия.
+
 **Результат:** можно безопасно собрать точную версию и повторить проверки на отдельной тестовой Windows.
 
 1. После команды начать: проверить статус/remote и безопасный diff, создать и push свежий checkpoint текущего кода вместе с согласованным планом. Старый checkpoint сохранить. Новую ветку `codex/guard-v2-integrated` создать от этой базы; пользовательские изменения не включать без установленного scope.
@@ -251,13 +255,14 @@
 - 2026-09-29: Microsoft указывает, что App Control применяется ко всем пользователям машины. Это основание исследовать его для нового аккаунта; отсюда не следует автоматическая защита любого сервиса или произвольного динамического grant. [Обзор App Control и AppLocker](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/appcontrol-and-applocker-overview).
 - 2026-09-29: подписанные base/supplemental policies используют PKCS#7/RSA, ECDSA не поддерживается; anti-tamper требует Secure Boot и вступает в силу после reboot. Ошибки могут нарушить загрузку, поэтому M1 обязательно проверяет recovery. [Подписанные политики Microsoft](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/deployment/use-signed-policies-to-protect-appcontrol-against-tampering).
 - 2026-09-29: `KeyProperties.PURPOSE_AGREE_KEY` появился в API 31; текущий `minSdk=30` не является доказательством совместимости аппаратного ECDH на Android 11. [Android KeyProperties](https://developer.android.com/reference/android/security/keystore/KeyProperties#PURPOSE_AGREE_KEY).
+- 2026-09-29: Microsoft прямо указывает, что на автономном ПК локальный администратор полностью управляет AppLocker policy. Signed App Control при Secure Boot сильнее: изменение требует признанного signer, а произвольная подмена может привести к отказу загрузки. Из этого **не** следует автоматическое истечение ранее подписанного supplemental allow, когда Guard-служба остановлена. Это открытый M1 gate, а не доказанная защита всех случаев. [AppLocker security considerations](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/applocker/security-considerations-for-applocker), [App Control with VBS](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/introduction-to-virtualization-based-security-and-appcontrol), [signed policy requirements](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/deployment/use-signed-policies-to-protect-appcontrol-against-tampering).
 
 ### Текущий статус нового маршрута
 
 | Этап | Статус | Условие перехода |
 |---|---|---|
-| M0 | Не начат по новому плану | Команда Ивана начать, pushed checkpoint, safe baseline и проверенный VM recovery |
-| M1 | Не начат | Принятая матрица системной защиты и совместимый dynamic approval path |
+| M0 | Частично: checkpoint и safe baseline PASS; VM recovery NOT RUN | Проверенный disposable guest с snapshot и recovery |
+| M1 | Документация/риск исследованы; VM proof NOT RUN | Принятая матрица системной защиты и совместимый dynamic approval path |
 | M2 | Части уже есть; интеграция открыта | Реальный encrypted exchange, BFF registration/view enrollment и durable receipts |
 | M3 | Foundations есть; сценарий открыт | Доверенная привязка и реальная аппаратная подпись |
 | M4–M8 | Не приняты | Соответствующие T/E и наблюдаемый пользовательский результат |

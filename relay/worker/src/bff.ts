@@ -589,6 +589,7 @@ function mailboxInbox(context: ParentBffContext, request: Request): Response {
       throw new ParentBffHttpError(503, "mailbox_frame_corrupt");
     }
     return {
+      cursor: row.cursor,
       frameId: parsed.frameId,
       frame: bytesToBase64Url(bytes),
       receivedAt: new Date(createdAt).toISOString(),

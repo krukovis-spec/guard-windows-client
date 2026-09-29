@@ -39,6 +39,7 @@ Passkey public keys, counters, challenge records, and session hashes are kept in
 
 ```json
 {
+  "cursor": 1,
   "frameId": "outer-canonical-frame-id",
   "frame": "<full canonical GRF1 bytes as unpadded base64url>",
   "receivedAt": "2026-07-24T00:00:00.000Z"
@@ -46,7 +47,10 @@ Passkey public keys, counters, challenge records, and session hashes are kept in
 ```
 
 The full frame is required for HPKE encapsulated-key and AAD verification. Inner request IDs, plaintext targets, decisions, relay tokens, and numeric byte arrays are never returned. A malformed, oversized, or storage-inconsistent frame fails the whole response closed instead of returning a partial inbox.
+The cursor is the authenticated outer frame cursor. The parent client pages with `after` and verifies strict forward progress; it does not use this untrusted server hint as an approval replay floor.
 
 `POST /v1/parent/approval-intents` validates the UI choice but deliberately stores neither that choice nor its duration. It creates only a short-lived, non-authoritative locator bound to the hash of the pending request identifier. Android must fetch and verify the exact request, show it again, obtain a fresh biometric-confirmed decision, sign it locally, and observe a device-signed receipt. The BFF never signs, reserves a signing sequence, publishes an approval frame, or finalizes a decision for Android.
+
+An enrolled Android client redeems the locator once with its mailbox-scoped `approval` bearer token: `POST /v1/mailboxes/{mailboxId}/locators/redeem`, JSON `{ "locator": "..." }`. The response contains only `{ "requestIdSha256": "64 lowercase hex characters", "nonAuthoritative": true }`. Android must find the matching identifier among independently decrypted, device-signed pending snapshots from its enrolled mailbox. Wrong role is 403; expired, missing or replayed locator is 410. The locator is not an approval credential and cannot authorize an action by itself. Native redemption and snapshot matching are not yet wired into the Android UI.
 
 `NoopWakeAdapter` is the default. A future FCM adapter may carry only `{ mailboxId, collapseToken }`; wake payloads must never include names, domains, reasons, actions, or credentials.

@@ -14,6 +14,7 @@ export interface RequestSnapshot {
 }
 
 export interface EncryptedRelayFrame {
+  readonly cursor: number;
   readonly frameId: string;
   readonly encodedFrame: ArrayBuffer;
   readonly receivedAt: string;

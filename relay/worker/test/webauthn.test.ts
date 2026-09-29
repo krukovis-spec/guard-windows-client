@@ -10,6 +10,7 @@ const inviteSecret = "test-only-parent-invite-174c34797fbb42d9a3e57ce5a5bcf82e";
 const bootstrapToken = "test-only-bootstrap-token-8f3f0d4dd15ebd16c4f5ac14a1c9e617";
 const adminToken = "webauthn-admin-token-0000000000001";
 const deviceToken = "webauthn-device-token-000000000001";
+const approvalToken = "webauthn-approval-token-00000000001";
 const mailboxId = "mailbox-webauthn-main";
 const recipientKeyId = "recipient-parent-main";
 const authOrigin = { origin };
@@ -96,6 +97,12 @@ describe.sequential("parent WebAuthn BFF", () => {
       body: JSON.stringify({ accessToken: deviceToken, role: "device", expiresAt: Date.now() + 600_000 }),
     });
     expect(response.status).toBe(201);
+    response = await request(`/v1/mailboxes/${mailboxId}/tokens`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ accessToken: approvalToken, role: "approval", expiresAt: Date.now() + 600_000 }),
+    });
+    expect(response.status).toBe(201);
     const createdAt = Date.now();
     const relayFrame = buildFrame(mailboxId, recipientKeyId, "frame-parent-snapshot-0001", createdAt);
     response = await request(`/v1/mailboxes/${mailboxId}/frames`, {
@@ -111,6 +118,7 @@ describe.sequential("parent WebAuthn BFF", () => {
     expect(response.status).toBe(200);
     const snapshots = await response.json() as Array<Record<string, unknown>>;
     expect(snapshots).toEqual([{
+      cursor: 1,
       frameId: "frame-parent-snapshot-0001",
       frame: base64Url(relayFrame),
       receivedAt: new Date(createdAt).toISOString(),
@@ -190,6 +198,55 @@ describe.sequential("parent WebAuthn BFF", () => {
     expect(locator.locator).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(JSON.stringify(locator)).not.toContain("Deny");
     expect(JSON.stringify(locator)).not.toContain("Bearer");
+
+    const redeemPath = `/v1/mailboxes/${mailboxId}/locators/redeem`;
+    const redeemBody = JSON.stringify({ locator: locator.locator });
+    response = await request(`/v1/mailboxes/${mailboxId}/other/locators/redeem`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${approvalToken}`, "content-type": "application/json" },
+      body: redeemBody,
+    });
+    expect(response.status).toBe(404);
+    response = await request(redeemPath, {
+      method: "POST",
+      headers: { authorization: `Bearer ${deviceToken}`, "content-type": "application/json" },
+      body: redeemBody,
+    });
+    expect(response.status).toBe(403);
+    response = await request(redeemPath, {
+      method: "POST",
+      headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: redeemBody,
+    });
+    expect(response.status).toBe(403);
+    response = await request(redeemPath, {
+      method: "POST",
+      headers: { authorization: `Bearer ${approvalToken}`, "content-type": "application/json" },
+      body: redeemBody,
+    });
+    expect(response.status).toBe(200);
+    const expectedHash = Array.from(new Uint8Array(await crypto.subtle.digest(
+      "SHA-256", new TextEncoder().encode(intent.requestId),
+    )), byte => byte.toString(16).padStart(2, "0")).join("");
+    await expect(response.json()).resolves.toEqual({ requestIdSha256: expectedHash, nonAuthoritative: true });
+    response = await request(redeemPath, {
+      method: "POST",
+      headers: { authorization: `Bearer ${approvalToken}`, "content-type": "application/json" },
+      body: redeemBody,
+    });
+    expect(response.status).toBe(410);
+    response = await request(redeemPath, {
+      method: "POST",
+      headers: { authorization: `Bearer ${approvalToken}`, "content-type": "application/json" },
+      body: "null",
+    });
+    expect(response.status).toBe(400);
+    response = await request(redeemPath, {
+      method: "POST",
+      headers: { authorization: `Bearer ${approvalToken}`, "content-type": "application/json" },
+      body: "x".repeat(513),
+    });
+    expect(response.status).toBe(413);
   });
 
   it("rejects the wrong origin and the wrong high-entropy invite", async () => {
