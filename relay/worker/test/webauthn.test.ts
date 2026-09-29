@@ -209,6 +209,12 @@ describe.sequential("parent WebAuthn BFF", () => {
     expect(response.status).toBe(403);
     response = await request(redeemPath, {
       method: "POST",
+      headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: redeemBody,
+    });
+    expect(response.status).toBe(403);
+    response = await request(redeemPath, {
+      method: "POST",
       headers: { authorization: `Bearer ${approvalToken}`, "content-type": "application/json" },
       body: redeemBody,
     });
