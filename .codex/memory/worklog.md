@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-09-30 — M0 disposable VM prepared, OS installation pending
+
+- Ivan explicitly approved renewed UAC for the lab. Elevated inventory found zero pre-existing VMs and the built-in Default Switch. Created only `GuardV2-Lab-20260930`, Generation 2, 4 vCPU, 8 GiB startup, dynamic 80 GiB VHDX, Secure Boot on, vTPM on, ProductionOnly checkpoints. VM files moved to `C:\Users\kruko\AppData\Local\GuardV2Lab\VM` because D: free space unexpectedly dropped to ~29 GiB from unrelated activity; VHDX was verified dynamic and only 4 MiB. No unrelated D: data was deleted.
+- Downloaded the 90-day Windows 11 Enterprise Evaluation 26H2 ISO from a Microsoft `go.microsoft.com` redirect to the Microsoft CDN into `D:\GuardV2Lab`; size 8,225,329,152 bytes, SHA-256 `BC3F24086EBADC94489066B5AD78089E2CF5C3491E90E790BB81A2B199C10E38`. The published Microsoft hash PDF currently says 25H2, so this is **not** a match against a version-correct official hash; the digest matches an independent catalog only. ISO attached to the dedicated VM. This is preliminary feasibility, not Windows 11 Pro acceptance.
+- VM started. Non-elevated VMConnect received access denied; elevated VMConnect showed Hyper-V UEFI boot summary because the DVD keypress window was missed. Awaiting Ivan's action-time confirmation to restart guest and begin Windows installation via VMConnect. No Guard or Windows policy was applied to host or guest yet. No snapshot/recovery test yet.
+
 ## 2026-09-29 — M0 execution start
 
 - User explicitly started full development. Planned baseline `a46b73d628ecb5128f1069578f1e184483d6b0bf` pushed as `codex/checkpoint-20260929-2325-guard-integrated`; implementation branch `codex/guard-v2-integrated`. Existing dirty files were the five known planning documents only, committed before checkpoint. No application code changed before checkpoint push.

@@ -5,7 +5,7 @@
 - Рабочий корень: `C:\Projects\guard-windows-client`; исходники на Яндекс.Диске не использовать.
 - Новая служба v2 — `.NET 10` в `src/`; `.NET Framework 4.8`, tray/watchdog и LAN-кабинет ниже относятся к quarantined legacy. Сведения о недостающих SDK/первой сборке за июнь — история, не актуальный блокер.
 - Читать `.codex/memory/project.md`, затем `docs/guard-v2-development-plan.md`. Текущий маршрут — M0–M9, тесты T01–T20/E01–E10; `docs/guard-v2-implementation-handoff.md` содержит актуальный вход и отдельно старый P0 prompt.
-- Иван дал команду выполнить M0–M9. Контрольная точка уже отправлена: `codex/checkpoint-20260929-2325-guard-integrated` (`a46b73d`); рабочая ветка `codex/guard-v2-integrated`. Не создавать повторный checkpoint без нового implementation baseline. Live Guard/политики проверять только в disposable VM, реальную биометрию — на телефоне. Второй UAC-запрос Hyper-V 29 сентября был отменён; не повторять его молча.
+- Иван дал команду выполнить M0–M9. Контрольная точка уже отправлена: `codex/checkpoint-20260929-2325-guard-integrated` (`a46b73d`); рабочая ветка `codex/guard-v2-integrated`. Не создавать повторный checkpoint без нового implementation baseline. Live Guard/политики проверять только в disposable VM, реальную биометрию — на телефоне. 30 сентября Иван явно разрешил новый UAC для VM: `GuardV2-Lab-20260930` создана, Windows ещё не установлена, snapshot/recovery не проверены.
 
 ## Контекст проекта
 
