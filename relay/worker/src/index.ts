@@ -79,7 +79,7 @@ export class DeviceMailbox implements DurableObject {
       if (path.endsWith("/ack") && request.method === "POST") return await this.ack(request, auth);
       if (path.endsWith("/tokens") && request.method === "POST") return await this.provisionToken(request, auth);
       if (path.endsWith("/tokens") && request.method === "DELETE") return await this.revokeToken(request, auth);
-      if (path.endsWith("/locators/redeem") && request.method === "POST") return await this.redeemLocator(request, auth);
+      if (path === `/v1/mailboxes/${this.state.id.name}/locators/redeem` && request.method === "POST") return await this.redeemLocator(request, auth);
       if (path.endsWith("/intents/reserve") && request.method === "POST") return await this.intent(request, auth, "reserve");
       if (path.endsWith("/intents/finalize") && request.method === "POST") return await this.intent(request, auth, "finalize");
       if (path.endsWith("/intents/cancel") && request.method === "POST") return await this.intent(request, auth, "cancel");

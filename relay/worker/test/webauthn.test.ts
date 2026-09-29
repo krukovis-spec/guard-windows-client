@@ -201,6 +201,12 @@ describe.sequential("parent WebAuthn BFF", () => {
 
     const redeemPath = `/v1/mailboxes/${mailboxId}/locators/redeem`;
     const redeemBody = JSON.stringify({ locator: locator.locator });
+    response = await request(`/v1/mailboxes/${mailboxId}/other/locators/redeem`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${approvalToken}`, "content-type": "application/json" },
+      body: redeemBody,
+    });
+    expect(response.status).toBe(404);
     response = await request(redeemPath, {
       method: "POST",
       headers: { authorization: `Bearer ${deviceToken}`, "content-type": "application/json" },

@@ -8,7 +8,7 @@ android {
 
     defaultConfig {
         applicationId = "app.guard.parent"
-        minSdk = 30
+        minSdk = 31
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
