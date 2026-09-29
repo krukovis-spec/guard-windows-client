@@ -49,6 +49,19 @@ describe("same-origin parent transport", () => {
     expect(Array.from(new Uint8Array(first.encodedFrame))).toEqual(Array.from(encodedFrame));
   });
 
+  it("accepts the BFF's default page of twenty frames but not more", async () => {
+    const frame = encodeBase64Url(new Uint8Array(8).buffer);
+    const makePage = (count: number) => Array.from({ length: count }, (_, index) => ({
+      frameId: `frame-parent-${String(index).padStart(5, "0")}`,
+      frame,
+      receivedAt: "2026-07-24T20:00:00.000Z"
+    }));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(makePage(20)), { status: 200 })));
+    await expect(new HttpParentTransport().listSnapshots()).resolves.toHaveLength(20);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(makePage(21)), { status: 200 })));
+    await expect(new HttpParentTransport().listSnapshots()).rejects.toThrow();
+  });
+
   it("rejects leaked inner fields, duplicate ids, and oversized frames", async () => {
     const valid = {
       frameId: "frame-alpha-00001",

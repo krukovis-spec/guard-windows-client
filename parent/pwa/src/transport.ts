@@ -1,7 +1,7 @@
 import { decodeBase64Url } from "./base64url";
 import type { ApprovalIntent, ApprovalIntentLocator, EncryptedRelayFrame, ParentTransport, PasskeyCredentialDto, PasskeyOptions, ViewState } from "./types";
 
-const maximumInboxFrames = 16;
+const maximumInboxFrames = 20;
 const maximumRelayFrameBytes = 64 * 1024;
 const canonicalIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u;
 
