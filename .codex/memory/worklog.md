@@ -1,5 +1,13 @@
 # Worklog
 
+## 2026-09-29 — M0 execution start
+
+- User explicitly started full development. Planned baseline `a46b73d628ecb5128f1069578f1e184483d6b0bf` pushed as `codex/checkpoint-20260929-2325-guard-integrated`; implementation branch `codex/guard-v2-integrated`. Existing dirty files were the five known planning documents only, committed before checkpoint. No application code changed before checkpoint push.
+- Release solution build PASS; 29 explicitly allowlisted v2 console harnesses and legacy P0 checks PASS through `scripts/run-safe-tests.ps1 -SkipBuild`. PWA 26/26 + build, Worker 15/15 + typecheck, Android 18/18 JVM + debug APK PASS. No live Guard/installer/system policy ran on the host.
+- Elevated read-only `Get-VM` returned zero guests. Hyper-V service is running; free official Windows 11 Enterprise Evaluation ISO is downloading for isolated feasibility work, but Windows 11 Pro remains the final target. Phone not connected (`adb devices` empty), so physical biometric evidence is NOT RUN.
+- Official Microsoft guidance confirms standalone local admin can fully control AppLocker; signed App Control with Secure Boot can resist policy tampering but does not document TTL for a previously signed supplemental allow after service loss. M1 cannot be marked PASS from source reading or unit tests.
+- Worker now has approval-role-only, one-time locator redemption that returns only a SHA-256 request-id digest. Device token cannot redeem; replay is 410. Worker tests/typecheck PASS. No production deployment performed yet.
+
 ## 2026-09-29 — completion plan, implementation not started
 
 - Reconciled the canonical plan with `a53cdad`: M0–M9 deliverables, existing-vs-missing integration map, T01–T20 tests, E01–E10 real acceptance scenarios, VM/phone boundaries and release gates. Updated current handoff and superseded conflicting old passkey/publisher/domain-scope text.
