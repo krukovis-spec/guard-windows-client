@@ -1,10 +1,16 @@
 # Worklog
 
+## 2026-09-30 — isolated VM boot diagnosis and safe detach
+
+- Ivan approved the VM-only elevated diagnostics. `bcdboot` returned exit 183 / `c0000035` on the guest EFI partition. Retrying with `/c`, then after a verified backup renaming the guest BCD and trying `/c /offline`, returned the same collision. `bcdedit /store` confirmed the newly written BCD is invalid. The original BCD is preserved at `D:\GuardV2Lab\guest-bcd-original.bak` and on the guest EFI partition as `BCD.pre-repair`; the VM is disposable and has no user data.
+- The exact powered-off `GuardV2-Lab-20260930` VHDX was detached after reverse path/disk checks. Temporary host letters S:/W: disappeared. The VM is **Off** and its evaluation ISO remains attached to its virtual DVD. No host reboot, Guard, installer or policy execution occurred.
+- Elevated VMConnect still does not accept Computer Use input. The VM window is visible, but Ivan must click `Пуск`, then click the black VM screen and press Space at `Press any key to boot from CD or DVD` to enter Windows Setup. Clean guest install, snapshot/recovery and M1 remain NOT RUN.
+
 ## 2026-09-30 — Windows image applied to isolated VM; boot check blocked
 
 - Ivan approved restarting **only** `GuardV2-Lab-20260930` with Hyper-V. Computer Use showed the ISO's "press any key" prompt but could not send input to elevated VMConnect. No host reboot occurred.
 - Mounted the official evaluation ISO read-only on the host. Its single WIM index is `Windows 11 Enterprise Evaluation`. Before any partition write, verified the exact powered-off VM/VHDX path, the reverse `Get-VHD -DiskNumber` mapping, `File Backed Virtual` bus, empty RAW partition table and 80 GiB size. Only that virtual disk (disk 3 at the time) received GPT/EFI/MSR/NTFS partitions and the Windows image. No physical disk was partitioned.
-- Guest Windows files and an EFI BCD file exist. `bcdboot` returned exit code 1, so guest boot is **not verified**. A follow-up elevated diagnostic UAC was canceled; no retry was made. The guest VHDX remains host-mounted as temporary S: and W:, and the VM remains off. Do not start the VM until the VHDX is safely detached. No Guard, installer or policy was run on host or guest.
+- Guest Windows files and an EFI BCD file exist. The initial `bcdboot` returned exit code 1, so guest boot was **not verified**. The first follow-up UAC was canceled; diagnostics resumed after Ivan confirmed he did not intend to cancel it. The later entry above records the final detached state. No Guard, installer or policy was run on host or guest.
 - Rechecked Release solution build, 29 v2 harnesses and legacy P0 checks, PWA 27/27 + build, Worker 15/15 + typecheck, and Android offline unit-test/APK tasks: all passed. Android Gradle tasks were up to date rather than rerun from scratch. No real phone test or production deployment occurred.
 
 ## 2026-09-30 — M0 disposable VM prepared, OS installation pending
