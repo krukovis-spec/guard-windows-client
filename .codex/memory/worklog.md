@@ -1,5 +1,10 @@
 # Worklog
 
+## 2026-09-29 — completion plan, implementation not started
+
+- Reconciled the canonical plan with `a53cdad`: M0–M9 deliverables, existing-vs-missing integration map, T01–T20 tests, E01–E10 real acceptance scenarios, VM/phone boundaries and release gates. Updated current handoff and superseded conflicting old passkey/publisher/domain-scope text.
+- Verified official Microsoft RSA/PKCS#7 signed-policy requirements and Android ECDH API 31 requirement. M1 must prove dynamic grants/revoke and admin tamper before claiming the strict product; no new key/signing service architecture was silently selected.
+- Planning only: no application edits, builds, system tests, deployment or production credentials changed. Memory: PROJECT_ONLY. Resume implementation only after Ivan's next start command; no separate parallel plan created.
 ## 2026-09-29 — PWA → Android request link
 
 - Fixed the PWA approval locator link to use the scheme, host and query accepted by the existing Android intent filter/parser; invalid locators now fail before navigation. PWA 26/26 tests and production build passed; Android unit-test task and debug APK build passed with the existing GuardDev JDK 17.

@@ -1,8 +1,10 @@
 # Guard v2: канонический план разработки
 
-Статус: в исполнении. P0 containment завершён; 2026-07-23 Иван поручил последовательно реализовать остальные этапы утверждённого плана.
+Статус: планирование завершения продукта по запросу Ивана от 2026-09-29. P0 containment завершён; новые изменения application code начнутся после следующей команды Ивана запустить разработку по этому плану.
 
 Последнее обновление: 2026-09-29.
+
+Актуальный маршрут исполнения — раздел «Подробный план завершения M0–M9» ниже. Исторические Stage 0–7 и старые количества тестов описывают сделанные foundations, а не готовность продукта. Один канонический план остаётся в этом файле.
 
 ## Cloudflare relay — проверено 2026-09-26
 
@@ -25,13 +27,241 @@
 - 2026-09-24 Иван повторно поручил завершать весь продукт; узкие параметры спрашивать по мере необходимости, не останавливать безопасную реализацию из-за необязательных уточнений. Совместные испытания предлагать после готовности интегрированной сборки, не после отдельных foundations.
 - Основной компьютер остаётся вне live-тестов. Автоматические проверки выполняются сейчас, привилегированные интеграционные действия — только в одноразовой VM. Финальное включение на семейном ПК и проверка реального отпечатка — отдельная совместная приёмка.
 
-Порядок оставшихся результатов (не считать этап выполненным по наличию заготовок):
+## Подробный план завершения M0–M9
 
-1. [ ] Устранить блокеры сборки/тестов Android и проверить межплатформенное получение подписанного запроса; устранить выявленные проблемы зависимостей.
-2. [ ] Соединить доверенную привязку, очередь запросов, Android-карточку и подпись, доставку квитанции и применение точного разрешения.
-3. [ ] Соединить реальное машинное default-deny, детский интерфейс, веб-защиту и контроль аккаунтов; реализовать подписанные паузы/обслуживание/возврат.
-4. [ ] Установщик, обновление, удаление, recovery и disposable-VM tamper/E2E gates.
-5. [ ] Проверенная сборка и инструкция для совместного теста; до этого не объявлять продукт готовым.
+Это план предстоящей реализации и её приёмки, составленный по исходникам на `a53cdad` в `codex/guard-completion`. В ходе планирования изменяются только документы. Сегодня сборки и тесты повторно не запускались; приведённые ниже прежние результаты имеют собственные даты. Разработку выполняет один Codex, используя существующие модули и проверки.
+
+### Какой результат считаем работающим приложением
+
+- Родитель устанавливает Guard в поддерживаемую Windows, привязывает свой Android по QR, сохраняет Recovery Kit, проходит проверку готовности и включает защиту.
+- Неизвестное приложение блокируется до выполнения его кода, неизвестный сайт — до получения содержимого. На компьютере можно запросить разрешение; повторные попытки объединяются. Базовый набор для загрузки Windows, Guard и подключения к relay минимален и проверен.
+- На телефоне родитель видит проверенные название, компьютер, аккаунт, объект и срок. Выбирает решение, подтверждает свежим отпечатком; компьютер применяет именно это решение и возвращает подписанное подтверждение результата. Состояния «отправлено», «получено компьютером» и «применено» различаются.
+- Доступ можно дать постоянно, временно, по расписанию/дневной квоте или запретить. Есть отзыв разрешения, ограниченная пауза/обслуживание и автоматическое возвращение защиты. QR и push только открывают запрос; сами по себе ничего не разрешают.
+- Политика действует на весь компьютер, включая другой или новый аккаунт. Изменение аккаунтов и попытки удалить/остановить Guard обнаруживаются. Стойкость при уже полученных полных правах администратора принимается отдельно по M1 и T09; наличие службы не считается её доказательством.
+- Потеря сети, выключенный телефон, недоступное облако, перезапуск UI или Windows не превращаются в разрешение. Ранее действующие права сохраняются только в пределах их срока; квоты и отзыв не обходятся сменой аккаунта или времени.
+- Подготовлены установка, обновление, восстановление и штатное удаление, русская инструкция, подписанные сборки для выбранного режима распространения и доказательства прохождения M9.
+
+Целевой первый комплект: Windows 11 Pro x64, Edge и затем Chrome, Android родителя с сильной биометрией, родительский PWA и отдельный Guard Worker. iPhone approval-клиент, Windows Home, Яндекс Браузер и агент для телефона ребёнка не входят в этот выпуск. Бесплатный закрытый пилот и публичный релиз — разные точки приёмки; покупать сертификаты, магазинные аккаунты или хостинг заранее не требуется.
+
+### Фактическая исходная точка и разрывы
+
+| Участок | Что уже есть | Что нужно довести до реального использования |
+|---|---|---|
+| Windows | `src/Guard.Service`, `Guard.Windows`, модели, codecs, storage, IPC, readiness и политика | `GuardServiceHost` подключает `BoundaryOnlyPolicyReconciler`, `NoProxyIdentityProvider`, неполные readiness probes; реальные store/reconcile/relay/app/web adapters не соединены |
+| Привязка | `SetupCoordinator`, admin begin/bind, Android `EnrollmentQrParser` | Завершение enrollment через внутренний outbound transport, проверка attestation и владения ключом, доверенный обмен device/view/approval keys, защита от незавершённой/повторной привязки |
+| Детский ПК | Безопасные application/site request use cases и ограниченные payload | Нет `Guard.Child` и работающего захвата блокировок v2; старый tray не должен вернуть себе полномочия |
+| Android | Реальные .NET/Kotlin vectors, Keystore helpers, outbox, coordinator; 18 JVM-тестов и debug APK прошли 29 сентября | `MainActivity` — оболочка; нет сканера настройки, сети, проверенной карточки, вызова биометрии и отправки/приёма результата. Три `RealDeviceSecurityTest` — `@Ignore` и пустые тела, аппаратного доказательства нет |
+| PWA | RU/EN, passkey DTO, BFF transport, ограничения доверия; 26 тестов и build прошли 29 сентября | `window.guardParentSnapshotVerifier` не подключён; регистрация вызывается без параметров, обязательных для BFF; default inbox limit сервера 20 больше клиентского максимума 16; нет полноценного кабинета и QR-перехода |
+| Relay | Worker опубликован, bounded mailbox, WebAuthn BFF, SQLite DO; 15 тестов прошли 26 сентября | Нет production RP/секретов и serving PWA assets; locator создаётся, но native redemption не реализован; нет рабочего provisioning клиентов и FCM. Документированный sequence-hint contract нужно сверить с фактическим `finalize` |
+| Системная защита | AppLocker/web policy planners, парсеры, readiness и reconciliation contracts | Нет полного production enforcement, low-privilege proxy, расширения, WFP и защищённого цикла обновления правил |
+| Поставка | Legacy Inno source, существующие тестовые harness | Нет установщика v2, updater/recovery lifecycle, CI и принятого VM-стенда. Старый `Output/Guard-Setup-v1.0.0.exe` не является поставкой v2 |
+
+29 v2 harness-проектов и 45 legacy checks уже существуют; это не 29 сквозных тестов. Их переиспользуем. Новые проверки добавляем для перечисленных ниже границ и ошибок, а не ради процента покрытия.
+
+### M0. Воспроизводимая база и изолированный стенд
+
+**Результат:** можно безопасно собрать точную версию и повторить проверки на отдельной тестовой Windows.
+
+1. После команды начать: проверить статус/remote и безопасный diff, создать и push свежий checkpoint текущего кода вместе с согласованным планом. Старый checkpoint сохранить. Новую ветку `codex/guard-v2-integrated` создать от этой базы; пользовательские изменения не включать без установленного scope.
+2. Зафиксировать команды уже установленного .NET/JDK/Android SDK/Node/Inno в проектной инструкции. JDK Guard: `%LOCALAPPDATA%\GuardDev\jdk-17.0.19+10`; явно задавать `GRADLE_USER_HOME`, чтобы новая сессия не искала `C:\.gradle`. Не переустанавливать рабочие инструменты без причины.
+3. Добавить один короткий runner безопасных проверок с явным списком существующих harness. `dotnet test` сам по себе недостаточен: эти .NET проекты — console harness. VM/phone suites должны запускаться отдельными явными командами, не из обычного build/test.
+4. Подтвердить Hyper-V read-only запросом с явным JSON-результатом даже при нуле ВМ; прошлое отсутствие вывода не считать установленным стендом. Создать выделенную Generation 2 Windows 11 Pro VM с vTPM/Secure Boot, тестовыми аккаунтами, чистым snapshot и recovery-носителем. Проверять VM id и guest identity перед любой изменяющей командой. Не выполнять guest-скрипт локально при ошибке удалённого соединения.
+5. Подготовить безвредные тестовые EXE/MSI/script/DLL/MSIX, локальные HTTP/HTTPS/WebSocket/DNS endpoints, фиктивные родительские/детские данные и средства сетевого сбоя. Все попытки обхода — только на этом стенде. Реальные семейные данные и пароли в fixtures не использовать.
+
+**Приёмка:** чистая сборка + существующие safe suites, список их фактически выполненных проверок; восстановление VM из snapshot проверено. M0 не включает защиту на основном ПК. Тесты: T01, T04, T20.
+
+### M1. Проверить осуществимость защиты всех аккаунтов
+
+**Результат:** выбран и доказан на VM системный механизм, совместимый с телефонными разрешениями и автоматическим отзывом.
+
+1. Составить минимальную базу разрешённых компонентов Windows/Guard. Проверить App Control for Business как машинный слой и AppLocker как возможный слой динамических ограничений. Ни `Administrators:*`, ни «разрешить всё подписанное Microsoft», ни широкие writable-path правила не допускаются как готовое решение.
+2. Проверить пересечение правил: разрешение AppLocker не должно предполагаться способным отменить запрет App Control. Для неизвестного приложения доказать полный путь добавления точного разрешения в выбранные слои и его удаления.
+3. Подписанные политики Windows требуют PKCS#7/RSA; текущая подпись решения Guard — P-256/ECDSA. Это разные полномочия и форматы. Выбрать проверяемый путь подписи/обновления policy с закрытым ключом вне защищаемого ПК; не помещать policy signer в недоверенный relay и не подписывать на телефоне непроверенный бинарник «по хешу». Статическую защитную базу и динамические права исследовать раздельно. Дополнительный RSA-ключ или другой доверенный signer добавлять только после этого прототипа.
+4. Отдельно проверить остановку службы, Application Identity/BFE/proxy и уже выданные временные права. AppLocker allow, оставшийся на диске, не истечёт только потому, что истёк объект в .NET. Нужен доказанный механизм закрытия доступа в установленный срок; watchdog и запись retry-marker сами по себе доказательством не являются.
+5. Проверить стандартного ребёнка, второго стандартного пользователя, новый аккаунт и специально созданного тестового администратора. Разделить запрет опасного действия, его обнаружение и реальное сохранение политики. Успешный notification не означает предотвращённый обход.
+6. Проверить Secure Boot/BitLocker, загрузку/reboot, Safe Mode, попытки внешней загрузки и санкционированный откат подписанной политики. Сначала unsigned/audit испытание правил, затем signed/enforced в VM с recovery; не оставлять troubleshooting fail-open options в принятом строгом профиле.
+7. Закрыть совместимость Android: код ECDH использует `PURPOSE_AGREE_KEY` (API 31), хотя `minSdk` сейчас 30. Рекомендуемая база — Android 12/API 31+ с доказанным hardware key support. Проверить телефон Ивана перед утверждением минимума; software-key/PIN fallback автоматически не добавлять.
+8. Проверить минимальную установку/удержание управляемого Edge-расширения на обычной Windows 11 Pro без domain/MDM и режима разработчика. Если нужен подписанный store-пакет, заранее установить доступный маршрут закрытого пилота; не обнаруживать это только после готовности web UI.
+
+**Приёмка:** конкретная policy/schema, разделение ключей, проверенная процедура возврата Windows и матрица T07–T09. Если полный администратор снимает ограничение или crash оставляет временный allow без срока, усиленное требование остаётся блокирующим. Codex продолжает независимые работы с UI/обменом, но не помечает строгую защиту готовой и не заменяет её молча режимом «только стандартный ребёнок». Это техническая развилка, которую нужно показать Ивану с результатом прототипа.
+
+### M2. Соединить хранилище, облачный обмен и веб-вход
+
+**Результат:** подготовленные клиенты обмениваются зашифрованными сообщениями через отдельный Guard relay; сервер не выдаёт разрешений.
+
+1. Подключить реальные HTTPS transport/outbox/inbox workers в `Guard.Service`, используя существующие canonical codecs/crypto. Таймауты, bounded polling/backoff, cancellation и лимиты очередей обязательны; polling не должен постоянно держать телефон активным.
+2. Согласовать `FileAuthoritativeStateStore`, `FileRelayTransactionStore` и application/web desired state: один authoritative writer, однозначный commit для cursor/replay floor/request outcome/desired policy/receipt. Если физически несколько файлов, durable intent и восстановление должны давать тот же результат после сбоя. Ack — только после durable commit, `Applied` — после проверки фактически применённой policy.
+3. Настроить Guard Worker secrets и RP exact origin, PWA assets в одном origin. Master secrets — Bitwarden, operational copy — существующий DPAPI-маршрут вне Git. Токен deployment не выдаётся устройствам; VoicePaste не затрагивается. Проверить безопасные role/recipient-scoped mailbox credentials и их отзыв.
+4. Исправить договорённость PWA↔BFF регистрации: выдавать ограниченный одноразовый билет после доверенного enrollment, а не встраивать глобальный invite/admin secret в JS. Добавить выдачу/отзыв view-device authority отдельно от approval authority.
+5. Довести locator: authenticated redemption на правильном mailbox/recipient, срок, привязка к конкретному запросу; подмена или повтор locator не создают решение. Полученный запрос Android всё равно расшифровывает и проверяет сам.
+6. Согласовать paging/inbox limits, request/frame identifiers и sequence hints между TypeScript/.NET/Kotlin; устранить несовпадение 16/20. Relay hints никогда не продвигают локальный replay floor без подписанной квитанции компьютера.
+
+**Приёмка:** реальный .NET sender → HTTPS Worker → Kotlin receiver и обратная подписанная квитанция на синтетических данных; рестарт каждого процесса не теряет/не повторяет эффект. PWA входит через WebAuthn и не получает approval signing capability. Тесты: T02–T04, T12–T14, T16. Применение системной policy в этой проверке ещё не подменяется успехом доставки.
+
+### M3. Закончить первичную привязку и Android-подтверждение
+
+**Результат:** родитель способен безопасно связать чистую VM и телефон без ручного копирования технических токенов.
+
+1. Собрать setup UI с проверкой readiness; QR появляется только в подтверждённой локальной elevated setup session. В native-scanned transcript связать точный relay, enrollment id, device identity/public keys, epochs, challenge и родительские ключи. Завершение идёт по внутреннему outbound path; открытого ParentRelay pipe не появляется.
+2. Реализовать сканирование QR, lifecycle незавершённой привязки и генерацию раздельных approval/decryption keys на Android. Локальная служба Windows проверяет chain/attestation challenge/boot state/key properties и доказательство владения approval key; самоутверждения телефона или relay не являются доказательством. Простая проверка формы P-256 ключа не заменяет attestation. Источник доверенных корней и обновление списка отзыва должны быть проверяемыми.
+3. Одноразово закрепить доверие через CAS, подтвердить тот же компьютер на телефоне и результат на Windows. Обрыв, два телефона, повтор QR и повтор setup после установки не должны приводить к чужому владельцу или потере существующего ключа.
+4. Показать и подтвердить сохранение отдельного Recovery Kit; Windows хранит verifier, Android не оставляет Kit в backup/логах/уведомлениях. При незавершённом сохранении не объявлять setup законченным.
+5. Подключить в `MainActivity` сеть, проверенный snapshot, карточку объекта/срока, `BiometricPrompt`, `ApprovalCoordinator` и `FileApprovalOutbox`. Ошибка биометрии, отмена, отсутствие аппаратного ключа или неверная подпись запроса не открывают подписание.
+6. Подключить view key PWA: ключ просмотра и доверие к компьютеру выдаются через доверенную привязку; браузер не хранит approval key. Кабинет выполняет настоящую расшифровку/проверку, а не только получает флаг `verified` от сервера.
+
+**Приёмка:** clean setup и одна проверенная карточка на Android/PWA, свежая аппаратная подпись и её проверка .NET. Реальные тесты отпечатка заменяют пустые `@Ignore` placeholders. Инженерная проверка телефона на этом этапе ещё не означает приглашение к семейному использованию. Тесты: T05–T06, T13–T16.
+
+### M4. Первый законченный сценарий — приложение
+
+**Результат:** неизвестная тестовая программа реально заблокирована в VM, разрешена с телефона на 15 минут и снова закрыта по сроку.
+
+1. Подключить production inventory/Authenticode/PFN/hash extraction, защищённый каталог базовых компонентов и policy sink, доказанный в M1. Для unpackaged grant — exact SHA-256, для packaged — exact PFN; publisher/product/root служат доказательствами происхождения, не широким allow.
+2. Создать непривилегированный `Guard.Child` с автозапуском в защищаемых сессиях, Windows blocked-launch event reader, bounded observation → request IPC, дедупликацией и понятными статусами. Child path/title/publisher не считаются доверенными данными.
+3. Провести путь блокировка → локальная durable очередь → relay → native verification/choice/biometric → .NET command validation → durable desired state → реальное применение → проверка effect → receipt → обновление статуса на телефоне/ПК.
+4. Заменить production `BoundaryOnlyPolicyReconciler` только после подключения готовых sinks; не убирать fail-closed readiness ради зелёной демонстрации. После рестарта policy сверяется до выдачи статуса готовности.
+5. Доказать, что разрешена именно нужная программа: замена файла между проверкой и применением, другое содержимое по тому же пути, другое приложение того же издателя и будущая неизвестная версия не наследуют grant. Закрыть DLL/plugin/child-process варианты в рамках проверенного пакета.
+
+**Приёмка:** в VM выполняется E01 ниже с реальным Worker и подписью телефона; EXE пишет тестовый marker только после разрешения. После expiry/revoke новый запуск и продолжение уже запущенной программы обрабатываются по принятой политике. Тесты: T02–T05, T08–T09, T12, T15–T17. Это первый работающий сценарий, ещё не весь продукт.
+
+### M5. Второй законченный сценарий — сайт
+
+**Результат:** Edge остаётся открытым, запрещённый сайт показывает запрос; после решения сайт открывается, после срока соединение закрывается.
+
+1. Создать `Guard.Proxy` под отдельной низкопривилегированной identity: bounded HTTP/CONNECT, проверка DNS/IP/портов, pinning разрешённого назначения, отсутствие HTTPS interception. Подключить существующие domain/PSL/bundle parsers и signed-catalog floors к настоящему storage.
+2. Реализовать machine-managed Edge policies, WFP/network closure и проверку effective policy. Proxy, BFE/WFP и браузер должны давать наблюдаемое доказательство готовности; не выводить его из желаемого registry value.
+3. Сделать managed extension и локальный authenticated request bridge к службе. Расширение показывает блокировку до навигации, связывает top-level сайт с техническими запросами и не является единственным сетевым барьером. CSP/extension permissions минимальны; native host не исполняет произвольные команды.
+4. Соединить site request с уже работающей цепочкой M4. Default scope — exact canonical host; subtree/service bundle только после явной проверки и подписи. Реклама/CDN/соседний tenant не открываются автоматически.
+5. Отключить или закрыть обходы через QUIC, внешние DNS/DoH/proxy/VPN, unsupported browser и прямой выход браузера. Учесть сетевые возможности разрешённых приложений, WebView и системных посредников. Оставить только необходимые служебные endpoints, без универсального разрешения всему HTTPS.
+6. Повторить адаптер и реальную браузерную матрицу для Chrome; проверить способ установки/обновления расширения, доступный на unmanaged Windows в закрытом пилоте. Публичная публикация расширения — отдельное действие после готовности пакета.
+
+**Приёмка:** E02 в Edge и Chrome, T10–T11 и соответствующие T17; при crash proxy/extension или изменении сети запрещённые байты не проходят. Разрешённые HTTPS/WebSocket/download/OAuth сценарии работают без собственного корневого TLS-сертификата.
+
+### M6. Все решения, сроки, обслуживание и аккаунты
+
+**Результат:** ежедневное использование не требует ручной правки политик, смена аккаунта не обнуляет правила.
+
+1. Соединить четыре решения для приложений/сайтов: всегда; на 15/60 минут, до конца дня или текущей сессии; расписание+дневная квота; запрет до завтра/на 7 дней/до изменения. Если current wire не выражает вариант, версионировать контракт и общие vectors; не прятать иной смысл под старым полем `minutes`.
+2. Реализовать durable usage/quota и доверенную модель времени. Считать foreground без idle, многопользовательские сессии и вкладки без двойного счёта, часовой пояс задаётся родителем. Фоновая музыка/видео в первом выпуске не расходуют квоту; это явно написано в UI. Sleep/reboot/rollback часов не увеличивают остаток.
+3. Реализовать signed revoke и pause/maintenance на 15/30/60 минут: точный scope, recovery-admin SID и deadline, автозавершение по таймеру/reboot/logout. Дневной аккаунт ребёнка не получает admin tools из-за обслуживания другой сессии. «Включить защиту сейчас» завершает действующую паузу.
+4. Установка/обновление приложения в maintenance создаёт список точных новых identities для отдельного родительского решения. Не выдавать автоматический permanent allow всем новым EXE или всем файлам издателя.
+5. Довести inventory/monitor учётных записей и recovery-admin pinning: повседневные accounts стандартные; cloud-linked/directory/nested admin, новое членство/включение account, неизвестный SID и смена recovery account дают проверяемую реакцию. Восстановление почты Microsoft не должно менять локальные права. Опасные изменения через Guard требуют подписи; внешние изменения Windows покрываются системой M1.
+
+**Приёмка:** E03–E06 и T07–T09, T17–T18. Ни TTL, ни квота, ни обслуживание не зависят только от работающего окна/таймера UI. Последний recovery path нельзя автоматически уничтожить ради исправления readiness.
+
+### M7. Кабинет, QR и уведомления для повседневной работы
+
+**Результат:** родитель понимает, что запросили, что разрешено и действительно ли компьютер применил решение.
+
+1. Довести разделы «Запросы», «Сегодня», «Ребёнок/устройства», «Разрешения», «Безопасность». Desktop — постоянная левая навигация, mobile — компактная; русские тексты, keyboard/screen-reader/zoom, отсутствие технических токенов и внутренних терминов в обычном потоке.
+2. Кнопка на телефоне открывает native проверенную карточку. На другом экране — короткоживущий QR, видимый срок и безопасная повторная генерация locator. Разрешение clipboard не является условием открытия приложения; предусмотрены отсутствие Android-приложения, истёкшая ссылка и отмена.
+3. Добавить FCM opaque wake-up и переход к запросу, runtime notification permission, объединение повторов и backoff. Для этого потребуется отдельный Guard Firebase project/config; его credentials не брать из другого приложения. Push не содержит названий/домена/решения/секретов и не разрешает действие с lock screen.
+4. Подписанный свежий статус компьютера, last-seen и ошибка применения показываются отдельно от связи с relay. После потери связи статус становится «Неизвестно/компьютер не отвечает», а не сохраняет зелёную надпись «Защищён».
+5. Проверить versioned deployment PWA/service worker, страницу offline и обновление кабинета без устаревших assets. Offline PWA не создаёт новое разрешение. Очередь запросов остаётся доступным источником истины при задержанном push.
+
+**Приёмка:** родитель проходит ежедневные действия без ручного ввода ключей и без обязательного браузерного clipboard; T13–T16, T19 и E01–E04. Отказ push разрешений не отключает защиту и не скрывает запросы при открытии кабинета.
+
+### M8. Установка, обновление, восстановление и удаление
+
+**Результат:** продукт можно безопасно установить, обслужить и восстановить без ручного «почистить всё».
+
+1. Сделать installer v2 с точным manifest файлов, проверкой платформы, service registration/DACL/recovery/identity, proxy/child/extension и пошаговым setup. Старые PIN, state, server ownership и allow-листы не импортируются как доверенные. Legacy-файлы/правила обрабатываются адресно; чужие firewall/registry данные сохраняются.
+2. Ввести подписанный update manifest и package verification, version/epoch rollback floor, staging, atomic activation и rollback к проверенной версии. Crash на каждом шаге не должен оставлять unrestricted окно или несколько authoritative writers. APK подписывается постоянным release key; обычное обновление сохраняет trust/outbox.
+3. Реализовать восстановление по 256-bit Recovery Kit: локальная elevated процедура, rate limits, durable delay, отзыв всех прежних epochs/keys/sessions/mailbox credentials/pending commands и безопасная новая привязка при сохранении запретной базовой политики. Предлагаемая задержка — 24 часа; закрепить точное значение в этом плане до реализации recovery. Перестановка часов/перезагрузка не сокращает задержку. При потере телефона оператор должен иметь понятный offline маршрут.
+4. Проверить и согласовать удаление подписанной Windows policy: требуемые signer/reboot/recovery шаги, отсутствие конфликта со штатным uninstaller. Удаление требует свежего родительского разрешения либо принятой recovery ceremony. Старый Cleaner не становится альтернативным обходом.
+5. Cleanup ведёт журнал этапов, проверяет их effect и снимает только свои ограничения. При частичной неудаче сообщает точный шаг и оставляет работающий путь восстановления; не удаляет бинарники, необходимые для завершения. Удаление аккаунтов/пользовательских файлов в cleanup не входит.
+6. Подготовить CI для safe suites и сборки, supply-chain/secret scans, SBOM, hashes и release manifest. Signing keys остаются вне Git/логов и не выдаются CI чужих PR. VM tests запускаются на отдельном одноразовом guest с явной целью; GitHub-hosted runner не принимается за семейный Windows-стенд.
+
+**Приёмка:** чистая установка, обновление с N−1, неудачное обновление, recovery и штатное удаление проходят T18/T20 и E07–E09. Для VM допустим test certificate внутри VM; способ доверия подписанной сборке семейного пилота документируется отдельно. Наличие публичного Windows-сертификата не доказывает защиту от администратора.
+
+### M9. Полная приёмка и пакет для совместного теста
+
+**Результат:** все части работают вместе; можно пригласить Ивана к контролируемому семейному тесту.
+
+1. Из чистого checkout воспроизвести сборку, выполнить все safe suites и полную матрицу на чистой и обновлённой VM, затем на реальном Android. Не учитывать skipped/manual placeholders как PASS.
+2. Выполнить все E01–E10 ниже с доказательствами: версии, VM/phone model/OS, command ids, ожидаемая/фактическая policy, signed receipt, exit/network marker и очищенные логи. Секреты и семейные данные в отчёт не включать.
+3. Провести 24-часовой прогон, 30 последовательных решений, конфликтные решения двух родительских устройств, 10 reboot/reconnect циклов и серии потери связи. Это ограниченный reliability gate, не обещание вечной бесперебойной работы. Цель на стабильной тестовой сети: запрос и применение каждого обычного решения укладываются в 30 секунд; отдельно записать задержки и причины исключений.
+4. Проверить self-review изменённого security-critical кода и реальные обходы. Любой воспроизведённый unauthorized grant, повторное permissive effect, утечка ключа, зависший allow без deadline, необратимая блокировка Windows или обход M1 блокируют приёмку. Некритичные UI-дефекты допустимы только с явным описанием влияния.
+5. Подготовить один комплект: Windows installer, подписанный Android APK, URL кабинета, версии/хеши, короткая русская инструкция «установить → привязать → запросить → разрешить → вернуть защиту → восстановить/удалить», поддерживаемые платформы, остаточные ограничения и recovery-памятка. Не включать production secrets в комплект.
+6. Commit/push результата, проверить доступность точного SHA в GitHub, обновить план/память фактическими PASS/FAIL/NOT RUN. После этого сообщить «Готово к совместному тесту». Установка на основной/семейный ПК — отдельное согласованное действие с сохранённым recovery, а не автоматическое следствие зелёных unit-тестов.
+
+### Карта тестов, которые сохранить, дополнить или написать
+
+У каждого ID есть проверяемые утверждения. **U** — безопасная автоматическая проверка логики, **I** — интеграция реальных компонентов без системного enforcement, **V** — disposable Windows VM, **P** — физический Android, **B** — настоящий браузер. Имитатор подписей/биометрии полезен в U, но не закрывает V/P. Новый тест помещается в ближайший существующий harness; отдельный проект создаётся только при необходимости изоляции платформы.
+
+| ID / этап | Что проверяем | Что переиспользуем и что добавить |
+|---|---|---|
+| T01 · M0/M8 | P0: first-caller takeover, пустой/`123456` PIN, legacy provisioning/email recovery/remote PIN, прямой Cleaner/diagnostic bypass; сборка не включает старую authority | Сохранить 45 `Guard.Tests` checks (U); добавить v2 installer/migration regression (V), чтобы закрытый код не вернулся в поставку |
+| T02 · M2–M6 | Межъязыковая точность bytes и подписи; request/revision/device/key/epoch/target/expiry binding; неверный ключ, один изменённый байт, replay, неизвестный enum/version, size/overflow/Unicode/DER; wire-версии новых maintenance/recovery решений | `Guard.Protocol`, `Guard.RelayProtocol`, `Guard.Windows.RelayCrypto`, Kotlin vectors и relay frame tests (U/I); добавить TypeScript view decryption и полный трёхсторонний exchange без fake verifier |
+| T03 · M2/M4/M8 | Единственный writer/CAS; обрыв до/после state replace, journal, desired policy, receipt и ack; повтор доставки; disk full/read-only/corruption; missing state не запускает незаметный reset; rollback state, journal и их совместной копии | `Guard.Storage`, `Guard.RelayState`, `Guard.Windows.Storage` (U); fault-injection на реальных файлах и power-cut guest (V). Совместный rollback требует отдельного доказанного witness/TPM решения, не зелёного теста одного файла |
+| T04 · M0/M2/M4 | Production DI использует реальные adapters; SCM/System boundary, bootstrap однократный, child pipe не публикуется до policy/readiness; сбой probe даёт Unknown/отказ; crash и restart восстанавливают работу без permissive окна | `Guard.Service`, readiness/service-health suites (U); добавить production composition integration и настоящий lifecycle SCM (V) |
+| T05 · M3/M4 | Подмена роли/SID из payload, UAC non-elevated token, integrity/session/pipe impersonation, nested groups, неправильный pipe; child не вызывает setup/parent/recovery; oversized/partial/slow frames, flood, cancellation, handle leaks | `Guard.Windows.Ipc`, `Guard.V2`, request-protocol suites (U); реальные разные Windows tokens и конкурентные сессии (V) |
+| T06 · M3 | Setup QR: чужой relay/device/transcript/key, expiry, screenshot/replay, два claimant, cancelled/half-finished enrollment, restart, повтор после привязки; поддельная/revoked attestation, чужой challenge и software key; secret не попадает в BFF/логи | `SetupCeremony`/`Guard.V2` и `EnrollmentQrParser` checks (U); native scan → real service trust commit (I/V/P), сохранение существующего ключа при ошибке |
+| T07 · M1/M6 | Все ordinary accounts стандартные, recovery SID закреплён; cloud-linked/local/domain/Entra/nested admin, disabled→enabled, новый пользователь/администратор, смена account/token, восстановление Microsoft password; последний recovery account и unknown result | `Guard.Windows.Accounts`/readiness (U); machine-wide enforcement и монитор в нескольких сессиях VM (V). Проверить block, alert и итоговую policy отдельно |
+| T08 · M1/M4 | До запуска заблокированы EXE/portable/MSI/MSIX/DLL/scripts/macros/interpreters/WSL/LOLBins; копия/rename, file swap/TOCTOU, reparse/hardlink/network/removable path, DLL/plugin side-load; exact grant не открывает другое приложение, updater или новую версию | `ApplicationIdentity`, `AppControlPolicy`, `ApplicationControl`, `ApplicationRequests` (U); безвредный marker corpus и real apply/readback/launch (V), включая уже открытый процесс после отзыва |
+| T09 · M1/M6 | Stop/delete/reconfigure service, taskkill, ACL/file/state replacement, снятие AppLocker/App Control/WFP/browser rules, proxy spoof, Safe Mode/recovery/external boot; стандартный и тестовый elevated admin; outage при действующем TTL и повторная загрузка | SelfProtection contracts (U); отдельная attack matrix (V), firmware/BitLocker recovery drill на выделенном стенде. Не подменять результат «заблокировано» записью «обнаружено» |
+| T10 · M5 | DNS canonical/IDN/PSL/trailing-dot/IPv4/IPv6/encoded host/ports, exact vs subtree, чужой CDN tenant, revoked/rolled-back catalog; HTTP/CONNECT malformed headers, smuggling, duplicate Host, большие/медленные запросы, DNS rebinding/private IP и смена адреса после проверки | `Guard.WebPolicy`, `Guard.WebProxyProtocol`, `Guard.WebsiteRequestProtocol` (U); настоящий proxy + test DNS/HTTP endpoints (I/V). Отклонение до открытия upstream socket |
+| T11 · M5 | Edge и Chrome: top-level/subresource/redirect/OAuth/WebSocket/download/private mode; QUIC/DoH/IPv6/direct IP/custom proxy/VPN/portable browser/WebView; захват localhost port, пропавшее расширение, изменённая policy, crash proxy/BFE/network reconnect; нет выхода в обход | `Guard.BrowserPolicy`, `Guard.WebProtection`, `Guard.WebControl` (U); managed browsers + packet/sentinel capture внутри VM (V/B), проверка update браузера и policy refresh |
+| T12 · M2 | Bootstrap/role/recipient isolation, token expiry/revoke, cursor bounds/ordering, duplicate frame/id collision, lost ack, quota/rate limit, TTL/paging, transient 5xx/timeouts, unavailable Worker; locator чужого mailbox/истёк/повтор; relay полностью недоверен | Существующие Worker tests (U/I); интеграция real .NET/Kotlin transport с fault server и изолированным mailbox в Guard Worker. Ни один relay hint не даёт grant/sequence advancement без локальной проверки |
+| T13 · M2/M3 | WebAuthn origin/RP/challenge/replay/counter, failed ceremony одноразовая, credential/session revoke/TTL; CSRF/SameSite/CORS; scoped регистрация/view-device enrollment вместо глобального секрета в браузере | `webauthn.test.ts`, PWA passkey/transport tests (U/I); реальный browser passkey/login/logout/expired session (B/P), без выдачи approval capability |
+| T14 · M3/M7 | PWA не показывает непроверенные/подменённые snapshots; view key не подписывает решения; plaintext/keys/tokens не в URLs/cache/logs; XSS/compromised view/переставленный locator не дают native blind signing; inbox >16, paging и two tabs не теряют запросы | PWA security/transport/domain suites (U); настоящий verifier + BFF + браузер (I/B), доступ с новой/отозванной view-сессии |
+| T15 · M3 | Android supported API и hardware ECDH/signing; strong biometric success, cancel, wrong fingerprint, lockout, PIN/pattern/password fallback, повтор подписи без нового prompt, enrollment-change invalidation, TEE/StrongBox/unsupported device, attestation mismatch | JVM suites (U) сохранить; вместо трёх пустых ignored androidTests — исполнимые instrumentation tests плюс явный manual protocol физического прикосновения (P). Эмулятор не закрывает аппаратные проверки |
+| T16 · M2/M3/M7 | Outbox commit до send; те же байты после crash/rotation/process death/reboot; offline retry; interim receipt не Applied, чужая/поддельная/дублированная terminal receipt; два решения/два родителя; backup/restore/app reinstall не клонируют authority; Doze/FCM delay/notification refusal | `FileApprovalOutbox`/receipt checks (U); реальная сеть, lifecycle и private/no-backup storage (I/P), следующий sequence только после проверенной terminal receipt |
+| T17 · M4–M6 | Все 4 решения; TTL/session/end-of-day/schedule/quota, forbid durations; parent-pinned timezone/DST/clock rollback/sleep/reboot, idle/foreground/multiple sessions/tabs; revoke/expiry закрывают текущий процесс/туннель, не только новые; обновление приложения не наследует allow | `Guard.Policy`, application/web reconciliation и безопасная legacy accounting логика (U); production scheduler/usage и clock-fault/reboot/connected tunnel cases (V/B). Установить и измерить допустимую задержку закрытия в M1 |
+| T18 · M6/M8 | Scoped maintenance + logout/reboot/expiry; crash/update rollback; fresh install/N−1 upgrade/tampered package/downgrade; repair не сбрасывает владельца; Kit wrong/replay/delay/time rollback/lost phone/epoch revocation; uninstall direct/legacy/partial failure; чужие данные целы | `Guard.Service`/storage/legacy cleanup pure tests (U); новые installer/update/recovery cases с snapshot и проверкой реальных effects (V/P), отдельная процедура возврата подписанной policy |
+| T19 · M7/M9 | Русский по умолчанию и EN parity; клавиатура, focus, screen reader, 200% zoom, 360px mobile/desktop; request flood grouping, понятные причины/сроки, QR expiry/missing app/clipboard denial, offline/pending/applied/error/last-seen; никакого ложного Protected | PWA i18n/domain tests (U); browser и Windows child/Android UI сценарии (B/V/P), проверка реального пользовательского пути без технических токенов |
+| T20 · M0/M8/M9 | Clean checkout build, lockfiles/dependency verification, NuGet/npm/Gradle vulnerabilities, secret scan, licenses/SBOM, signatures/hashes/update signer, release manifest; bounded RAM/disk/queues/logs/threads и polling на idle/нагрузке; чистое удаление тестовых ресурсов | Существующие builds/audits (U/I) + минимальный CI/runner; длительный прогон (V/P). Пять прежних high findings в dev tooling требуют свежей оценки/исправления, production audit не выдавать за full audit |
+
+### Сквозные сценарии приёмки
+
+Во всех сценариях проверяем конечный доступ (process/network marker), durable policy и подписанный статус устройства. Одного HTTP 200, снимка UI или зелёного unit-теста недостаточно.
+
+| ID | Действия и ожидаемый результат |
+|---|---|
+| E01 · приложение | Чистая VM → установка/QR/setup → blocked test app → один объединённый запрос → отпечаток «15 минут» → приложение запускается → срок заканчивается → доступ закрыт; файл другого hash по тому же пути остаётся закрыт |
+| E02 · сайт | Edge, затем Chrome → blocked HTTPS сайт → страница запроса без закрытия браузера → решение → сайт и только проверенные зависимости работают → expiry/revoke закрывает также открытый туннель; соседний домен/прямой маршрут остаётся закрыт |
+| E03 · решения | На app и site пройти always, временное/session/end-day, daily quota+schedule и deny с выбранным сроком; смена Windows account и часов не обнуляет решение/остаток; родитель видит точные сроки |
+| E04 · сбои связи | До подписи выключить сеть — нового решения нет; после подписи оборвать доставку/ack/receipt — повторены те же байты, один effect; телефон/Windows/Worker перезапускаются, статусы честные, разрешённое окно не становится бессрочным |
+| E05 · обслуживание | Отпечаток на scoped 15-minute maintenance → вход recovery-admin → установка/обновление → список новых identities → отдельное разрешение → возврат защиты по кнопке, таймеру, logout и reboot; детская параллельная сессия не получает admin bypass |
+| E06 · аккаунты и tamper | Смена на другой/новый account, тестовый новый admin, попытки stop/delete/policy tamper/Safe Mode → ожидаемый результат M1 подтверждён фактически; родитель видит событие, неизвестная policy не объявляется готовой |
+| E07 · обновление | Принятая N−1 с owner/grants/outbox → валидный update сохраняет trust → повреждённый/старый пакет отказан → power-cut при активации восстанавливает проверенную версию без свободного доступа |
+| E08 · потерянный телефон | Старый Android недоступен → локальная recovery ceremony с Kit/задержкой → новый телефон → старые ключи/сессии/решения отвергнуты; защита не отключалась. Отдельно проверить второй заранее зарегистрированный approval device |
+| E09 · удаление | Неавторизованный запуск uninstaller/Cleaner отказан → свежее разрешение/принятая recovery → свой policy/service/proxy/extension cleanup подтверждён → Windows и сеть работают, чужие данные сохранены; отказ на промежуточном шаге имеет проверенный recovery |
+| E10 · длительная работа | 24 часа, 30 решений, 10 reboot/reconnect и конфликт двух родителей; нет пропавших запросов, двух применённых конфликтных решений, unbounded storage/CPU и неопределённого статуса, скрытого за «Защищён» |
+
+### Порядок запуска проверок и доказательства
+
+1. Для каждого изменения сначала его T-группы и ближайшая интеграция. После их PASS — соответствующий E-сценарий. Полный regression выполнять на границе интеграционного этапа и release candidate; повторять неизменённый набор без новой причины не нужно.
+2. Safe baseline: `dotnet msbuild guard.sln /restore /p:Configuration=Release /p:Platform="Any CPU"`; затем `Guard.Tests\bin\Release\net48\Guard.Tests.exe` и явный allowlist 29 `tests/*/*.csproj` console harness через `dotnet run -c Release --no-launch-profile`. Нельзя заменять их запуск запуском `Guard.Service.exe`, Guard/installer/Cleaner.
+3. PWA: в `parent/pwa` — `npm ci`, `npm test`, `npm run build`. Worker: в `relay/worker` — `npm ci`, `npm test`, `npm run typecheck`. Lockfile менять только осмысленно. Production и full dependency audit фиксируются раздельно.
+4. Android: задать `JAVA_HOME`, `ANDROID_HOME`, `GRADLE_USER_HOME`; `gradlew.bat :app:testDebugUnitTest :app:assembleDebug`. Cross-language verification — существующий `Guard.Windows.RelayCrypto.Tests --verify-android` с generated public test vector. Instrumentation и fingerprint checks выполняются отдельно на конкретном устройстве; `@Ignore`/нет устройства = NOT RUN.
+5. Все privileged Windows проверки запускаются только адресно в disposable guest. Перед запуском сохраняется snapshot/VM id; после — guest results и проверка восстановления. На host допустимы сборка, чистая логика, работа с Git и управление выделенной VM; применение защитных политик к host запрещено.
+6. В этом плане у этапа записывать: commit SHA, сборка/версия, T/E IDs, среда, PASS/FAIL/NOT RUN, краткий результат и ссылка на очищенный отчёт. `NOT RUN`, mock-only и ручная проверка без evidence не считаются PASS. Подробные generated отчёты не превращать в новый канонический план.
+7. Код фиксировать малыми связанными commits и push после соответствующих проверок. Откат функции — `git revert`, база — сохранённый checkpoint. Не коммитить secrets, личные данные, generated installer или чужие изменения автоматически.
+
+### Зависимости от Ивана и стоп-условия
+
+- Для составления этого плана дополнительных действий не требуется. Команда запустить разработку разрешит M0 и последующие уже описанные действия; повторно спрашивать разрешение на обычные сборки/правки/тесты не нужно.
+- На M0 может понадобиться UAC для Hyper-V и доступный Windows 11 Pro ISO/лицензия стенда. Команда должна заранее быть конкретной и ограниченной выделенной VM. На M3/M9 потребуется модель/версия Android, установка подписанного APK и физическое подтверждение отпечатком; Codex не может имитировать палец родителя.
+- На M2/M7 возможен интерактивный вход в Cloudflare/Firebase, если нужное действие недоступно уже разрешённому Guard-токену. Не расширять его на VoicePaste и не просить переносить секрет в чат. Настройка бесплатных ресурсов не означает разрешения на оплату.
+- Публичный домен, публично доверенная подпись и публикация в магазинах остаются отдельными решениями перед публичным выпуском. Они не задерживают code/VM разработку. Семейная установка требует готового комплекта M9 и отдельного явного начала теста.
+- Если M1 опровергнет обещанную стойкость к полному администратору, если аппаратная биометрия телефона не подходит, либо recovery не позволяет безопасно вернуть Windows, представить Ивану конкретные варианты и последствия. Не снимать требование, не подменять биометрию PIN и не объявлять проект завершённым.
+
+### Проверенные платформенные ограничения и источники
+
+- 2026-09-29: Microsoft указывает, что App Control применяется ко всем пользователям машины. Это основание исследовать его для нового аккаунта; отсюда не следует автоматическая защита любого сервиса или произвольного динамического grant. [Обзор App Control и AppLocker](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/appcontrol-and-applocker-overview).
+- 2026-09-29: подписанные base/supplemental policies используют PKCS#7/RSA, ECDSA не поддерживается; anti-tamper требует Secure Boot и вступает в силу после reboot. Ошибки могут нарушить загрузку, поэтому M1 обязательно проверяет recovery. [Подписанные политики Microsoft](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/deployment/use-signed-policies-to-protect-appcontrol-against-tampering).
+- 2026-09-29: `KeyProperties.PURPOSE_AGREE_KEY` появился в API 31; текущий `minSdk=30` не является доказательством совместимости аппаратного ECDH на Android 11. [Android KeyProperties](https://developer.android.com/reference/android/security/keystore/KeyProperties#PURPOSE_AGREE_KEY).
+
+### Текущий статус нового маршрута
+
+| Этап | Статус | Условие перехода |
+|---|---|---|
+| M0 | Не начат по новому плану | Команда Ивана начать, pushed checkpoint, safe baseline и проверенный VM recovery |
+| M1 | Не начат | Принятая матрица системной защиты и совместимый dynamic approval path |
+| M2 | Части уже есть; интеграция открыта | Реальный encrypted exchange, BFF registration/view enrollment и durable receipts |
+| M3 | Foundations есть; сценарий открыт | Доверенная привязка и реальная аппаратная подпись |
+| M4–M8 | Не приняты | Соответствующие T/E и наблюдаемый пользовательский результат |
+| M9 | Не начат | Все обязательные группы прошли, комплект пригоден для совместного теста |
 
 ## Проверенный инкремент 2026-09-24 — обмен и защита конфигурации аккаунтов
 
@@ -109,7 +339,7 @@ Guard строит белый список из реальных потребн�
 2. `Request first`: основной экран родителя начинается с новых запросов, а не с настроек и списков блокировок.
 3. `Fail closed`: сбой интерфейса, облака, расширения или перезапуск компьютера не выключает защиту.
 4. `No email recovery`: коды из почты не используются для входа, смены PIN, перепривязки или отключения Guard.
-5. `No secret on child PC`: ребёнок не видит родительский PIN, pairing secret, recovery code или кнопку сброса родительской защиты.
+5. `No secret in child session`: ребёнок не видит родительский PIN, pairing secret, recovery code или кнопку сброса родительской защиты. Одноразовые setup-данные показываются только в подтверждённой локальной admin setup session и не сохраняются в детском UI/логах.
 6. `No HTTPS interception`: Guard не расшифровывает содержимое HTTPS, не устанавливает корневой сертификат и не записывает вводимый текст.
 7. `Privacy by design`: сервер-посредник не должен получать больше данных о ребёнке, чем необходимо для доставки запроса и решения.
 8. Интерфейс по умолчанию русский. Английский остаётся вторым языком и переключается в настройках родителя.
@@ -120,13 +350,13 @@ Guard строит белый список из реальных потребн�
 
 1. Родитель входит в отдельную локальную учётную запись администратора Windows и запускает установщик.
 2. Guard устанавливает системную службу и показывает одноразовый QR-код настройки.
-3. Родитель открывает QR-код телефоном, создаёт родительский кабинет и регистрирует passkey, защищённый отпечатком пальца или Face ID.
-4. Guard предлагает выбрать Windows-пользователя ребёнка и проверяет, что он не администратор.
+3. Родитель сканирует QR нативным Android-приложением, регистрирует аппаратный ключ подтверждений со свежей сильной биометрией и сохраняет Recovery Kit. Отдельный passkey служит для входа в кабинет и не заменяет ключ разрешений.
+4. Guard предлагает выбрать Windows-пользователя ребёнка для отображения запросов, проверяет все повседневные аккаунты и отдельного recovery-admin. Системная политика охватывает машину, включая неизвестные новые аккаунты.
 5. Проверка готовности показывает: редакцию Windows, Secure Boot, BitLocker, отдельного родительского администратора, состояние службы и поддерживаемые браузеры.
 6. Родитель выбирает уже установленные базовые приложения, которые нужны сразу, или оставляет список пустым.
 7. Кнопка `Включить защиту` включает строгий режим. После этого неизвестные приложения и сайты запрашиваются ребёнком.
 
-QR-код действует один раз и несколько минут. После привязки новый QR-код нельзя получить из детской сессии. Перепривязка требует подтверждения уже зарегистрированным родительским passkey либо отдельной процедуры восстановления.
+Setup QR действует один раз и несколько минут. После привязки новый setup QR нельзя получить из детской сессии. Перепривязка требует подписи уже зарегистрированного approval-устройства после свежей биометрии либо отдельной процедуры восстановления; обычной passkey-сессии кабинета недостаточно.
 
 ## Установка и обслуживание приложений
 
@@ -134,7 +364,7 @@ QR-код действует один раз и несколько минут. �
 
 Вместо неё вводится режим `Обслуживание`:
 
-- включается только после подтверждения родительским passkey;
+- включается только после подписи зарегистрированным родительским approval-устройством со свежей сильной биометрией;
 - родитель выбирает 15, 30 или 60 минут;
 - на компьютере постоянно виден обратный отсчёт;
 - защита автоматически возвращается по таймеру, после перезагрузки, выхода родителя или ручного завершения;
@@ -154,9 +384,9 @@ QR-код действует один раз и несколько минут. �
 
 Постоянное разрешение выдаётся не только по пути к `.exe`:
 
-- для подписанного приложения используется издатель, продукт и безопасная область установки;
-- для неподписанного приложения используется хеш, и родитель видит предупреждение;
-- для MSIX/UWP используется package family identity;
+- для любого unpackaged приложения исполняемое разрешение привязано к точному SHA-256; издатель, продукт, подпись и безопасная область установки показывают проверенное происхождение;
+- для неподписанного приложения также используется точный хеш, и родитель видит предупреждение;
+- для MSIX/UWP используется точная package family identity из подтверждённой службой инвентаризации;
 - браузеры и сложные программы разрешаются как проверенный пакет из основного процесса, updater и обязательных helper-процессов;
 - обновление не должно случайно разрешать любую программу того же издателя.
 
@@ -170,7 +400,7 @@ QR-код действует один раз и несколько минут. �
 
 Под словом «сайт» Guard понимает сервис, а не каждый технический hostname. Например, разрешение YouTube должно включать минимально необходимый набор доменов YouTube и видеодоставки, но не открывать весь Google. Для этого нужны проверяемые пакеты сервисов.
 
-Для неизвестного сайта Guard сначала разрешает основной registrable domain и его безопасные поддомены. Сторонние рекламные и отслеживающие домены остаются закрыты. Если без дополнительного домена функция не работает, связанные технические запросы группируются в один понятный запрос, а не засыпают родителя десятками уведомлений.
+Для неизвестного сайта начальный scope — точный canonical host. Поддомены или пакет связанных доменов открываются только в явно подтверждённом scope или проверенном подписанном service bundle; весь registrable domain автоматически не разрешается. Сторонние рекламные и отслеживающие домены остаются закрыты. Если без дополнительного домена функция не работает, связанные технические запросы группируются в один понятный запрос для решения родителя.
 
 ## Варианты решения родителя
 
@@ -183,13 +413,13 @@ QR-код действует один раз и несколько минут. �
 
 Запрет может иметь срок `до завтра`, `на 7 дней` или `пока родитель не изменит решение`, чтобы один и тот же запрос не повторялся бесконечно.
 
-Дневной лимит считается по активному использованию. До реализации нужно отдельно зафиксировать правила для фоновой музыки и видео: они не должны расходовать лимит так же, как скрытая вкладка, но реальное воспроизведение нельзя считать полной бездеятельностью.
+Дневной лимит в первом выпуске считает foreground-использование без idle. Фоновая музыка/видео не расходуют квоту; эта граница явно показана в интерфейсе. Отдельный достоверный учёт media playback относится к будущему расширению.
 
 ## Родительский кабинет и телефон
 
 Основной родительский интерфейс: адаптивный сайт/PWA, устанавливаемый на главный экран телефона. Это даёт один интерфейс для Android, iPhone и компьютера и позволяет быстрее выпустить надёжный MVP.
 
-Обычные passkey на Android и iPhone допускают системный PIN, pattern, пароль или код устройства как fallback, поэтому они не доказывают требуемую Guard свежую биометрию родителя. В строгом режиме PWA может показывать запросы и выполнять неразрешающие действия, но не подписывает `Allow`, отключение защиты, обслуживание или recovery. Эти команды подтверждает небольшое нативное `Guard Parent Approval`-приложение: его отдельный ключ хранится в Secure Enclave/Android Keystore, требует биометрию для каждой подписи и не разрешает device-credential fallback. При отсутствии поддерживаемой сильной биометрии используется отдельный аппаратный FIDO2-ключ или другое уже зарегистрированное родительское устройство.
+Обычные passkey на Android и iPhone допускают системный PIN, pattern, пароль или код устройства как fallback, поэтому они не доказывают требуемую Guard свежую биометрию родителя. В строгом режиме PWA может показывать запросы и выполнять неразрешающие действия, но не подписывает `Allow`, отключение защиты, обслуживание или recovery. Эти команды подтверждает небольшое нативное `Guard Parent Approval`-приложение: его отдельный ключ хранится в Secure Enclave/Android Keystore, требует биометрию для каждой подписи и не разрешает device-credential fallback. При отсутствии поддерживаемой сильной биометрии нужно другое зарегистрированное approval-устройство. Обычный FIDO2-ключ с PIN не считается эквивалентом biometric-only; аппаратную альтернативу можно добавить только после отдельной проверки её свойств.
 
 Основные разделы:
 
@@ -201,7 +431,7 @@ QR-код действует один раз и несколько минут. �
 
 На компьютере используется постоянная левая навигация и отдельная прокрутка рабочей области. На телефоне навигация становится нижней или выдвижной.
 
-Push-уведомление сообщает о новом запросе, но не содержит кода, секрета и кнопки мгновенного разрешения на заблокированном экране. Для решения родитель открывает запрос, видит точный объект и подтверждает подпись в approval-модуле биометрией либо отдельным FIDO2-ключом. Даже если ребёнку дали разблокированный телефон, открытая сессия кабинета сама по себе не позволяет нажать `Разрешить`.
+Push-уведомление сообщает о новом запросе, но не содержит кода, секрета и кнопки мгновенного разрешения на заблокированном экране. Для решения родитель открывает запрос, видит точный объект и подтверждает подпись в approval-модуле свежей сильной биометрией. Даже если ребёнку дали разблокированный телефон, открытая сессия кабинета сама по себе не позволяет выдать разрешение.
 
 Нативный approval-модуль проверяется на реальных Android и iPhone: каждая разрешающая подпись должна требовать свежую сильную биометрию, ключ должен инвалидироваться при изменении набора биометрии, а PIN/код телефона не должен становиться fallback. Полный кабинет при этом не дублируется: он остаётся в PWA.
 
@@ -235,9 +465,8 @@ Google Authenticator, Яндекс Ключ, TOTP, SMS и почтовые ко�
 
 Восстановление без почтовых кодов:
 
-- второй passkey на другом устройстве родителя;
-- второй доверенный взрослый;
-- аппаратный FIDO2-ключ;
+- второе заранее зарегистрированное approval-устройство родителя или другого доверенного взрослого;
+- второй passkey/FIDO2 для входа в кабинет сам по себе не восстанавливает разрешающие полномочия Guard; для них нужен trusted approval path или Recovery Kit;
 - отдельный случайно сгенерированный Guard Recovery Kit не менее 256 бит: master copy хранится как защищённая запись в Bitwarden, а вторая копия — распечатанной и запечатанной вне телефона и детского компьютера;
 - мастер-пароль Bitwarden никогда не передаётся Guard и не становится Guard-паролем; человек не придумывает recovery secret вручную;
 - применение Recovery Kit требует физического доступа, отдельной локальной elevated admin ceremony, задержки, отзыва прежних родительских ключей и уведомления всех ещё зарегистрированных устройств;
@@ -276,7 +505,7 @@ Google Authenticator, Яндекс Ключ, TOTP, SMS и почтовые ко�
 Целевая схема:
 
 - разрешены только поддерживаемые управляемые браузеры;
-- первый поддерживаемый браузер: Microsoft Edge; второй выбирается между Яндекс Браузером и Google Chrome;
+- первый поддерживаемый браузер: Microsoft Edge; второй — Google Chrome; Яндекс Браузер рассматривается позже;
 - неподдерживаемые браузеры автоматически блокируются как приложения;
 - локальная служба принудительно задаёт браузеру localhost proxy и запрещает обход proxy;
 - proxy видит домен HTTPS-туннеля, но не расшифровывает содержимое страницы;
@@ -357,7 +586,7 @@ Google Authenticator, Яндекс Ключ, TOTP, SMS и почтовые ко�
 6. App approval строится по проверенной службой identity: publisher/product/secure install root или SHA-256 fallback; child-selected path сам по себе ничего не разрешает.
 7. Relay переносит opaque payload. Любая разрешающая команда связана с точным device/request, имеет expiry, sequence и nonce, подписана родительским ключом и записывается как принятая до применения эффекта.
 
-Порядок cutover: contracts/domain tests → service с no-op adapters → secure storage/IPC → shadow migration → account/self-protection → app control → Edge web control → relay/PWA → installer/updater → удаление legacy tray authority/watchdog/LAN cabinet.
+Первоначальный порядок cutover дал существующие foundations. Оставшуюся интеграцию выполнять по M0–M9: ранняя проверка machine-wide защиты, доверенный обмен/привязка, реальные app/site сценарии, полный UX и lifecycle; новый no-op scaffold сам по себе не считается этапом.
 
 Target остаётся `.NET 10 LTS`; официальный SDK `10.0.302` установлен после отдельного разрешения Ивана и закреплён через `global.json`. `Guard.Service` использует официальный `Microsoft.Extensions.Hosting.WindowsServices` `10.0.10`; установленный ранее SDK `8.0.422` не стал молчаливым архитектурным понижением.
 
@@ -380,7 +609,9 @@ Guard должен выдерживать:
 
 Абсолютная защита невозможна, если ребёнок знает пароль администратора, может сбросить UEFI/BitLocker или родитель сам подтверждает непонятную операцию. Мастер настройки обязан показать эти границы простыми словами.
 
-## Этапы и проверки
+## Исторические этапы 0–7 и принятые базовые решения
+
+Далее сохранена история первоначального разбиения. Для новой execution-сессии последовательность, тесты и критерии готовности определяются M0–M9 выше; прежний code-only PASS не закрывает production/VM/phone gate.
 
 ### Базовые решения первого релиза
 
@@ -495,14 +726,18 @@ Guard должен выдерживать:
 | 2026-07-24 | Dev/closed pilot не требует новых платежей: отдельные Cloudflare Workers Free + SQLite Durable Objects/D1, `workers.dev` и FCM; REG.RU только optional static mirror | Существующий REG.RU проверен для SFTP-статики, а бесплатные Cloudflare/FCM квоты достаточны для одного семейного пилота |
 | 2026-07-24 | Stage 6 использует native-scanned transcript-bound enrollment, device-signed exact request snapshots, per-key replay floors/stop-and-wait, opaque FCM и отдельные view/approval authorities | Захват relay/PWA либо перестановка очереди не должны позволять blind signing, чужую привязку, replay или permissive command без свежей биометрии |
 | 2026-07-24 | Первый pilot transport — bounded HTTPS polling; relay ack только после local commit, redelivery завершается signature-verified idempotent receipt | Упрощает бесплатный вертикальный сценарий и сохраняет commit-before-effect при offline/retry/crash |
+| 2026-09-29 | Сначала подробный план M0–M9 и карта T01–T20/E01–E10, затем новая команда запуска разработки | Прямой запрос Ивана; code-only foundations не равны рабочему приложению |
+| 2026-09-29 | До основной интеграции доказать совместимость machine-wide signed protection, динамических разрешений и их отзыва при crash/admin tamper | Найденный разрыв P-256/RSA и отсутствие production enforcement; техническая приёмка M1 |
 
 ## Открытые решения
 
 - Какой публичный Guard-domain и production hosting/SLA используются после закрытого бесплатного пилота.
 - Когда добавлять iPhone-клиент и какой Mac/Xcode build route использовать.
 - Какой публично доверенный Windows signing service/certificate и какие store accounts покупать перед release.
+- До реализации recovery закрепить задержку (рекомендация M8 — 24 часа) и механизм, который не позволит сократить её сменой часов/перезагрузкой.
+- В M1 выбрать и доказать policy signing/update/revocation path вне защищаемого ПК; аппаратную совместимость Android проверить на конкретном телефоне.
 
-Эти вопросы не блокируют Stage 6 development и VM-проверки без новых платежей. Они должны быть закрыты до публичного релиза и расходов.
+Первые три вопроса не блокируют code/VM разработку и закрытый пилот без новых платежей. Последние два — конкретные технические/продуктовые условия соответствующих M1/M8 gates; их нельзя выдавать за уже решённые.
 
 ## Не входит в первый релиз
 
