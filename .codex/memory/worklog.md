@@ -3,10 +3,11 @@
 ## 2026-09-29 — M0 execution start
 
 - User explicitly started full development. Planned baseline `a46b73d628ecb5128f1069578f1e184483d6b0bf` pushed as `codex/checkpoint-20260929-2325-guard-integrated`; implementation branch `codex/guard-v2-integrated`. Existing dirty files were the five known planning documents only, committed before checkpoint. No application code changed before checkpoint push.
-- Release solution build PASS; 29 explicitly allowlisted v2 console harnesses and legacy P0 checks PASS through `scripts/run-safe-tests.ps1 -SkipBuild`. PWA 26/26 + build, Worker 15/15 + typecheck, Android 18/18 JVM + debug APK PASS. No live Guard/installer/system policy ran on the host.
-- Elevated read-only `Get-VM` returned zero guests. Hyper-V service is running; free official Windows 11 Enterprise Evaluation ISO is downloading for isolated feasibility work, but Windows 11 Pro remains the final target. Phone not connected (`adb devices` empty), so physical biometric evidence is NOT RUN.
+- Release solution build PASS; 29 explicitly allowlisted v2 console harnesses and legacy P0 checks PASS through `scripts/run-safe-tests.ps1 -SkipBuild`. PWA 27/27 + build, Worker 15/15 + typecheck, Android 18/18 JVM + debug APK PASS. No live Guard/installer/system policy ran on the host.
+- Elevated read-only `Get-VM` returned zero guests. Hyper-V service is running; the next read-only UAC for switch inventory was canceled by the user. Do not repeat it silently. Official 90-day Windows 11 Enterprise Eval ISO download was paused at 1.72/7.66 GiB in `D:\GuardV2Lab`; Windows 11 Pro remains final target. Phone not connected (`adb devices` empty), so physical biometric evidence is NOT RUN.
 - Official Microsoft guidance confirms standalone local admin can fully control AppLocker; signed App Control with Secure Boot can resist policy tampering but does not document TTL for a previously signed supplemental allow after service loss. M1 cannot be marked PASS from source reading or unit tests.
 - Worker now has approval-role-only, one-time locator redemption that returns only a SHA-256 request-id digest. Device token cannot redeem; replay is 410. Worker tests/typecheck PASS. No production deployment performed yet.
+- BFF now includes verified frame cursor; PWA pages up to 128 encrypted frames instead of failing on the server's default 20, and direct Android opening no longer depends on clipboard permissions. Android minSdk=31 because its hardware ECDH API starts there. All corresponding safe checks passed and commits were pushed; trusted enrollment, actual UI verifier and native transport remain absent.
 
 ## 2026-09-29 — completion plan, implementation not started
 
