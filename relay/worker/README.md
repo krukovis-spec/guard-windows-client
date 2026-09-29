@@ -39,6 +39,7 @@ Passkey public keys, counters, challenge records, and session hashes are kept in
 
 ```json
 {
+  "cursor": 1,
   "frameId": "outer-canonical-frame-id",
   "frame": "<full canonical GRF1 bytes as unpadded base64url>",
   "receivedAt": "2026-07-24T00:00:00.000Z"
@@ -46,6 +47,7 @@ Passkey public keys, counters, challenge records, and session hashes are kept in
 ```
 
 The full frame is required for HPKE encapsulated-key and AAD verification. Inner request IDs, plaintext targets, decisions, relay tokens, and numeric byte arrays are never returned. A malformed, oversized, or storage-inconsistent frame fails the whole response closed instead of returning a partial inbox.
+The cursor is the authenticated outer frame cursor. The parent client pages with `after` and verifies strict forward progress; it does not use this untrusted server hint as an approval replay floor.
 
 `POST /v1/parent/approval-intents` validates the UI choice but deliberately stores neither that choice nor its duration. It creates only a short-lived, non-authoritative locator bound to the hash of the pending request identifier. Android must fetch and verify the exact request, show it again, obtain a fresh biometric-confirmed decision, sign it locally, and observe a device-signed receipt. The BFF never signs, reserves a signing sequence, publishes an approval frame, or finalizes a decision for Android.
 

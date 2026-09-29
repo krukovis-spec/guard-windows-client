@@ -118,6 +118,7 @@ describe.sequential("parent WebAuthn BFF", () => {
     expect(response.status).toBe(200);
     const snapshots = await response.json() as Array<Record<string, unknown>>;
     expect(snapshots).toEqual([{
+      cursor: 1,
       frameId: "frame-parent-snapshot-0001",
       frame: base64Url(relayFrame),
       receivedAt: new Date(createdAt).toISOString(),

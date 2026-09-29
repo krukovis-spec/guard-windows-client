@@ -35,6 +35,7 @@ describe("same-origin parent transport", () => {
   it("decodes bounded full GRF1 bytes without exposing an inner request id", async () => {
     const encodedFrame = new Uint8Array([0x47, 0x52, 0x46, 0x31, 0, 0, 0, 1]);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([{
+      cursor: 1,
       frameId: "frame-alpha-00001",
       frame: encodeBase64Url(encodedFrame.buffer),
       receivedAt: "2026-07-24T20:00:00.000Z"
@@ -49,21 +50,28 @@ describe("same-origin parent transport", () => {
     expect(Array.from(new Uint8Array(first.encodedFrame))).toEqual(Array.from(encodedFrame));
   });
 
-  it("accepts the BFF's default page of twenty frames but not more", async () => {
+  it("pages beyond the BFF's default twenty frames but rejects overfilled pages", async () => {
     const frame = encodeBase64Url(new Uint8Array(8).buffer);
-    const makePage = (count: number) => Array.from({ length: count }, (_, index) => ({
-      frameId: `frame-parent-${String(index).padStart(5, "0")}`,
+    const makePage = (count: number, start = 0) => Array.from({ length: count }, (_, index) => ({
+      cursor: start + index + 1,
+      frameId: `frame-parent-${String(start + index).padStart(5, "0")}`,
       frame,
       receivedAt: "2026-07-24T20:00:00.000Z"
     }));
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(makePage(20)), { status: 200 })));
-    await expect(new HttpParentTransport().listSnapshots()).resolves.toHaveLength(20);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const after = Number(new URL(String(input), "https://example.test").searchParams.get("after"));
+      return new Response(JSON.stringify(after === 0 ? makePage(20) : makePage(2, 20)), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(new HttpParentTransport().listSnapshots()).resolves.toHaveLength(22);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(makePage(21)), { status: 200 })));
     await expect(new HttpParentTransport().listSnapshots()).rejects.toThrow();
   });
 
   it("rejects leaked inner fields, duplicate ids, and oversized frames", async () => {
     const valid = {
+      cursor: 1,
       frameId: "frame-alpha-00001",
       frame: encodeBase64Url(new Uint8Array(8).buffer),
       receivedAt: "2026-07-24T20:00:00.000Z"
@@ -71,6 +79,7 @@ describe("same-origin parent transport", () => {
     const responses = [
       [{ ...valid, requestId: "request-alpha-001" }],
       [valid, valid],
+      [{ ...valid, cursor: 0 }],
       [{ ...valid, frame: encodeBase64Url(new Uint8Array(64 * 1024 + 1).buffer) }]
     ];
 

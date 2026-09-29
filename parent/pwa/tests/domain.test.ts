@@ -33,6 +33,7 @@ describe("approval intent boundary", () => {
 describe("display trust boundary", () => {
   it("does not render an unverified relay snapshot", async () => {
     const result = await verifiedSnapshots([{
+      cursor: 1,
       frameId: "frame-untrusted-001",
       encodedFrame: new ArrayBuffer(8),
       receivedAt: "2026-01-01T00:00:00.000Z"
