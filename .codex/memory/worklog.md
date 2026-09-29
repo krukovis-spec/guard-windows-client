@@ -1,5 +1,14 @@
 # Worklog
 
+## 2026-09-29 — PWA → Android request link
+
+- Fixed the PWA approval locator link to use the scheme, host and query accepted by the existing Android intent filter/parser; invalid locators now fail before navigation. PWA 26/26 tests and production build passed; Android unit-test task and debug APK build passed with the existing GuardDev JDK 17.
+- This only delivers a locator to the Android shell. It does not redeem/decrypt the request, request a fingerprint, sign a decision, or grant Windows access. Hyper-V read-only inventory remains unconfirmed; no VM or Guard/system protection was started.
+
+## 2026-09-29 — Guard token master copy
+
+- Ivan confirmed the `Cloudflare — Guard relay deployment` secure note with a masked `API` field was saved in Bitwarden. The note itself was not read back; local DPAPI copy still decrypts. Clipboard had changed after the screenshot and no Guard token remained there.
+
 ## 2026-09-26 — Guard Cloudflare token and fail-closed relay publication
 
 - Created no-expiry `Guard relay deployment` account token scoped only to `guard-relay` Individual Workers Editor. Verified from fresh process: token and Guard HTTP 200, VoicePaste HTTP 403. Stored a separate CurrentUser DPAPI operational copy with user-only ACL outside Git; cleared clipboard. Bitwarden master copy is pending Ivan's manual save.

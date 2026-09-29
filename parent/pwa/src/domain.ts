@@ -13,5 +13,6 @@ export function makeIntent(requestId: string, kind: DecisionKind, minutes: numbe
 }
 
 export function androidIntentLink(locator: string): string {
-  return `guard-parent://approval-intent/${encodeURIComponent(locator)}`;
+  if (!/^[A-Za-z0-9._~-]{16,256}$/u.test(locator)) throw new Error("invalid approval locator");
+  return `guard-parent://request?locator=${encodeURIComponent(locator)}`;
 }

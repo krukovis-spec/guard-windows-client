@@ -16,7 +16,8 @@ describe("approval intent boundary", () => {
   });
 
   it("creates only a locator deep link, never an approval", () => {
-    expect(androidIntentLink("opaque:only-a-locator")).toBe("guard-parent://approval-intent/opaque%3Aonly-a-locator");
+    expect(androidIntentLink("Abcd_1234-xyz.5678")).toBe("guard-parent://request?locator=Abcd_1234-xyz.5678");
+    expect(() => androidIntentLink("opaque:only-a-locator")).toThrow("invalid approval locator");
   });
 
   it("a permissive choice can only create an intent locator", async () => {
