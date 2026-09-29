@@ -116,7 +116,6 @@ async function beginIntent(requestId: string, kind: DecisionKind, minutes: numbe
   try {
     const locator = await requestApprovalLocator(transport, requestId, kind, minutes);
     const link = androidIntentLink(locator.locator);
-    await navigator.clipboard?.writeText(link);
     window.location.assign(link);
   } catch (error) {
     state = stateForRelayError(error); render();
