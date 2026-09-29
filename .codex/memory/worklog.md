@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-09-30 — Windows image applied to isolated VM; boot check blocked
+
+- Ivan approved restarting **only** `GuardV2-Lab-20260930` with Hyper-V. Computer Use showed the ISO's "press any key" prompt but could not send input to elevated VMConnect. No host reboot occurred.
+- Mounted the official evaluation ISO read-only on the host. Its single WIM index is `Windows 11 Enterprise Evaluation`. Before any partition write, verified the exact powered-off VM/VHDX path, the reverse `Get-VHD -DiskNumber` mapping, `File Backed Virtual` bus, empty RAW partition table and 80 GiB size. Only that virtual disk (disk 3 at the time) received GPT/EFI/MSR/NTFS partitions and the Windows image. No physical disk was partitioned.
+- Guest Windows files and an EFI BCD file exist. `bcdboot` returned exit code 1, so guest boot is **not verified**. A follow-up elevated diagnostic UAC was canceled; no retry was made. The guest VHDX remains host-mounted as temporary S: and W:, and the VM remains off. Do not start the VM until the VHDX is safely detached. No Guard, installer or policy was run on host or guest.
+- Rechecked Release solution build, 29 v2 harnesses and legacy P0 checks, PWA 27/27 + build, Worker 15/15 + typecheck, and Android offline unit-test/APK tasks: all passed. Android Gradle tasks were up to date rather than rerun from scratch. No real phone test or production deployment occurred.
+
 ## 2026-09-30 — M0 disposable VM prepared, OS installation pending
 
 - Ivan explicitly approved renewed UAC for the lab. Elevated inventory found zero pre-existing VMs and the built-in Default Switch. Created only `GuardV2-Lab-20260930`, Generation 2, 4 vCPU, 8 GiB startup, dynamic 80 GiB VHDX, Secure Boot on, vTPM on, ProductionOnly checkpoints. VM files moved to `C:\Users\kruko\AppData\Local\GuardV2Lab\VM` because D: free space unexpectedly dropped to ~29 GiB from unrelated activity; VHDX was verified dynamic and only 4 MiB. No unrelated D: data was deleted.

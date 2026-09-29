@@ -64,7 +64,9 @@
 
 Проверка 2026-09-29: Release solution build PASS; новый `scripts/run-safe-tests.ps1 -SkipBuild` выполнил все 29 v2 console harness и legacy P0 checks PASS; PWA 27/27 + build PASS, Worker 15/15 + typecheck PASS, Android 18/18 JVM + debug APK PASS. Повторная VM-приёмка M0 ещё **NOT RUN**: elevated `Get-VM` вернул пустой список, следующий UAC для read-only switch inventory был отменён. Не повторять его без ответа Ивана. Загрузка официального Windows 11 Enterprise Evaluation ISO (90 дней) остановлена на 1,72/7,66 ГиБ, частичный файл сохранён в `D:\GuardV2Lab`; это не подмена требуемого финального теста на Windows 11 Pro и не семейная лицензия.
 
-Продолжение 2026-09-30: Иван разрешил UAC для лаборатории. `GuardV2-Lab-20260930` создана с Generation 2, Secure Boot, vTPM, динамическим диском и ProductionOnly snapshots; её файлы перенесены на C: после неожиданного сокращения свободного места D:. Microsoft Enterprise Eval 26H2 ISO полностью скачан, размер и SHA-256 записаны в `.codex/memory/worklog.md`, образ подключён к VM. Официальный PDF Microsoft с хешами пока для 25H2; сверки с корректным официальным хешем **нет**. VM запущена, но Windows ещё не установлена: при первом старте пропущено приглашение нажать клавишу для DVD. Snapshot и recovery **NOT RUN**. Согласие на запуск установки через окно VM запрошено отдельно. На основной Windows Guard/политики не запускались.
+Продолжение 2026-09-30: Иван разрешил UAC для лаборатории. `GuardV2-Lab-20260930` создана с Generation 2, Secure Boot, vTPM, динамическим диском и ProductionOnly snapshots; её файлы перенесены на C: после неожиданного сокращения свободного места D:. Microsoft Enterprise Eval 26H2 ISO полностью скачан, размер и SHA-256 записаны в `.codex/memory/worklog.md`, образ подключён к VM. Официальный PDF Microsoft с хешами пока для 25H2; сверки с корректным официальным хешем **нет**. При первом старте был пропущен короткий запрос нажать клавишу для загрузки DVD; Иван затем разрешил перезапустить только VM. Snapshot и recovery **NOT RUN**. На основной Windows Guard/политики не запускались.
+
+Позднее 2026-09-30: образ Windows развернут на строго проверенном пустом VHDX этой VM (GPT/EFI/MSR/NTFS); физические диски не затронуты. `bcdboot` вернул код 1, хотя EFI/BCD-файл появился, поэтому загрузка **не подтверждена**. Дополнительный UAC для диагностики был отменён. VHDX остаётся смонтированным на хосте как S:/W:, VM выключена; перед её запуском нужно подтвердить загрузку и отсоединить именно этот VHDX. Computer Use не может передать клавиши в повышенный VMConnect. Release, safe suites, PWA/Worker и offline Android build повторно прошли; это не меняет статуса M0/M1 и не является готовой системой.
 
 **Результат:** можно безопасно собрать точную версию и повторить проверки на отдельной тестовой Windows.
 
@@ -263,7 +265,7 @@
 
 | Этап | Статус | Условие перехода |
 |---|---|---|
-| M0 | Частично: checkpoint/safe baseline PASS, VM создана; Windows install/snapshot/recovery NOT RUN | Проверенный disposable guest с snapshot и recovery |
+| M0 | Частично: checkpoint/safe baseline PASS, VM создана и Windows image применён; guest boot/snapshot/recovery NOT RUN | Проверенный disposable guest с snapshot и recovery |
 | M1 | Документация/риск исследованы; VM proof NOT RUN | Принятая матрица системной защиты и совместимый dynamic approval path |
 | M2 | Дополнены одноразовый locator redemption и bounded PWA paging; интеграция открыта | Реальный encrypted exchange, BFF registration/view enrollment и durable receipts |
 | M3 | Foundations есть; сценарий открыт | Доверенная привязка и реальная аппаратная подпись |
