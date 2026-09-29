@@ -1,11 +1,18 @@
 # Guard Windows Client - инструкции для Codex
 
+## Актуальный маршрут Guard v2 — 2026-09-29
+
+- Рабочий корень: `C:\Projects\guard-windows-client`; исходники на Яндекс.Диске не использовать.
+- Новая служба v2 — `.NET 10` в `src/`; `.NET Framework 4.8`, tray/watchdog и LAN-кабинет ниже относятся к quarantined legacy. Сведения о недостающих SDK/первой сборке за июнь — история, не актуальный блокер.
+- Читать `.codex/memory/project.md`, затем `docs/guard-v2-development-plan.md`. Текущий маршрут — M0–M9, тесты T01–T20/E01–E10; `docs/guard-v2-implementation-handoff.md` содержит актуальный вход и отдельно старый P0 prompt.
+- Последняя просьба Ивана — сначала подробный план, затем отдельная команда запуска разработки. До неё application code не менять. После неё идти по M0–M9 без повторных разрешений на обычные шаги; live Guard/политики проверять только в disposable VM, реальную биометрию — на телефоне.
+
 ## Контекст проекта
 
-- Корень проекта: `C:\Yandex.Disk\Projects\guard-windows-client`.
-- Это open-source Windows-клиент Guard под `.NET Framework 4.8`.
+- Корень проекта: `C:\Projects\guard-windows-client`.
+- Историческая база — open-source Windows-клиент Guard под `.NET Framework 4.8`; v2 описан выше.
 - Текущий upstream: `https://github.com/ganjie/guard-windows-client.git`, ветка `main`.
-- Проект сейчас является клиентом сервиса `https://guard.alexweb.app`, а не полностью автономным parental-control приложением.
+- Исторический клиент был привязан к `https://guard.alexweb.app`; P0 отключил этот control plane. Guard v2 использует отдельный собственный relay по каноническому плану.
 
 ## Как работать с Иваном
 
@@ -25,7 +32,7 @@
 5. Проверить текущий git status:
    ```powershell
    $git='C:\Users\kruko\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe'
-   & $git -C 'C:\Yandex.Disk\Projects\guard-windows-client' status -sb
+   & $git -C 'C:\Projects\guard-windows-client' status -sb
    ```
 
 ## Архитектура
@@ -82,7 +89,7 @@
 1. Сначала пробовать открыть `guard.sln` в Visual Studio 2022 или Build Tools с workload `.NET desktop development`.
 2. Если нужен CLI, сначала проверить без запуска приложения:
    ```powershell
-   Set-Location 'C:\Yandex.Disk\Projects\guard-windows-client'
+   Set-Location 'C:\Projects\guard-windows-client'
    dotnet msbuild guard.sln /restore /p:Configuration=Release /p:Platform="Any CPU"
    ```
 3. Если `dotnet msbuild` падает на старых `.csproj` или reference assemblies - поставить Visual Studio Build Tools или .NET Framework 4.8 Developer Pack, а не чинить код вслепую.
