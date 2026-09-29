@@ -26,11 +26,12 @@
 
 ## Current State
 
-### Planning 2026-09-29 — next implementation run awaits Ivan's command
+### Execution 2026-09-29 — integrated branch, NOT a release
 
-- Canonical plan now contains the concrete M0–M9 completion route, T01–T20 test groups and E01–E10 end-to-end acceptance cases. No application code changed in this planning turn; code baseline is `a53cdad` on `codex/guard-completion`. Use the updated handoff, not its historical P0 prompt.
+- Canonical plan is M0–M9/T01–T20/E01–E10. Safe checkpoint `codex/checkpoint-20260929-2325-guard-integrated` at `a46b73d` is pushed; current branch is `codex/guard-v2-integrated` and pushed. `scripts/run-safe-tests.ps1` runs the 29 v2 console harnesses and legacy P0 checks; Release solution, PWA 27/27/build, Worker 15/15/typecheck, Android 18/18/debug APK pass. No live Guard/system policy was launched on the host.
 - First execution gate is feasibility: machine-wide signed App Control plus dynamic app grants, bounded expiry/revoke after service loss, and elevated-admin tamper. Microsoft policy signatures require PKCS#7/RSA; existing phone P-256/ECDSA approval signatures cannot sign those policies. No policy signing private key on the protected PC or untrusted relay.
-- Concrete integration gaps are recorded in the plan: missing production sinks/child/proxy/extension; unconnected native enrollment/biometric/network; PWA registration inputs/verifier and 16-vs-20 inbox limit; absent locator redemption; ignored empty phone tests; Android ECDH API 31 vs minSdk 30. Reuse existing tests and add boundary/E2E cases, not another foundation-only completion claim.
+- M2 slices implemented but not deployed: one-time approval-role-only locator redemption returns a request-id SHA-256 digest; PWA pages encrypted inbox with strict cursors and bounded 128-frame total, and phone opening no longer needs clipboard permission. Android minSdk is 31 for the existing hardware ECDH API. Still missing production sinks/child/proxy/extension, trusted native enrollment/biometric/network, PWA verifier/registration, real receipts, VM and phone evidence. These small changes do not make the product usable.
+- Hyper-V is running and elevated read-only `Get-VM` returned zero guests. The subsequent read-only UAC for switch inventory was canceled; do not re-prompt without Ivan's response. Official Windows 11 Enterprise Eval ISO download is paused at 1.72/7.66 GiB in `D:\GuardV2Lab`; this is not a Windows 11 Pro acceptance guest. No real Android was connected.
 
 ### Verified 2026-09-24 — completion increment, NOT a release
 
@@ -101,10 +102,10 @@
 
 ## Recommended Next
 
-- Wait for Ivan's next explicit command to start development after the 2026-09-29 planning request. Then follow M0–M9: verify current state, push a fresh checkpoint including the agreed plan, and start the integration branch. Existing checkpoint `codex/checkpoint-20260923-2221-guard-completion` remains historical recovery. No merge or release has been performed.
+- Continue `codex/guard-v2-integrated` from its pushed checkpoint `codex/checkpoint-20260929-2325-guard-integrated`; do not repeat M0 safe baseline without changes. Existing 2026-09-23 checkpoint is historical recovery. No merge, production deployment or release has been performed.
 - M1 first produces measured feasibility evidence for the system boundary; M4 then delivers the first real application approval scenario. Android compile is fixed; trusted enrollment/request/approval and production enforcement remain to be connected. Original Stage 3–7 foundations are historical context; M0–M9 governs the next run. No child Android/iOS agent is part of this Windows release.
 - Continue from the published `guard-relay` Worker with its separate scoped token and isolated Durable Object; never reuse VoicePaste data or credentials. The service registry records the verified connection. Before client enrollment, provision relay secrets and exact-origin BFF, then verify real mailbox delivery and receipt handling; publication alone is not an end-to-end Guard scenario.
-- Before any live enforcement work, confirm Hyper-V access with an explicit read-only result, create a Generation 2 disposable Windows 11 Pro guest with Secure Boot/vTPM and verify snapshot recovery, then run all privileged tests inside that guest only.
+- Before any live enforcement, obtain Ivan's response about the canceled UAC, then create a Generation 2 disposable guest with Secure Boot/vTPM and verify snapshot recovery. Enterprise Eval can establish preliminary M1 feasibility; final acceptance needs Windows 11 Pro. No privileged system test on the host.
 - Current product path remains: temporary biometric-gated maintenance, exact application identities, managed supported browsers, localhost domain proxy without HTTPS interception, parent PWA, native biometric-only approval signing and four decisions (`always`, `temporary`, `daily quota`, `deny`).
 - Ivan authorized execution of the full plan and separately approved the .NET 10/service-package toolchain. Continue in small verified code-only increments; do not skip to live Windows enforcement.
 - Do not install or live-test the current build on the child PC. After the P0 changes, validate only in disposable Windows 11 Pro VMs before any real-device pilot.

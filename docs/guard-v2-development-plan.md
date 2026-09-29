@@ -62,7 +62,7 @@
 
 Старт исполнения 2026-09-29: согласованный baseline и план зафиксированы коммитом `a46b73d628ecb5128f1069578f1e184483d6b0bf` и отправлены в GitHub как `codex/checkpoint-20260929-2325-guard-integrated`. Рабочая ветка: `codex/guard-v2-integrated`. На основной Windows приложение и политики не запускались.
 
-Проверка 2026-09-29: Release solution build PASS; новый `scripts/run-safe-tests.ps1 -SkipBuild` выполнил все 29 v2 console harness и legacy P0 checks PASS; PWA 26/26 + build PASS, Worker 15/15 + typecheck PASS, Android 18/18 JVM + debug APK PASS. Повторная VM-приёмка M0 ещё **NOT RUN**: elevated `Get-VM` вернул пустой список. Для предварительной лаборатории загружается официальный Windows 11 Enterprise Evaluation ISO (90 дней); это не подмена требуемого финального теста на Windows 11 Pro и не семейная лицензия.
+Проверка 2026-09-29: Release solution build PASS; новый `scripts/run-safe-tests.ps1 -SkipBuild` выполнил все 29 v2 console harness и legacy P0 checks PASS; PWA 27/27 + build PASS, Worker 15/15 + typecheck PASS, Android 18/18 JVM + debug APK PASS. Повторная VM-приёмка M0 ещё **NOT RUN**: elevated `Get-VM` вернул пустой список, следующий UAC для read-only switch inventory был отменён. Не повторять его без ответа Ивана. Загрузка официального Windows 11 Enterprise Evaluation ISO (90 дней) остановлена на 1,72/7,66 ГиБ, частичный файл сохранён в `D:\GuardV2Lab`; это не подмена требуемого финального теста на Windows 11 Pro и не семейная лицензия.
 
 **Результат:** можно безопасно собрать точную версию и повторить проверки на отдельной тестовой Windows.
 
@@ -261,9 +261,9 @@
 
 | Этап | Статус | Условие перехода |
 |---|---|---|
-| M0 | Частично: checkpoint и safe baseline PASS; VM recovery NOT RUN | Проверенный disposable guest с snapshot и recovery |
+| M0 | Частично: checkpoint и safe baseline PASS; VM recovery NOT RUN, UAC отменён | Проверенный disposable guest с snapshot и recovery |
 | M1 | Документация/риск исследованы; VM proof NOT RUN | Принятая матрица системной защиты и совместимый dynamic approval path |
-| M2 | Части уже есть; интеграция открыта | Реальный encrypted exchange, BFF registration/view enrollment и durable receipts |
+| M2 | Дополнены одноразовый locator redemption и bounded PWA paging; интеграция открыта | Реальный encrypted exchange, BFF registration/view enrollment и durable receipts |
 | M3 | Foundations есть; сценарий открыт | Доверенная привязка и реальная аппаратная подпись |
 | M4–M8 | Не приняты | Соответствующие T/E и наблюдаемый пользовательский результат |
 | M9 | Не начат | Все обязательные группы прошли, комплект пригоден для совместного теста |
