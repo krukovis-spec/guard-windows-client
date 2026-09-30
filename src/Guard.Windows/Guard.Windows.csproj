@@ -11,6 +11,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Cryptography\google-attestation-roots-2026.pem" LogicalName="Guard.GoogleAttestationRoots" />
     <InternalsVisibleTo Include="Guard.Windows.Crypto.Tests" />
+    <InternalsVisibleTo Include="Guard.Windows.Ipc.Tests" />
     <ProjectReference Include="..\Guard.Application\Guard.Application.csproj" />
     <ProjectReference Include="..\Guard.Contracts\Guard.Contracts.csproj" />
     <ProjectReference Include="..\Guard.Domain\Guard.Domain.csproj" />

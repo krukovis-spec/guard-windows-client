@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-01 — authenticate read-only setup connection
+
+- Added fixed-local-pipe `GuardSetupQueryClient` for the three empty read-only setup queries. SYSTEM owner, SCM/PID/own-process/Running/automatic/account, exact normal install command line and live process image/token checked before send and again before response acceptance. Original process handle retained; Identification-only client and explicit least rights, bounded/correlated response, shared I/O cancellation. Reused SCM/native/codec facilities; moved existing service identity constant/path without changing it. No new package/interface/framework.
+- Extended existing IPC harness with real random-name current-user pipes, restricted DACL, pre-read Identification, native owner/PID/process token, service-binding rejection cases, fragmented/max/truncated/oversized/foreign-version-or-ID responses and partial-read cancellation. An extra assumption that generic-write clients necessarily fail was disproved in the same-user experiment and removed, not papered over in production. First full run encountered that experimental assertion; final clean run recorded below. No installed Guard, host policy, VM, cloud or credentials changed.
+- Self-review: traced endpoint close/processor/resolver/SCM callers, held-handle lifetime, fail-closed exceptions, exact public query allowlist, read limits and default-off readiness. PROJECT_ONLY memory gate; canonical M3 records installer obligations and still-unverified positive SYSTEM/VM/restart checks. This is connection plumbing, not finished installer/phone enrollment or administrator-resistant protection. Ponytail reused stdlib rights/ACL APIs and existing tests instead of custom pipe interop/frameworks.
+- Final verification: focused IPC 13 checks PASS; fresh `scripts/run-safe-tests.ps1` rebuilt Release and completed all 29 v2 harnesses +45 legacy checks, exit 0. No code edits during this final run. Pending work is installer/operator UI integration, positive SYSTEM/VM connection/restart proof, phone/deployment and strict M1; no release claim.
+
 ## 2026-10-01 — public device provisioning through existing admin IPC
 
 - Added empty-request verb 33 on the existing AdminSetup endpoint only. Explicit <=2048-byte JSON whitelist exports compiled relay origin, persistent device ID, separate public SPKIs/key IDs and initial epochs. No token, private key, setup secret, state mutation, new pipe or dependency. Import/export reuse one pristine-state check; missing production pins refuses without fallback.

@@ -16,7 +16,11 @@ namespace Guard.Windows.Services
         ScmServiceConfiguration ReadConfiguration();
 
         uint ReadCurrentState();
+
+        ScmServiceProcessStatus ReadProcessStatus();
     }
+
+    public readonly record struct ScmServiceProcessStatus(uint ServiceType, uint State, uint ProcessId);
 
     public sealed class ScmServiceOpenResult
     {
@@ -299,6 +303,9 @@ namespace Guard.Windows.Services
             }
 
             public uint ReadCurrentState()
+                => ReadProcessStatus().State;
+
+            public ScmServiceProcessStatus ReadProcessStatus()
             {
                 ThrowIfDisposed();
                 const int statusSize = 36;
@@ -311,7 +318,10 @@ namespace Guard.Windows.Services
                         throw new Win32Exception(Marshal.GetLastWin32Error());
                     }
 
-                    return unchecked((uint)Marshal.ReadInt32(buffer, 4));
+                    return new ScmServiceProcessStatus(
+                        unchecked((uint)Marshal.ReadInt32(buffer, 0)),
+                        unchecked((uint)Marshal.ReadInt32(buffer, 4)),
+                        unchecked((uint)Marshal.ReadInt32(buffer, 28)));
                 }
                 finally { Marshal.FreeHGlobal(buffer); }
             }

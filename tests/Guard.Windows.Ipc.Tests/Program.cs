@@ -29,7 +29,10 @@ namespace Guard.Windows.Ipc.Tests
                 ("authenticates the client token before reading a frame", AuthenticatesBeforeFrameRead),
                 ("processes one bounded request and correlated response", ProcessesOneRequest),
                 ("contains client token query failures before frame read", ContainsTokenQueryFailure),
-                ("contains a client disconnect during response write", ContainsResponseDisconnect)
+                ("contains a client disconnect during response write", ContainsResponseDisconnect),
+                ("queries a real identification-only pipe token before reading", SetupClientChecks.ReadIdentificationToken),
+                ("binds setup to the exact running SYSTEM service", SetupClientChecks.RejectWrongServiceBinding),
+                ("bounds and correlates setup responses over a real test pipe", SetupClientChecks.CheckResponses)
             };
             var failures = 0;
             foreach (var test in tests)
