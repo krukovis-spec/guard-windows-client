@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-09-30 — real browser view decryption and device signature verification
+
+- Added the fixed RFC 9180 receive profile with native WebCrypto only, reusing the .NET/Kotlin wire contract and public fixture. Trusted enrollment pins device/view keys, IDs and epochs; only non-extractable P-256 ECDH deriveBits keys accepted. Bounded canonical parsing, strict UTF8/NFC/control checks, exact bigint revisions, authenticated metadata and pre/post-crypto expiry checks. ECDSA verifies the original signed bytes once; HMAC is KDF only, not approval signing.
+- PWA now constructs this concrete verifier instead of accepting a global verification callback. No enrollment means closed UI; trustworthy issuance/storage/revocation remain unimplemented. Child reason/expiry are displayed with textContent; invalid batches fail visibly instead of looking empty. No signing capability, token persistence, dependency, deploy/auth or host/VM system change.
+- PWA 69 tests + typecheck/build PASS; .NET relay cryptography 9 checks PASS, including RFC vector and the shared exchange fixture. Tests exercise every single-byte wire mutation/truncation, different keys/identity/epochs, time boundaries, copied buffers, genuine re-encrypted/re-signed hostile plaintext, Unicode/length/enum/overflow limits and real CryptoKey signing/export rejection. Self-review confirmed fixed-suite labels/AAD, original-message ECDSA hashing, trusted key provenance boundary and safe rendering. Real browser/passkey/Android/biometric and relay network exchange NOT RUN; no durable view replay/resolution or rollback-resistant time claimed.
+- Memory gate PROJECT_ONLY: updated capsule and canonical M3 evidence/next gate. Ponytail used existing test runner/public fixture and platform crypto, no runtime package. References checked: RFC 9180 and W3C Web Cryptography specification. Family readiness remains false, strict M1 TTL/admin gate still open.
+
 ## 2026-09-30 — bounded view registration tickets instead of browser-wide invite
 
 - Reused Worker auth object, SQLite and WebAuthn. Mailbox-admin-only issue/revoke route creates a scoped random 256-bit five-minute ticket; hash-only storage, 64 outstanding maximum, one unused ticket per mailbox/user. Browser registration accepts only that ticket, not mailbox/view overrides or old global invite. Atomic consumption/user/challenge creation prevents double use; challenge expiry cannot extend the ticket. Legacy unbound ceremonies fail closed.

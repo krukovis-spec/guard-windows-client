@@ -32,15 +32,22 @@ describe("approval intent boundary", () => {
 
 describe("display trust boundary", () => {
   it("does not render an unverified relay snapshot", async () => {
-    const result = await verifiedSnapshots([{
+    await expect(verifiedSnapshots([{
       cursor: 1,
       frameId: "frame-untrusted-001",
       encodedFrame: new ArrayBuffer(8),
       receivedAt: "2026-01-01T00:00:00.000Z"
     }], {
       decryptAndVerify: async () => ({ verified: false, snapshot: { requestId: "untrusted" } as never })
-    });
-    expect(result).toEqual([]);
+    })).rejects.toThrow("request verification failed");
+  });
+
+  it("bounds verification work before calling the verifier", async () => {
+    let calls = 0;
+    await expect(verifiedSnapshots(Array.from({ length: 129 }, () => ({} as never)), {
+      decryptAndVerify: async () => { calls++; return { verified: false }; }
+    })).rejects.toThrow("request batch too large");
+    expect(calls).toBe(0);
   });
 });
 
