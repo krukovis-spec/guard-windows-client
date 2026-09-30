@@ -11,6 +11,7 @@
 - Root: `C:\Projects\guard-windows-client`. Older Yandex.Disk paths below are historical; do not resume development there.
 - Start every future session with `AGENTS.md`, then this capsule.
 - During design discussion, update `docs/guard-v2-development-plan.md` in the same turn. Silence after a recommendation means acceptance; later Ivan corrections replace the old decision. Do not change application code until Ivan explicitly starts implementation.
+- Queued UI decision (Ivan, 2026-09-30): after functional completion, before M9, restyle all Guard surfaces in a cohesive Codex-like style (rounded panels/buttons, comparable typography/spacing, black high-contrast working text; muted secondary labels only in readable settings). Canonical requirements and visual checks are in M7; do not interrupt current functional work for this pass.
 - Do not run the app, installer, cleaner, helper or admin-affecting code without Ivan's explicit approval.
 - Prefer first verifying build/toolchain, then adding tests around pure logic before touching system enforcement.
 
