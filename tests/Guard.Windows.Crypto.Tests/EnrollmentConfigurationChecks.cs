@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -113,6 +115,7 @@ internal static class EnrollmentConfigurationChecks
             await ThrowsAsync(() => store.InstallNewAsync(raw, trust, boundary, Now, default));
             Check(ciphertext.SequenceEqual(File.ReadAllBytes(paths.DeviceRelayConfigurationFile)), "repeat import overwrote config");
             var config = new DeviceRelayConfigurationStore(paths, protector, guard).Load(trust, identity, state, Now);
+            await CheckNativeIpcAsync(boundary, config, trust);
             using var transport = config.CreateTransport(trust, identity, state, Now);
             using var runtime = ServiceNativeEnrollment.Create(boundary.NativeEnrollmentStore, identity, state, config, trust, new Clock());
             var offer = config.CreateOffer(trust, identity, state, "Lab PC", Now.AddTicks(1));
@@ -230,13 +233,117 @@ internal static class EnrollmentConfigurationChecks
         ["signingKeyId"] = identity.SigningKeyId, ["encryptionKeyId"] = identity.EncryptionKeyId,
         ["mailboxId"] = "mailbox-configuration-test", ["deviceEpoch"] = 1L, ["authorityEpoch"] = 1L,
         ["accessToken"] = Credential, ["issuedAt"] = Now.ToUnixTimeMilliseconds(), ["expiresAt"] = Now.AddDays(2).ToUnixTimeMilliseconds() };
+    private static async Task CheckNativeIpcAsync(ServiceAuthoritativeStateBoundary boundary, DeviceRelayConfiguration config,
+        EnrollmentDeploymentTrust trust)
+    {
+        var network = new EnrollmentSetupHttp();
+        var opens = 0;
+        async Task<ServiceNativeEnrollment> Open(CancellationToken token)
+        {
+            opens++;
+            return ServiceNativeEnrollment.Create(boundary.NativeEnrollmentStore, boundary.Identity,
+                await boundary.LoadAsync(token), config, trust, new Clock(), network);
+        }
+        using var handler = Handler(boundary, trust, Open);
+        var dispatcher = new SecureIpcRequestDispatcher(handler);
+        async Task<GuardIpcResponse> Send(GuardVerb verb, byte[] input, ClientRole role = ClientRole.AdminSetup)
+        {
+            var request = new GuardIpcRequest(1, Guid.NewGuid().ToString("D"), verb, input);
+            using var wire = new MemoryStream(IpcFrameCodec.Encode(request));
+            return await dispatcher.DispatchAsync(role, await IpcFrameCodec.DecodeAsync(wire, TimeSpan.FromSeconds(5), default), default);
+        }
+        foreach (var verb in new[] { GuardVerb.BeginNativeSetup, GuardVerb.AdvanceNativeSetup, GuardVerb.ConfirmNativeSetup, GuardVerb.CancelNativeSetup })
+            foreach (var role in Enum.GetValues<ClientRole>().Where(r => r != ClientRole.AdminSetup))
+                Check((await Send(verb, Array.Empty<byte>(), role)).Status is GuardIpcResponseStatus.Forbidden or GuardIpcResponseStatus.InvalidRequest,
+                    "non-admin native setup role");
+        Check(opens == 0 && network.Calls == 0, "unauthorized native setup opened dependencies");
+        Check((await Send(GuardVerb.BeginNativeSetup, new byte[] { 1 })).Status == GuardIpcResponseStatus.InvalidRequest,
+            "native begin accepted payload");
+        using (var unconfigured = Handler(boundary, null))
+        {
+            var denied = await new SecureIpcRequestDispatcher(unconfigured).DispatchAsync(ClientRole.AdminSetup,
+                new GuardIpcRequest(1, Guid.NewGuid().ToString("D"), GuardVerb.BeginNativeSetup, Array.Empty<byte>()), default);
+            Check(denied.Status == GuardIpcResponseStatus.Unavailable, "unconfigured native setup fallback");
+        }
+        var begun = await Send(GuardVerb.BeginNativeSetup, Array.Empty<byte>());
+        Check(begun.Status == GuardIpcResponseStatus.Success && opens == 1 && network.Calls == 0, "native begin failed or used network");
+        using var started = JsonDocument.Parse(begun.GetPayloadCopy());
+        Check(started.RootElement.EnumerateObject().Count() == 5 && !started.RootElement.TryGetProperty("qr", out _) &&
+            started.RootElement.GetProperty("phase").GetString() == "relay-pending", "QR exposed before provisioning");
+        var secret = started.RootElement.GetProperty("confirmationSecret").GetString()!;
+        var enrollmentId = started.RootElement.GetProperty("enrollmentId").GetString();
+        var pending = await boundary.LoadAsync(default);
+        Check(!pending.IsProvisioned && pending.Enrollment?.Offer.EnrollmentId == enrollmentId, "native begin claimed owner");
+        Check((await Send(GuardVerb.BeginNativeSetup, Array.Empty<byte>())).Status == GuardIpcResponseStatus.Conflict, "begin replaced a session");
+        byte[] Poll(string capability) => JsonSerializer.SerializeToUtf8Bytes(new { version = 1, confirmationSecret = capability });
+        Check((await Send(GuardVerb.AdvanceNativeSetup, Poll(Convert.ToBase64String(new byte[32])))).Status == GuardIpcResponseStatus.Forbidden &&
+            network.Calls == 0, "foreign local session reached relay");
+        foreach (var bad in new[] { "{}", "{\"version\":1,\"version\":1,\"confirmationSecret\":\"" + secret + "\"}",
+            "{\"version\":1,\"confirmationSecret\":12}", "{\"version\":1,\"confirmationSecret\":\"" + secret + "\",\"extra\":true}" })
+            Check((await Send(GuardVerb.AdvanceNativeSetup, Encoding.UTF8.GetBytes(bad))).Status == GuardIpcResponseStatus.InvalidRequest,
+                "malformed native setup payload");
+        network.Fail = true;
+        var failed = await Send(GuardVerb.AdvanceNativeSetup, Poll(secret));
+        Check(failed.Status == GuardIpcResponseStatus.Unavailable && failed.PayloadLength == 0 &&
+            (await boundary.LoadAsync(default)).Version == pending.Version, "failed HTTP revealed QR or changed ownership");
+        network.Fail = false;
+        var advanced = await Send(GuardVerb.AdvanceNativeSetup, Poll(secret));
+        Check(advanced.Status == GuardIpcResponseStatus.Success, "retry native provisioning");
+        using var snapshot = JsonDocument.Parse(advanced.GetPayloadCopy());
+        Check(snapshot.RootElement.GetProperty("phase").GetString() == "scan-phone" &&
+            snapshot.RootElement.GetProperty("qr").GetString()!.StartsWith("guard-enroll://v2?offer=", StringComparison.Ordinal) &&
+            snapshot.RootElement.GetProperty("claimHash").ValueKind == JsonValueKind.Null && opens == 1, "native QR gate or cached runtime");
+        var version = snapshot.RootElement.GetProperty("stateVersion").GetInt64();
+        var confirm = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, confirmationSecret = secret,
+            expectedVersion = version, claimHash = new string('0', 64) });
+        Check((await Send(GuardVerb.ConfirmNativeSetup, confirm)).Status == GuardIpcResponseStatus.Rejected &&
+            !(await boundary.LoadAsync(default)).IsProvisioned, "local click created an owner without phone proof/attestation");
+        var staleCancel = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, confirmationSecret = secret, expectedVersion = version - 1 });
+        Check((await Send(GuardVerb.CancelNativeSetup, staleCancel)).Status == GuardIpcResponseStatus.Conflict, "stale cancel committed");
+
+        // New handler has no retained QR. Persisted session and capability still work; no silent re-key.
+        var resumedNetwork = new EnrollmentSetupHttp();
+        using var resumed = Handler(boundary, trust, async token => ServiceNativeEnrollment.Create(boundary.NativeEnrollmentStore,
+            boundary.Identity, await boundary.LoadAsync(token), config, trust, new Clock(), resumedNetwork));
+        var response = await new SecureIpcRequestDispatcher(resumed).DispatchAsync(ClientRole.AdminSetup,
+            new GuardIpcRequest(1, Guid.NewGuid().ToString("D"), GuardVerb.AdvanceNativeSetup, Poll(secret)), default);
+        Check(response.Status == GuardIpcResponseStatus.Success, "restart lost persisted session");
+        using var resumedSnapshot = JsonDocument.Parse(response.GetPayloadCopy());
+        Check(resumedSnapshot.RootElement.GetProperty("phase").GetString() == "restart-required" &&
+            resumedSnapshot.RootElement.GetProperty("qr").ValueKind == JsonValueKind.Null &&
+            (await boundary.LoadAsync(default)).Version == version, "restart regenerated QR or state");
+        var cancel = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, confirmationSecret = secret, expectedVersion = version });
+        Check((await Send(GuardVerb.CancelNativeSetup, cancel)).Status == GuardIpcResponseStatus.Success, "originating session could not cancel");
+        Check((await Send(GuardVerb.AdvanceNativeSetup, Poll(secret))).Status == GuardIpcResponseStatus.Forbidden &&
+            (await boundary.LoadAsync(default)).Enrollment == null, "cancelled capability remained usable");
+    }
+
+    private sealed class EnrollmentSetupHttp : HttpMessageHandler
+    {
+        internal bool Fail;
+        internal int Calls;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            Calls++;
+            Check(request.RequestUri!.Host == "relay.example.test" && request.Headers.Authorization?.Parameter == Credential,
+                "native setup used unexpected endpoint or credentials");
+            if (Fail) return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            if (request.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NoContent);
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsByteArrayAsync(token));
+            var expiry = body.RootElement.GetProperty("expiresAt").GetInt64();
+            return new HttpResponseMessage(HttpStatusCode.Created) { Content = new StringContent(
+                JsonSerializer.Serialize(new { duplicate = false, retainUntil = expiry + 86400000 }), Encoding.UTF8, "application/json") };
+        }
+    }
+
     private sealed class TestGuard : IServiceDataBoundaryGuard { internal Action Check = () => { }; public void DemandReady() => Check(); }
-    private static GuardServiceIpcOperationHandler Handler(ServiceAuthoritativeStateBoundary boundary, EnrollmentDeploymentTrust? trust)
+    private static GuardServiceIpcOperationHandler Handler(ServiceAuthoritativeStateBoundary boundary, EnrollmentDeploymentTrust? trust,
+        Func<CancellationToken, Task<ServiceNativeEnrollment>>? open = null)
     {
         var unused = new UnusedSetupDependencies();
         return new GuardServiceIpcOperationHandler(boundary,
-            new SetupCoordinator(boundary, new SetupCeremony(new CryptographicSetupSecretGenerator(), new Sha256SetupSecretHasher(), new EcdsaP256SignatureVerifier())),
-            new ChildAccountBindingCoordinator(boundary, unused), new GuardReadinessCoordinator(boundary, unused), unused, trust);
+            new ChildAccountBindingCoordinator(boundary, unused), new GuardReadinessCoordinator(boundary, unused), unused, trust,
+            openNativeEnrollment: open);
     }
     private sealed class UnusedSetupDependencies : IManagedChildAccountValidator, IDeviceReadinessFactsProvider, IServiceUtcClock
     {

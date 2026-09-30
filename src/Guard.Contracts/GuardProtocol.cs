@@ -71,6 +71,10 @@ namespace Guard.Contracts
         CompleteSetup = 31,
         BindChildAccount = 32,
         GetDeviceProvisioning = 33,
+        BeginNativeSetup = 34,
+        AdvanceNativeSetup = 35,
+        ConfirmNativeSetup = 36,
+        CancelNativeSetup = 37,
         ApplyParentDecision = 40,
         ReconcilePolicy = 50
     }

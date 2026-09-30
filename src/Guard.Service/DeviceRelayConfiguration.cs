@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
@@ -75,10 +76,10 @@ internal sealed class DeviceRelayConfiguration
     }
 
     internal HttpRelayTransport CreateTransport(EnrollmentDeploymentTrust trust, DeviceIdentity identity,
-        DeviceSecurityState state, DateTimeOffset now)
+        DeviceSecurityState state, DateTimeOffset now, HttpMessageHandler? handler = null)
     {
         RequireMatches(trust, identity, state, now);
-        return new HttpRelayTransport(trust.Origin, MailboxId, _encryptionKeyId, _accessToken);
+        return new HttpRelayTransport(trust.Origin, MailboxId, _encryptionKeyId, _accessToken, handler, TimeSpan.FromSeconds(20));
     }
 
     internal EnrollmentOffer CreateOffer(EnrollmentDeploymentTrust trust, DeviceIdentity identity, DeviceSecurityState state,
@@ -177,11 +178,19 @@ internal sealed class ServiceNativeEnrollment : IDisposable
 {
     private readonly GoogleAndroidAttestationSource _source;
     private readonly HttpRelayTransport _transport;
+    private readonly DeviceRelayConfiguration _configuration;
+    private readonly EnrollmentDeploymentTrust _trust;
+    private readonly DeviceIdentity _identity;
     internal NativeEnrollmentCoordinator Coordinator { get; }
     internal NativeEnrollmentRelay Relay { get; }
     private ServiceNativeEnrollment(GoogleAndroidAttestationSource source, HttpRelayTransport transport,
-        NativeEnrollmentCoordinator coordinator, NativeEnrollmentRelay relay)
-    { _source = source; _transport = transport; Coordinator = coordinator; Relay = relay; }
+        NativeEnrollmentCoordinator coordinator, NativeEnrollmentRelay relay, DeviceRelayConfiguration configuration,
+        EnrollmentDeploymentTrust trust, DeviceIdentity identity)
+    { _source = source; _transport = transport; Coordinator = coordinator; Relay = relay;
+        _configuration = configuration; _trust = trust; _identity = identity; }
+
+    internal EnrollmentOffer CreateOffer(DeviceSecurityState state, DateTimeOffset now) =>
+        _configuration.CreateOffer(_trust, _identity, state, Environment.MachineName, now);
 
     internal static async Task<ServiceNativeEnrollment> OpenAsync(ServiceAuthoritativeStateBoundary boundary,
         DeviceRelayConfigurationStore configurations, CancellationToken cancellationToken)
@@ -194,16 +203,18 @@ internal sealed class ServiceNativeEnrollment : IDisposable
     }
 
     internal static ServiceNativeEnrollment Create(FileAuthoritativeStateStore store, DeviceIdentity identity,
-        DeviceSecurityState state, DeviceRelayConfiguration config, EnrollmentDeploymentTrust trust, TimeProvider clock)
+        DeviceSecurityState state, DeviceRelayConfiguration config, EnrollmentDeploymentTrust trust, TimeProvider clock,
+        HttpMessageHandler? handler = null)
     {
-        var transport = config.CreateTransport(trust, identity, state, clock.GetUtcNow());
+        var transport = config.CreateTransport(trust, identity, state, clock.GetUtcNow(), handler);
         GoogleAndroidAttestationSource? source = null;
         try
         {
             source = new GoogleAndroidAttestationSource();
             var coordinator = new NativeEnrollmentCoordinator(store, trust.CreateVerifier(source), source.GetCurrentStatusAsync, clock);
             var exchange = new NativeEnrollmentExchange(store, coordinator, identity.Encryption, identity.Signing, clock);
-            return new ServiceNativeEnrollment(source, transport, coordinator, new NativeEnrollmentRelay(store, exchange, transport, clock));
+            return new ServiceNativeEnrollment(source, transport, coordinator, new NativeEnrollmentRelay(store, exchange, transport, clock),
+                config, trust, identity);
         }
         catch { source?.Dispose(); transport.Dispose(); throw; }
     }

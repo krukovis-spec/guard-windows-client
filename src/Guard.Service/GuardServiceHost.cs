@@ -107,8 +107,6 @@ namespace Guard.Service
                 IWindowsSeparateLocalAdministratorSource,
                 NativeWindowsSeparateLocalAdministratorSource>();
             services.AddSingleton<IManagedChildAccountValidator, ManagedChildAccountValidator>();
-            services.AddSingleton<SetupCeremony>();
-            services.AddSingleton<SetupCoordinator>();
             services.AddSingleton<ChildAccountBindingCoordinator>();
             services.AddSingleton<IServiceUtcClock, SystemServiceUtcClock>();
             services.AddSingleton<IServiceHealthQuery, UnobservedServiceHealthQuery>();

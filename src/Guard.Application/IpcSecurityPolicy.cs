@@ -28,6 +28,10 @@ namespace Guard.Application
                            verb == GuardVerb.GetReadiness ||
                            verb == GuardVerb.BeginSetup ||
                            verb == GuardVerb.GetDeviceProvisioning ||
+                           verb == GuardVerb.BeginNativeSetup ||
+                           verb == GuardVerb.AdvanceNativeSetup ||
+                           verb == GuardVerb.ConfirmNativeSetup ||
+                           verb == GuardVerb.CancelNativeSetup ||
                            verb == GuardVerb.BindChildAccount;
 
                 case ClientRole.Proxy:
