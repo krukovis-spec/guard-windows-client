@@ -1,8 +1,9 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
-param([switch]$AppControl, [switch]$SignedAppControl)
+param([switch]$AppControl, [switch]$SignedAppControl, [switch]$SignedGrantsOnly)
 $ErrorActionPreference = 'Stop'
 if ($AppControl -and $SignedAppControl) { throw 'Select exactly one experiment' }
+if ($SignedGrantsOnly -and -not $SignedAppControl) { throw 'SignedGrantsOnly requires SignedAppControl' }
 if ($SignedAppControl -and $PSVersionTable.PSVersion.Major -lt 7) { throw 'Signed lab experiment requires installed PowerShell 7' }
 $experimentName = if ($SignedAppControl) {'signed-appcontrol'} elseif ($AppControl) {'appcontrol'} else {'applocker'}
 $experimentFile = if ($AppControl) {'Test-AppControlFeasibility.ps1'} else {'Test-AppLockerFeasibility.ps1'}
@@ -65,11 +66,19 @@ try {
     if ($SignedAppControl) {
         $unsignedReport = Get-Content -LiteralPath (Join-Path $accessRoot 'appcontrol-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($unsignedReport.Status -ne 'PASS' -or $unsignedReport.SnapshotRecovery -ne 'BOOT_VERIFIED') { throw 'Unsigned App Control/recovery gate not passed' }
+        if ($SignedGrantsOnly) {
+            $previousSigned = Get-Content -LiteralPath (Join-Path $accessRoot 'signed-appcontrol-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            $provenBase = $previousSigned.Experiment.SecondBoot
+            if ($previousSigned.SnapshotRecovery -ne 'BOOT_VERIFIED' -or $previousSigned.Experiment.AuthorizedRecovery -ne 'PASS' -or
+                $provenBase.Marker -ne 'Blocked' -or -not $provenBase.Signed -or -not $provenBase.Authorized -or -not $provenBase.Enforced) { throw 'Signed base/recovery evidence unavailable for focused grant run' }
+            $report.ReusedSignedBaseEvidence = $provenBase.PolicyId
+        }
     }
     $phase = 'guest-baseline'
     $session = Connect-LabVM
     $baseline = Invoke-Command -Session $session -FilePath (Join-Path $PSScriptRoot 'Get-GuestBaseline.ps1') -ArgumentList $biosGuid,$env:COMPUTERNAME
     $report.Baseline = $baseline
+    if ($SignedGrantsOnly -and ($baseline.Build -ne $previousSigned.Baseline.Build -or $baseline.UpdateBuildRevision -ne $previousSigned.Baseline.UpdateBuildRevision)) { throw 'Guest changed since signed base evidence; run full experiment' }
     Invoke-Command -Session $session -ScriptBlock {
         param([guid]$Uuid)
         $ErrorActionPreference = 'Stop'
@@ -112,9 +121,11 @@ try {
         }
         $phase = 'signed-audit'
         $signedDeployed = $true
-        $report.Experiment.Audit = Invoke-SignedPhase 'Audit'
-        $session = Restart-LabVM
-        $report.Experiment.FirstBoot = Invoke-SignedPhase 'VerifyAudit'
+        if (-not $SignedGrantsOnly) {
+            $report.Experiment.Audit = Invoke-SignedPhase 'Audit'
+            $session = Restart-LabVM
+            $report.Experiment.FirstBoot = Invoke-SignedPhase 'VerifyAudit'
+        }
         $phase = 'signed-enforced'
         $report.Experiment.Enforce = Invoke-SignedPhase 'Enforce'
         $session = Restart-LabVM
