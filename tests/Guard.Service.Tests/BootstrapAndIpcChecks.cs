@@ -257,28 +257,13 @@ namespace Guard.Service.Tests
                     CancellationToken.None)
                 .ConfigureAwait(false);
             Assert(
-                beginResponse.Status == GuardIpcResponseStatus.Success,
-                "BeginSetup was not available to the authenticated admin endpoint.");
-            var ticket = SetupTicketPayloadCodec.Decode(
-                beginResponse.GetPayloadCopy());
-            var ticketSecret = ticket.GetSecretCopy();
-            try
-            {
-                Assert(
-                    ticket.ChallengeId == DeterministicSecretGenerator.ChallengeId,
-                    "BeginSetup returned the wrong challenge id.");
-                Assert(
-                    ticketSecret.Length == GuardProtocol.SetupSecretBytes &&
-                    ticketSecret[0] == 0x5A,
-                    "BeginSetup returned the wrong one-time secret.");
-                Assert(
-                    ticket.ExpiresAtUtc == now.AddMinutes(5),
-                    "BeginSetup returned the wrong expiry.");
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(ticketSecret);
-            }
+                beginResponse.Status == GuardIpcResponseStatus.Unavailable && beginResponse.PayloadLength == 0 &&
+                setupStore.State.Version == 0 && setupStore.State.SetupChallenge == null,
+                "Legacy BeginSetup minted a raw ticket or mutated state.");
+            // This existing test isolates account binding. Real native IPC ceremony is exercised in Crypto.Tests.
+            await setupStore.TryCommitAsync(0, setupStore.State.WithSetupChallenge(new SetupChallengeState(
+                DeterministicSecretGenerator.ChallengeId, SHA256.HashData(RandomNumberGenerator.GetBytes(32)),
+                now.AddMinutes(5), false)), CancellationToken.None);
 
             var bindRequest = Request(
                 GuardVerb.BindChildAccount,
@@ -481,13 +466,8 @@ namespace Guard.Service.Tests
             DateTimeOffset now,
             IDeviceReadinessFactsProvider? readinessFactsProvider = null)
         {
-            var ceremony = new SetupCeremony(
-                new DeterministicSecretGenerator(),
-                new Sha256Hasher(),
-                new AcceptingTrustAnchorValidator());
             return new GuardServiceIpcOperationHandler(
                 store,
-                new SetupCoordinator(store, ceremony),
                 new ChildAccountBindingCoordinator(store, validator),
                 new GuardReadinessCoordinator(
                     store,

@@ -76,6 +76,10 @@ internal static class SetupClientChecks
         Refuses(() => GuardSetupQueryClient.DemandServiceBinding(good, running, 0, true, path, path));
         Refuses(() => GuardSetupQueryClient.DemandServiceBinding(good, running, pid, true, path + ".old", path));
         Refuses(() => GuardSetupQueryClient.QueryAsync(GuardVerb.BeginSetup, CancellationToken.None).GetAwaiter().GetResult());
+        Refuses(() => GuardSetupQueryClient.NativeSetupAsync(GuardVerb.GetStatus, Array.Empty<byte>(), default).GetAwaiter().GetResult());
+        Refuses(() => GuardSetupQueryClient.NativeSetupAsync(GuardVerb.BeginNativeSetup, new byte[1], default).GetAwaiter().GetResult());
+        Refuses(() => GuardSetupQueryClient.NativeSetupAsync(GuardVerb.ConfirmNativeSetup, Array.Empty<byte>(), default).GetAwaiter().GetResult());
+        Refuses(() => GuardSetupQueryClient.NativeSetupAsync(GuardVerb.AdvanceNativeSetup, new byte[513], default).GetAwaiter().GetResult());
         using var process = Process.GetCurrentProcess();
         using var token = WindowsIdentity.GetCurrent();
         if (token.IsSystem) throw new InvalidOperationException("Run these safe tests as an ordinary user, not SYSTEM.");
@@ -141,7 +145,7 @@ internal static class SetupClientChecks
     {
         try { action(); }
         catch (UnauthorizedAccessException) { return; }
-        catch (ArgumentOutOfRangeException) { return; }
+        catch (ArgumentException) { return; }
         throw new InvalidOperationException("An untrusted setup operation was accepted.");
     }
 

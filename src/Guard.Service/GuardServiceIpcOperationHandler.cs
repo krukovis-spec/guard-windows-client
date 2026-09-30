@@ -56,14 +56,10 @@ namespace Guard.Service
         }
     }
 
-    internal sealed class GuardServiceIpcOperationHandler :
-        IGuardIpcOperationHandler
+    internal sealed partial class GuardServiceIpcOperationHandler :
+        IGuardIpcOperationHandler, IDisposable
     {
-        private static readonly TimeSpan SetupTicketLifetime =
-            TimeSpan.FromMinutes(5);
-
         private readonly IAuthoritativeStateStore _stateStore;
-        private readonly SetupCoordinator _setupCoordinator;
         private readonly ChildAccountBindingCoordinator _bindingCoordinator;
         private readonly GuardReadinessCoordinator _readinessCoordinator;
         private readonly IServiceUtcClock _clock;
@@ -71,16 +67,15 @@ namespace Guard.Service
 
         public GuardServiceIpcOperationHandler(
             IAuthoritativeStateStore stateStore,
-            SetupCoordinator setupCoordinator,
             ChildAccountBindingCoordinator bindingCoordinator,
             GuardReadinessCoordinator readinessCoordinator,
             IServiceUtcClock clock,
-            EnrollmentDeploymentTrust? deploymentTrust = null)
+            EnrollmentDeploymentTrust? deploymentTrust = null,
+            DeviceRelayConfigurationStore? configurations = null,
+            Func<CancellationToken, Task<ServiceNativeEnrollment>>? openNativeEnrollment = null)
         {
             _stateStore = stateStore ??
                 throw new ArgumentNullException(nameof(stateStore));
-            _setupCoordinator = setupCoordinator ??
-                throw new ArgumentNullException(nameof(setupCoordinator));
             _bindingCoordinator = bindingCoordinator ??
                 throw new ArgumentNullException(nameof(bindingCoordinator));
             _readinessCoordinator = readinessCoordinator ??
@@ -88,6 +83,8 @@ namespace Guard.Service
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
             // Production DI supplies no override: release pins come only from this service assembly.
             _deploymentTrust = deploymentTrust;
+            _configurations = configurations;
+            _openNativeEnrollment = openNativeEnrollment;
         }
 
         public async Task<GuardIpcResponse> HandleAsync(
@@ -117,10 +114,16 @@ namespace Guard.Service
                         cancellationToken).ConfigureAwait(false);
 
                 case GuardVerb.BeginSetup:
-                    return await BeginSetupAsync(
-                        authenticatedRole,
-                        request,
-                        cancellationToken).ConfigureAwait(false);
+                    // Quarantined raw-ticket ceremony cannot complete the native attested enrollment.
+                    return Response(request, authenticatedRole == ClientRole.AdminSetup ?
+                        GuardIpcResponseStatus.Unavailable : GuardIpcResponseStatus.Forbidden);
+
+                case GuardVerb.BeginNativeSetup:
+                case GuardVerb.AdvanceNativeSetup:
+                case GuardVerb.ConfirmNativeSetup:
+                case GuardVerb.CancelNativeSetup:
+                case GuardVerb.GetNativeSetupResult:
+                    return await NativeSetupAsync(authenticatedRole, request, cancellationToken).ConfigureAwait(false);
 
                 case GuardVerb.BindChildAccount:
                     return await BindChildAccountAsync(
@@ -233,65 +236,6 @@ namespace Guard.Service
                 request,
                 GuardIpcResponseStatus.Success,
                 payload);
-        }
-
-        private async Task<GuardIpcResponse> BeginSetupAsync(
-            ClientRole authenticatedRole,
-            GuardIpcRequest request,
-            CancellationToken cancellationToken)
-        {
-            if (authenticatedRole != ClientRole.AdminSetup)
-            {
-                return Response(
-                    request,
-                    GuardIpcResponseStatus.Forbidden);
-            }
-
-            if (request.PayloadLength != 0)
-            {
-                return Response(
-                    request,
-                    GuardIpcResponseStatus.InvalidRequest);
-            }
-
-            var result = await _setupCoordinator
-                .BeginAsync(
-                    authenticatedRole,
-                    _clock.UtcNow,
-                    SetupTicketLifetime,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (result.Status != SetupOperationStatus.Succeeded)
-            {
-                return Response(
-                    request,
-                    MapSetupStatus(result.Status));
-            }
-
-            if (result.Ticket == null)
-            {
-                return Response(
-                    request,
-                    GuardIpcResponseStatus.InternalError);
-            }
-
-            var secret = result.Ticket.GetSecretCopy();
-            try
-            {
-                var payload = SetupTicketPayloadCodec.Encode(
-                    new SetupTicketPayload(
-                        result.Ticket.ChallengeId,
-                        secret,
-                        result.Ticket.ExpiresAtUtc));
-                return Response(
-                    request,
-                    GuardIpcResponseStatus.Success,
-                    payload);
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(secret);
-            }
         }
 
         private async Task<GuardIpcResponse> BindChildAccountAsync(
