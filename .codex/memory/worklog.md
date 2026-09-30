@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — M1 mechanism revalidation and explicit architecture decision
+
+- Read-only revalidation of actual pinned VM result, lab observation code and local Windows policy schema: first grant Allowed; after actual deadline and boot still Allowed with no reconciler; signed revoke/boot Blocked; recovery BOOT_VERIFIED. No repeated VM experiment or claim that a real installed Guard service was crashed.
+- Checked current Microsoft primary docs: kernel/signed-policy tamper resistance does not establish timed expiry or termination of existing processes; AppLocker stops enforcing without its service; Lifetime Signing EKU only addresses expired signature validation; ELAM protected services and release driver signing have additional prerequisites. This excludes specific proposed shortcuts, not every possible protection architecture. No application code changed or tests rerun for this documentation-only check.
+- Asked Ivan whether to authorize separate system-component (driver candidate) research/prototype in disposable VM, no purchases/host install. Permission and design feasibility are both unproven; strict M1 and full objective unchanged, independent M2/M3 allowed. PROJECT_ONLY capsule/canonical plan now preserve evidence, source links and this pending decision. No external connection/auth changed. Investigation followed gstack-investigate's root-cause route; Ponytail avoided a speculative timer/driver implementation.
+
 ## 2026-10-01 — first-device bootstrap without a guessed phone and stale-scope rejection
 
 - Reproduced HTTP 400 provisioning a device without a future phone recipient. Reused the existing explicit scope list: device `[]` now allows own inbox/GREX but no GRF1 destination; missing/null/wildcard/duplicates and empty approval scope remain invalid. No new role, schema, dependency or placeholder key. Only the existing off-PC admin operation may later set/withdraw confirmed recipients; real operator/installer integration is not yet implemented.
