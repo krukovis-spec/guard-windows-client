@@ -1,5 +1,4 @@
 using System;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Guard.Application;
@@ -32,6 +31,8 @@ namespace Guard.Service
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.StateBackupFile);
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.JournalFile);
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.WriterLeaseFile);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceIdentityFile);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceIdentityPendingFile);
         }
 
         public void PrepareEmptyBoundary()
@@ -59,17 +60,21 @@ namespace Guard.Service
         private readonly GuardDataPaths _paths;
         private readonly IStateDataProtector _protector;
         private readonly IServiceDataBoundaryGuard _dataBoundaryGuard;
+        private readonly DeviceIdentityStore _identityStore;
         private FileAuthoritativeStateStore? _store;
+        private DeviceIdentity? _identity;
 
         public ServiceAuthoritativeStateBoundary(
             GuardDataPaths paths,
             IStateDataProtector protector,
-            IServiceDataBoundaryGuard dataBoundaryGuard)
+            IServiceDataBoundaryGuard dataBoundaryGuard,
+            DeviceIdentityStore identityStore)
         {
             _paths = paths ?? throw new ArgumentNullException(nameof(paths));
             _protector = protector ?? throw new ArgumentNullException(nameof(protector));
             _dataBoundaryGuard = dataBoundaryGuard ??
                 throw new ArgumentNullException(nameof(dataBoundaryGuard));
+            _identityStore = identityStore ?? throw new ArgumentNullException(nameof(identityStore));
         }
 
         public Task AcquireAsync(CancellationToken cancellationToken)
@@ -107,36 +112,30 @@ namespace Guard.Service
             }
         }
 
-        public Task<DeviceSecurityState> LoadAsync(
+        public async Task<DeviceSecurityState> LoadAsync(
             CancellationToken cancellationToken)
         {
-            return GetAcquiredStore().LoadAsync(cancellationToken);
+            var state = await GetAcquiredStore().LoadAsync(cancellationToken).ConfigureAwait(false);
+            lock (_sync)
+            {
+                _ = GetAcquiredStore();
+                _identity ??= _identityStore.Load();
+                _identity.RequireMatches(state);
+            }
+            return state;
+        }
+
+        internal DeviceIdentity Identity
+        {
+            get { lock (_sync) return _identity ?? throw new InvalidOperationException("Device identity is not loaded."); }
         }
 
         public async Task InitializeNewAsync(
             CancellationToken cancellationToken)
         {
-            var randomBytes = new byte[16];
-            RandomNumberGenerator.Fill(randomBytes);
-            try
-            {
-                var deviceId =
-                    "device-" +
-                    Convert.ToHexString(randomBytes).ToLowerInvariant();
-                await GetAcquiredStore()
-                    .InitializeAsync(
-                        new DeviceSecurityState(
-                            deviceId,
-                            version: 0,
-                            highestAcceptedSequence: 0,
-                            desiredPolicyRevision: 0),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(randomBytes);
-            }
+            var store = GetAcquiredStore();
+            using var identity = await _identityStore.InitializeOrResumeNewAsync(cancellationToken).ConfigureAwait(false);
+            await store.InitializeAsync(new DeviceSecurityState(identity.DeviceId, 0, 0, 0), cancellationToken).ConfigureAwait(false);
         }
 
         public Task<bool> TryCommitAsync(
@@ -144,6 +143,7 @@ namespace Guard.Service
             DeviceSecurityState nextState,
             CancellationToken cancellationToken)
         {
+            Identity.RequireMatches(nextState);
             return GetAcquiredStore().TryCommitAsync(
                 expectedVersion,
                 nextState,
@@ -163,6 +163,8 @@ namespace Guard.Service
             {
                 store = _store;
                 _store = null;
+                _identity?.Dispose();
+                _identity = null;
             }
 
             store?.Dispose();

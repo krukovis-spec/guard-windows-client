@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — persistent Windows device identity in service bootstrap
+
+- Added one immutable purpose-separated DPAPI key record using existing SYSTEM-only paths/ACL guard and authoritative writer lease. Distinct signing/encryption keys and device ID publish before initial state; full record without state resumes explicit bootstrap, partial pending record refuses. Normal startup never generates replacement keys; service load/commit checks device ID and any pinned offer's key roles/bytes. Keys stay outside authoritative DTO/IPC; live objects dispose on shutdown and plaintext buffers clear after protect/import/failure.
+- Existing crypto harness now uses real test-user DPAPI, temporary files and actual ServiceAuthoritativeStateBoundary: reopen preserves signatures and HPKE, missing/corrupt/other-device/wrong-purpose data cannot reset, duplicate/swap roles reject, exclusive lease and interrupted bootstrap work, guard/cancellation after durable flush prevent publication. Corrected test timestamps to protocol milliseconds. Fresh safe Release/29 v2 harnesses/45 legacy PASS; final focused Crypto/Service PASS after cancellation guard. Temporary test files removed; no actual SYSTEM service, host policy, VM, physical phone or external deployment.
+- PROJECT_ONLY capsule/canonical plan/protocol updated. Next trusted relay config/credential + release APK identity and full originating setup/scanner/biometric UI, Recovery Kit/view bootstrap. Software DPAPI is not TPM/non-exportable/admin-resistant storage; joint rollback and old-state migration/recovery remain explicit gaps, M1 strict expiry unresolved. Ponytail reused DPAPI, ACL/writer boundary and existing tests, no dependency/new journal. No external service connection changed.
+
 ## 2026-10-01 — Windows enrollment HTTP delivery and lost-response recovery
 
 - Reused pinned HttpRelayTransport for scoped provisioning/binary poll/reply/reject/revoke, with the existing complete deadline and bounded streamed reads. NativeEnrollmentRelay serializes one pass through the actual protected file/coordinator, rechecks session after awaits and never supplies local confirmation. Retry after unknown POST outcome polls first; already answered requests are excluded, preventing different ciphertext against a committed nonce. No new scheduler/store/dependency.

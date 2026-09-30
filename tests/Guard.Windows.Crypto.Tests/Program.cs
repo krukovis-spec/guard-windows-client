@@ -44,7 +44,8 @@ namespace Guard.Windows.Crypto.Tests
                 ("DPAPI CurrentUser round-trips without mutating input", RoundTripsDpapiCurrentUser),
                 ("DPAPI purpose mismatch and tampering fail closed", RejectsWrongPurposeAndTampering),
                 ("production protector requires LocalSystem", RequiresLocalSystemForProduction),
-                ("DPAPI purposes and payloads are bounded", RejectsInvalidDpapiInputs)
+                ("DPAPI purposes and payloads are bounded", RejectsInvalidDpapiInputs),
+                ("device identity persists before state and never silently regenerates", DeviceIdentityChecks.Run)
             };
 
             var failures = 0;

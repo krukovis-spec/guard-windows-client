@@ -27,6 +27,10 @@ All `text` values are length-prefixed strict UTF-8, Unicode NFC and contain no c
 
 ## Native enrollment transcript (QR v2)
 
+Windows device identity is now persisted before the first authoritative state by the existing explicit service bootstrap. `device.identity` is a bounded immutable DPAPI CurrentUser record under LocalSystem, with purpose `guard-v2-device-identity-v1`, separate from state/journal. Its internal `GDK1` plaintext is three length-prefixed fields (big-endian i32): canonical ASCII device ID, P-256 signing PKCS#8, P-256 encryption PKCS#8. The public fingerprints use the existing `p256:` SPKI convention; the two keys must differ. Plaintext/temporary PKCS#8 buffers are cleared after use. This is software key storage, not a TPM or non-exportable-key claim.
+
+The authoritative writer lease covers bootstrap; service-only directory/file ACL checks cover both the final and `.pending` path. Only ciphertext is flushed to a create-new pending file and renamed without overwrite. Normal startup never generates/replaces keys; it checks device identity and any saved enrollment's two public keys/roles before publishing IPC. A fully published identity with no state/backup/journal permits explicit first-bootstrap resumption using the same keys. Partial pending files, wrong purpose/format, missing keys for existing state, or substituted identities require explicit recovery. Old lab state without this record is not automatically migrated. Restore of all local files together remains the existing offline rollback limitation; actual SYSTEM/VM power-cut/ACL evidence and Recovery Kit are still gates. Local tests use real temporary files and the test user's DPAPI, not a host service or live policy.
+
 The transcript, durable coordinator and Windows/Android/Worker HTTP adapters are implemented, **not yet connected through production startup and setup UI**. The old Android `GREN`/QR v1 parser is removed. Reuse the binary rules above, with new magic and binary version 1:
 
 | Magic | Exact field order after version |
@@ -49,7 +53,7 @@ QR text is exactly `guard-enroll://v2?offer=<base64url GREO>&secret=<base64url 3
 
 The future UI must explicitly compare/confirm that same complete claim with the intended phone. No automatic confirmation of the first reply, silent pending replacement or truncated-code shortcut without a reviewed commitment protocol. Old raw-secret/shape-only `SetupCoordinator.CompleteAsync` now always refuses; it cannot bypass this ceremony. Schema 1 remains readable without reset but its keys are **not promoted to attested native enrollment**. This does not solve offline joint rollback or trusted wall-clock rollback.
 
-Remaining integration gates: trusted persistent device keys/configuration and release APK identity, production startup composition, originating setup UI plus real scanner/biometric/Google-chain evidence, Recovery Kit, safe phone-record pruning and PWA view bootstrap. HTTP adapters and durable Android result reconciliation below are locally tested, not a live end-to-end enrollment. PWA keys are not approved by merely adding them to a relay message. No ParentRelay named pipe is exposed.
+Remaining integration gates: trusted relay configuration and release APK identity, production enrollment composition using the persistent device keys, originating setup UI plus real scanner/biometric/Google-chain evidence, Recovery Kit, safe phone-record pruning and PWA view bootstrap. HTTP adapters and durable Android result reconciliation below are locally tested, not a live end-to-end enrollment. PWA keys are not approved by merely adding them to a relay message. No ParentRelay named pipe is exposed.
 
 ### Encrypted native exchange (`GREX`, binary version 1)
 
