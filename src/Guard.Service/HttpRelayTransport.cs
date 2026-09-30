@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +14,7 @@ using Guard.Contracts;
 using Guard.Contracts.Relay;
 using Guard.Domain.Relay;
 using Guard.Protocol.Relay;
+using Guard.Windows;
 
 namespace Guard.Service
 {
@@ -174,19 +176,100 @@ namespace Guard.Service
             // Even a higher relay hint must never be written into authoritative local state.
         }
 
+        public async Task ProvisionEnrollmentAsync(EnrollmentOffer offer, byte[] capability, CancellationToken cancellationToken)
+        {
+            var path = EnrollmentPath(offer);
+            if (capability == null || capability.Length != 32) throw new ArgumentException("Enrollment capability required.");
+            var body = JsonSerializer.SerializeToUtf8Bytes(new {
+                phoneToken = Convert.ToHexString(capability).ToLowerInvariant(), expiresAt = offer.ExpiresAtUtc.ToUnixTimeMilliseconds()
+            });
+            try
+            {
+                using var content = new ByteArrayContent(body);
+                content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+                using var result = await SendAsync(HttpMethod.Post, path, content, 512, cancellationToken,
+                    HttpStatusCode.OK, HttpStatusCode.Created).ConfigureAwait(false);
+                RequireObject(result.Document.RootElement, "duplicate", "retainUntil");
+                if (result.Document.RootElement.GetProperty("duplicate").GetBoolean() != (result.Status == HttpStatusCode.OK) ||
+                    result.Document.RootElement.GetProperty("retainUntil").GetInt64() != offer.ExpiresAtUtc.AddDays(1).ToUnixTimeMilliseconds())
+                    throw new InvalidDataException("Enrollment provisioning response mismatch.");
+            }
+            finally { CryptographicOperations.ZeroMemory(body); }
+        }
+
+        public async Task<byte[]?> PollEnrollmentAsync(EnrollmentOffer offer, CancellationToken cancellationToken)
+        {
+            var result = await SendRawAsync(HttpMethod.Get, EnrollmentPath(offer) + "/requests", null, NativeEnrollmentExchange.MaximumRequestBytes,
+                "application/octet-stream", cancellationToken, HttpStatusCode.OK, HttpStatusCode.NoContent).ConfigureAwait(false);
+            if (result.Status == HttpStatusCode.NoContent) return null;
+            _ = NativeEnrollmentExchange.RequestNonce(result.Bytes, offer);
+            return result.Bytes;
+        }
+
+        public async Task PublishEnrollmentReplyAsync(EnrollmentOffer offer, byte[] request, byte[] reply, CancellationToken cancellationToken)
+        {
+            var path = EnrollmentPath(offer);
+            // Snapshot before the first await; mutable caller buffers must not change the checked routing.
+            if (reply == null || reply.Length > NativeEnrollmentExchange.MaximumReplyBytes) throw new ArgumentException("Enrollment reply size.");
+            var copy = (byte[])reply.Clone();
+            NativeEnrollmentExchange.RequireReplyBinding(copy, request, offer);
+            using var content = new ByteArrayContent(copy);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var result = await SendAsync(HttpMethod.Post, path + "/replies", content, 512, cancellationToken,
+                HttpStatusCode.OK, HttpStatusCode.Created).ConfigureAwait(false);
+            RequireObject(result.Document.RootElement, "duplicate");
+            if (result.Document.RootElement.GetProperty("duplicate").GetBoolean() != (result.Status == HttpStatusCode.OK))
+                throw new InvalidDataException("Enrollment reply acknowledgment mismatch.");
+        }
+
+        public async Task RejectEnrollmentRequestAsync(EnrollmentOffer offer, byte[] request, CancellationToken cancellationToken)
+        {
+            var nonce = NativeEnrollmentExchange.RequestNonce(request, offer);
+            _ = await SendRawAsync(HttpMethod.Delete, EnrollmentPath(offer) + "/requests/" + Convert.ToHexString(nonce).ToLowerInvariant(),
+                null, 0, "application/octet-stream", cancellationToken, HttpStatusCode.NoContent).ConfigureAwait(false);
+        }
+
+        public async Task RevokeEnrollmentChannelAsync(EnrollmentOffer offer, CancellationToken cancellationToken)
+        {
+            _ = await SendRawAsync(HttpMethod.Delete, EnrollmentPath(offer), null, 0, "application/octet-stream",
+                cancellationToken, HttpStatusCode.NoContent).ConfigureAwait(false);
+        }
+
+        private string EnrollmentPath(EnrollmentOffer offer)
+        {
+            _ = RelayCanonicalEncoding.EncodeEnrollmentOffer(offer);
+            if (offer.RelayEndpoint != _mailboxUri.GetLeftPart(UriPartial.Authority) || offer.MailboxId != _mailboxId ||
+                offer.EncryptionKeyId != _recipientKeyId)
+                throw new InvalidDataException("Enrollment does not match the pinned device transport.");
+            return "enrollments/" + Convert.ToHexString(RelayCanonicalEncoding.ComputeEnrollmentOfferHash(offer)).ToLowerInvariant();
+        }
+
         private async Task<ResponseDocument> SendAsync(HttpMethod method, string path, HttpContent? content,
             int maximumBytes, CancellationToken cancellationToken, params HttpStatusCode[] expectedStatuses)
+        {
+            var result = await SendRawAsync(method, path, content, maximumBytes, "application/json", cancellationToken, expectedStatuses).ConfigureAwait(false);
+            return new ResponseDocument(result.Status, JsonDocument.Parse(result.Bytes, new JsonDocumentOptions { MaxDepth = 4 }));
+        }
+
+        private async Task<(HttpStatusCode Status, byte[] Bytes)> SendRawAsync(HttpMethod method, string path, HttpContent? content,
+            int maximumBytes, string mediaType, CancellationToken cancellationToken, params HttpStatusCode[] expectedStatuses)
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(_requestTimeout);
             using var request = new HttpRequestMessage(method, new Uri(_mailboxUri, path)) { Content = content };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(mediaType));
             using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
                 deadline.Token).ConfigureAwait(false);
             if (Array.IndexOf(expectedStatuses, response.StatusCode) < 0)
                 throw new HttpRequestException("Relay request failed.", null, response.StatusCode);
-            if (response.Content.Headers.ContentType?.MediaType != "application/json" ||
+            if (response.StatusCode == HttpStatusCode.NoContent)
+            {
+                if (response.Content.Headers.ContentLength > 0 || response.Content.Headers.ContentEncoding.Count != 0)
+                    throw new InvalidDataException("Unexpected enrollment response body.");
+                return (response.StatusCode, Array.Empty<byte>());
+            }
+            if (response.Content.Headers.ContentType?.MediaType != mediaType ||
                 response.Content.Headers.ContentEncoding.Count != 0 || response.Content.Headers.ContentLength > maximumBytes)
                 throw new InvalidDataException("Invalid relay response headers or size.");
             await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
@@ -200,8 +283,7 @@ namespace Guard.Service
                 buffer.Write(chunk, 0, count);
                 if (buffer.Length > maximumBytes) throw new InvalidDataException("Relay response exceeds its limit.");
             }
-            return new ResponseDocument(response.StatusCode, JsonDocument.Parse(buffer.ToArray(),
-                new JsonDocumentOptions { MaxDepth = 4 }));
+            return (response.StatusCode, buffer.ToArray());
         }
 
         private void RequireFrameBinding(RelayFrame frame)

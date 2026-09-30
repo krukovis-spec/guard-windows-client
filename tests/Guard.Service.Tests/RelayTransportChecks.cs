@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -14,6 +15,7 @@ using Guard.Contracts.Relay;
 using Guard.Domain;
 using Guard.Domain.Relay;
 using Guard.Protocol.Relay;
+using Guard.Windows;
 
 namespace Guard.Service.Tests
 {
@@ -299,6 +301,69 @@ namespace Guard.Service.Tests
             }
         }
 
+        public static async Task GuardsEnrollmentHttpAsync()
+        {
+            // Public synthetic interop bytes: this transport test is NOT fresh signature/attestation evidence.
+            var values = File.ReadAllLines("protocol/test-vectors/enrollment-exchange-v1.properties")
+                .Where(line => line.Length > 0 && !line.StartsWith('#')).Select(line => line.Split('=', 2)).ToDictionary(pair => pair[0], pair => pair[1]);
+            byte[] Value(string name) => Convert.FromHexString(values[name]);
+            var offer = RelayCanonicalEncoding.DecodeEnrollmentOffer(Value("offer"));
+            var query = Value("kotlin.query"); var reply = Value("reply.confirmed"); var calls = 0;
+            HttpResponseMessage Binary(byte[] body, string type = "application/octet-stream") => new(HttpStatusCode.OK)
+                { Content = new StreamOnlyContent(new MemoryStream(body), type) };
+            var response = Binary(query);
+            using var transport = new HttpRelayTransport(new Uri(offer.RelayEndpoint), offer.MailboxId, offer.EncryptionKeyId, Credential,
+                new Handler((_, _) => { calls++; return Task.FromResult(response); }), TimeSpan.FromSeconds(2));
+            Assert((await transport.PollEnrollmentAsync(offer, CancellationToken.None).ConfigureAwait(false))!.AsSpan().SequenceEqual(query), "GREX poll changed bytes");
+            foreach (var body in new[] { new byte[NativeEnrollmentExchange.MaximumRequestBytes + 1], query[..^1], reply,
+                query.Select((value, index) => index == 12 ? (byte)(value ^ 1) : value).ToArray() })
+            {
+                response = Binary(body);
+                await ThrowsAsync(() => transport.PollEnrollmentAsync(offer, CancellationToken.None)).ConfigureAwait(false);
+            }
+            response = Binary(query, "text/html");
+            await ThrowsAsync(() => transport.PollEnrollmentAsync(offer, CancellationToken.None)).ConfigureAwait(false);
+            response = Binary(query); response.Content.Headers.ContentEncoding.Add("gzip");
+            await ThrowsAsync(() => transport.PollEnrollmentAsync(offer, CancellationToken.None)).ConfigureAwait(false);
+            response = new HttpResponseMessage(HttpStatusCode.NoContent);
+            Assert(await transport.PollEnrollmentAsync(offer, CancellationToken.None).ConfigureAwait(false) == null, "204 became an enrollment message");
+            response = new HttpResponseMessage(HttpStatusCode.NoContent) { Content = new ByteArrayContent(new byte[1]) };
+            await ThrowsAsync(() => transport.PollEnrollmentAsync(offer, CancellationToken.None)).ConfigureAwait(false);
+            foreach (var status in new[] { HttpStatusCode.TemporaryRedirect, HttpStatusCode.Unauthorized, HttpStatusCode.Gone })
+            {
+                response = Json("{}", status); var oldCalls = calls;
+                await ThrowsAsync(() => transport.PollEnrollmentAsync(offer, CancellationToken.None)).ConfigureAwait(false);
+                Assert(calls == oldCalls + 1, "GREX redirect/error silently retried");
+            }
+            var beforeInvalid = calls;
+            var changedReply = (byte[])reply.Clone(); changedReply[76] ^= 1;
+            await ThrowsAsync(() => transport.PublishEnrollmentReplyAsync(offer, query, changedReply, CancellationToken.None)).ConfigureAwait(false);
+            await ThrowsAsync(() => transport.PublishEnrollmentReplyAsync(offer, query, new byte[415], CancellationToken.None)).ConfigureAwait(false);
+            Assert(calls == beforeInvalid, "Wrong nonce/oversized reply reached HTTP");
+            foreach (var body in new[] { "{\"duplicate\":false,\"retainUntil\":0}", "{\"duplicate\":false,\"retainUntil\":0,\"retainUntil\":0}", "{}" })
+            {
+                response = Json(body, HttpStatusCode.Created);
+                await ThrowsAsync(() => transport.ProvisionEnrollmentAsync(offer, new byte[32], CancellationToken.None)).ConfigureAwait(false);
+            }
+            response = Json("{\"duplicate\":true}", HttpStatusCode.Created);
+            await ThrowsAsync(() => transport.PublishEnrollmentReplyAsync(offer, query, reply, CancellationToken.None)).ConfigureAwait(false);
+            response = new HttpResponseMessage(HttpStatusCode.NoContent);
+            await transport.RevokeEnrollmentChannelAsync(offer, CancellationToken.None).ConfigureAwait(false);
+            using var other = new HttpRelayTransport(new Uri(offer.RelayEndpoint), offer.MailboxId, "wrong-device-0001", Credential,
+                new Handler((_, _) => throw new InvalidOperationException("Mismatched recipient reached network.")), TimeSpan.FromSeconds(2));
+            await RejectBinding(() => other.PollEnrollmentAsync(offer, CancellationToken.None)).ConfigureAwait(false);
+            using var timed = new HttpRelayTransport(new Uri(offer.RelayEndpoint), offer.MailboxId, offer.EncryptionKeyId, Credential,
+                new Handler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    { Content = new StreamOnlyContent(new SlowStream(), "application/octet-stream") })), TimeSpan.FromMilliseconds(50));
+            await ThrowsCancellationAsync(() => timed.PollEnrollmentAsync(offer, CancellationToken.None)).ConfigureAwait(false);
+        }
+
+        private static async Task RejectBinding(Func<Task> action)
+        {
+            try { await action().ConfigureAwait(false); } catch (InvalidDataException) { return; }
+            throw new InvalidOperationException("Expected pinned enrollment rejection before network.");
+        }
+
         private static RelayTransactionState EmptyState() => new RelayTransactionState("device-test-00001", 0, 1, 1, 0, 0, 0, 0);
         private static byte[] Frame(RelayFrameKind kind, long cursor, string mailbox = Mailbox,
             string recipient = Recipient, string frameId = "frame-test-000001") => RelayCanonicalEncoding.EncodeRelayFrame(
@@ -364,7 +429,7 @@ namespace Guard.Service.Tests
         private sealed class StreamOnlyContent : HttpContent
         {
             private readonly Stream _stream;
-            public StreamOnlyContent(Stream stream) { _stream = stream; Headers.ContentType = new MediaTypeHeaderValue("application/json"); }
+            public StreamOnlyContent(Stream stream, string type = "application/json") { _stream = stream; Headers.ContentType = new MediaTypeHeaderValue(type); }
             protected override bool TryComputeLength(out long length) { length = 0; return false; }
             protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => _stream.CopyToAsync(stream);
             protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult(_stream);

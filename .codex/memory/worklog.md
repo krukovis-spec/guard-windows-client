@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-01 — Windows enrollment HTTP delivery and lost-response recovery
+
+- Reused pinned HttpRelayTransport for scoped provisioning/binary poll/reply/reject/revoke, with the existing complete deadline and bounded streamed reads. NativeEnrollmentRelay serializes one pass through the actual protected file/coordinator, rechecks session after awaits and never supplies local confirmation. Retry after unknown POST outcome polls first; already answered requests are excluded, preventing different ciphertext against a committed nonce. No new scheduler/store/dependency.
+- Definitive remote crypto/claim failure rejects one queued request; attestation-source/storage/network failures retain it. Real Windows CNG invalid-point test exposed PlatformNotSupportedException wrapping CryptographicException; classified only that remote import failure, without algorithm fallback. Same-offer/new-secret replacement during await is also rejected.
+- Fresh safe Release build +29 v2 harnesses/45 legacy PASS. After final small parser snapshot change, fresh Crypto/Service and actual Kotlin→.NET encrypted exchange PASS. Existing harness uses real files/crypto/attestation/CAS plus controlled HTTP for three-stage setup, separate local confirmation, restart, lost responses before/after publication, hostile requests, concurrency, retention and session replacement. HTTP boundary checks cover binding/roles/size/type/JSON/status and stalled bodies. No physical phone, live relay/VM/host policy or deployment.
+- PROJECT_ONLY capsule/plan/protocol updated. Next trusted persistent device keys/config/release identity and originating setup/scanner/biometric UI, then Recovery Kit/view bootstrap. M1 strict admin-resistant expiry remains unresolved. External connections unchanged, no registry mutation. Ponytail reused existing coordinator/client/tests; Codex-like visual work stays queued in M7.
+
 ## 2026-10-01 — durable Android enrollment delivery and signed result
 
 - Extended existing per-offer no-backup file to bounded GEN2 (144 KiB: retained chain plus one sealed request); GEN1 remains readable without key loss/reset. Capability is scoped transport only, not QR secret/proof key. Exact request/nonce commits before network; exact retry for one minute then fresh nonce; expired/abandoned attempts query only for 24h retention. Local abandonment is never remote revocation and never deletes keys.

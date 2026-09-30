@@ -2,16 +2,22 @@ using System;
 using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text;
+using System.Text.Json;
 using Guard.Application;
 using Guard.Contracts;
 using Guard.Contracts.Relay;
 using Guard.Domain;
 using Guard.Protocol.Relay;
 using Guard.Storage;
+using Guard.Service;
 using Guard.Windows;
 using Guard.Windows.Cryptography;
 
@@ -76,6 +82,7 @@ internal static class NativeEnrollmentChecks
     private static async Task RunAsync()
     {
         await EncryptedExchange();
+        await HttpExchange();
         using (var lab = new Lab())
         {
             var forbidden = await lab.Coordinator.BeginAsync(ClientRole.Child, lab.Offer, None);
@@ -210,8 +217,8 @@ internal static class NativeEnrollmentChecks
         var nonce = RandomNumberGenerator.GetBytes(32);
         var request = Request(EnrollmentExchange.Claim, submission, nonce);
         var damaged = (byte[])request.Clone(); damaged[^1] ^= 1;
-        await Reject<CryptographicException>(() => lab.Exchange.HandleAsync(damaged, None));
-        await Reject<InvalidDataException>(() => lab.Exchange.HandleAsync(Request(EnrollmentExchange.Claim, submission, nonce, new byte[32]), None));
+        await Reject<EnrollmentRequestRejectedException>(() => lab.Exchange.HandleAsync(damaged, None));
+        await Reject<EnrollmentRequestRejectedException>(() => lab.Exchange.HandleAsync(Request(EnrollmentExchange.Claim, submission, nonce, new byte[32]), None));
         Check((await lab.State()).Enrollment!.Candidate == null, "rejected encrypted claim staged owner");
         var reply = await lab.Exchange.HandleAsync(request, None);
         Check(Outcome(reply, nonce) == EnrollmentExchange.NeedsPhoneProof && !(await lab.State()).IsProvisioned, "encrypted claim became owner");
@@ -233,7 +240,7 @@ internal static class NativeEnrollmentChecks
         Check(Outcome(await lab.Exchange.HandleAsync(Request(EnrollmentExchange.Query, Array.Empty<byte>(), nonce), None), nonce) == EnrollmentExchange.Confirmed, "lost completion unrecoverable");
         Check(Outcome(await lab.Exchange.HandleAsync(Request(EnrollmentExchange.Claim, submission, nonce), None), nonce) == EnrollmentExchange.Confirmed, "exact committed retry rejected");
         var changed = (byte[])submission.Clone(); changed[^1] ^= 1;
-        await Reject<InvalidDataException>(() => lab.Exchange.HandleAsync(Request(EnrollmentExchange.Claim, changed, nonce), None));
+        await Reject<EnrollmentRequestRejectedException>(() => lab.Exchange.HandleAsync(Request(EnrollmentExchange.Claim, changed, nonce), None));
         using var canceled = new CancellationTokenSource(); canceled.Cancel();
         await Reject<OperationCanceledException>(() => lab.Exchange.HandleAsync(query, canceled.Token));
         var reads = 0;
@@ -250,6 +257,128 @@ internal static class NativeEnrollmentChecks
         RejectSync<ArgumentException>(() => EnrollmentExchange.Decode(request.Concat(new byte[] {0}).ToArray()));
         RejectSync<ArgumentException>(() => EnrollmentExchange.Decode(new byte[EnrollmentExchange.MaximumBytes + 1]));
         Console.WriteLine("PASS encrypted enrollment: real attestation/CAS, signed correlated reply, replay/restart/late completion, tamper, expiry and chain limits");
+    }
+
+    private static async Task HttpExchange()
+    {
+        using var lab = new Lab(); using var start = await lab.Begin();
+        var before = await lab.State();
+        var cap = RelayCanonicalEncoding.ComputeEnrollmentRelayCapability(before.SetupChallenge!.GetSecretHashCopy(), lab.Offer);
+        var hash = RelayCanonicalEncoding.ComputeEnrollmentOfferHash(lab.Offer);
+        var path = "/v1/mailboxes/" + lab.Offer.MailboxId + "/enrollments/" + Convert.ToHexString(hash).ToLowerInvariant();
+        var claim = lab.Claim(lab.PhoneOne); var claimHash = RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim);
+        var submission = EnrollmentExchange.EncodeSubmission(claim,
+            lab.PhoneOne.Chain(AndroidAttestationChecks.Description(challenge: hash)),
+            RelayCanonicalEncoding.ComputeEnrollmentClaimProof(before.SetupChallenge.GetSecretHashCopy(), claim), lab.PhoneOne.Sign(claimHash));
+        byte[] Request(int kind, byte[] body) => EnrollmentExchange.Seal(EnrollmentExchange.Header(kind, hash, claimHash,
+            RandomNumberGenerator.GetBytes(32)), body, lab.Offer.GetEncryptionKeyCopy());
+        byte[]? pending = null; byte[]? savedReply = null;
+        var provisioned = false; var lostProvision = true; var lostReply = false; var lostBeforeReply = false;
+        var rejectCount = 0; var polls = 0; var publishes = 0;
+        using var transport = new HttpRelayTransport(new Uri(lab.Offer.RelayEndpoint), lab.Offer.MailboxId, lab.Offer.EncryptionKeyId,
+            "synthetic-device-credential-00001", new HttpHandler(async (request, ct) =>
+            {
+                Check(request.Headers.Authorization?.Parameter == "synthetic-device-credential-00001" &&
+                    request.RequestUri!.GetLeftPart(UriPartial.Authority) == lab.Offer.RelayEndpoint, "credential/origin binding");
+                var actualPath = request.RequestUri!.AbsolutePath;
+                if (request.Method == HttpMethod.Post && actualPath == path)
+                {
+                    using var json = JsonDocument.Parse(await request.Content!.ReadAsByteArrayAsync(ct));
+                    Check(json.RootElement.GetProperty("phoneToken").GetString() == Convert.ToHexString(cap).ToLowerInvariant() &&
+                        json.RootElement.GetProperty("expiresAt").GetInt64() == lab.Offer.ExpiresAtUtc.ToUnixTimeMilliseconds(), "derived provisioning capability/deadline");
+                    var duplicate = provisioned; provisioned = true;
+                    if (lostProvision) { lostProvision = false; throw new HttpRequestException("synthetic lost provision acknowledgment"); }
+                    return Json(new { duplicate, retainUntil = lab.Offer.ExpiresAtUtc.AddDays(1).ToUnixTimeMilliseconds() }, duplicate ? HttpStatusCode.OK : HttpStatusCode.Created);
+                }
+                if (request.Method == HttpMethod.Get && actualPath == path + "/requests")
+                {
+                    polls++; return pending == null ? new HttpResponseMessage(HttpStatusCode.NoContent) : Binary(pending);
+                }
+                if (request.Method == HttpMethod.Delete)
+                {
+                    Check(pending != null && actualPath == path + "/requests/" +
+                        Convert.ToHexString(EnrollmentExchange.Decode(pending).Nonce).ToLowerInvariant(), "reject targeted wrong request");
+                    rejectCount++; pending = null; return new HttpResponseMessage(HttpStatusCode.NoContent);
+                }
+                Check(request.Method == HttpMethod.Post && actualPath == path + "/replies", "unexpected transport operation");
+                publishes++;
+                if (lostBeforeReply) { lostBeforeReply = false; throw new HttpRequestException("synthetic loss before publication"); }
+                var reply = await request.Content!.ReadAsByteArrayAsync(ct);
+                Check(pending != null, "blind duplicate reply publication");
+                NativeEnrollmentExchange.RequireReplyBinding(reply, pending!, lab.Offer);
+                savedReply = reply; pending = null; // Worker stops polling this nonce once its reply commits.
+                if (lostReply) { lostReply = false; throw new HttpRequestException("synthetic loss after publication"); }
+                return Json(new { duplicate = false }, HttpStatusCode.Created);
+            }), TimeSpan.FromSeconds(2));
+        using (var relay = new NativeEnrollmentRelay(lab.Store, lab.Exchange, transport, lab.Clock))
+        {
+            await Reject<HttpRequestException>(() => relay.ProvisionPendingAsync(None));
+            Check((await lab.State()).Version == before.Version && !(await lab.State()).IsProvisioned, "HTTP failure reset/confirmed setup");
+            await relay.ProvisionPendingAsync(None); // Same secret/hash/deadline; no new ceremony on lost acknowledgment.
+            pending = Request(EnrollmentExchange.Claim, submission); pending[^1] ^= 1;
+            Check(await relay.ProcessNextAsync(None) && rejectCount == 1 && (await lab.State()).Enrollment!.Candidate == null, "bad tag poisoned queue or created owner");
+            pending = Request(EnrollmentExchange.Claim, submission); Array.Clear(pending, 109, 64);
+            Check(await relay.ProcessNextAsync(None) && rejectCount == 2, "invalid remote curve point poisoned queue");
+            pending = Request(EnrollmentExchange.Claim, submission);
+            lab.Status = _ => throw new HttpRequestException("synthetic attestation source outage");
+            await Reject<HttpRequestException>(() => relay.ProcessNextAsync(None));
+            Check(pending != null && rejectCount == 2 && (await lab.State()).Version == before.Version, "transient source failure deleted request or changed state");
+            lab.Status = _ => Task.FromResult(lab.PhoneOne.Status);
+            pending = Request(EnrollmentExchange.Claim, submission); lostBeforeReply = true;
+            await Reject<HttpRequestException>(() => relay.ProcessNextAsync(None));
+            Check((await lab.State()).Enrollment!.Candidate != null && !(await lab.State()).IsProvisioned && pending != null, "lost response lost committed candidate");
+        }
+        lab.Reopen();
+        using var resumed = new NativeEnrollmentRelay(lab.Store, lab.Exchange, transport, lab.Clock);
+        Check(await resumed.ProcessNextAsync(None) && savedReply != null, "restart failed to answer retained message");
+        int Outcome() => BinaryPrimitives.ReadInt32BigEndian(lab.OpenReply(EnrollmentExchange.Decode(savedReply!)).AsSpan(8, 4));
+        Check(Outcome() == EnrollmentExchange.NeedsPhoneProof, "claim transport bypassed phone proof");
+        pending = Request(EnrollmentExchange.Query, Array.Empty<byte>()); pending[44] ^= 1;
+        Check(await resumed.ProcessNextAsync(None) && rejectCount == 3, "other candidate header blocked the intended phone queue");
+        pending = Request(EnrollmentExchange.KeyProof, lab.DecryptProof((await lab.State()).Enrollment!)); lostReply = true;
+        await Reject<HttpRequestException>(() => resumed.ProcessNextAsync(None));
+        Check(Outcome() == EnrollmentExchange.NeedsLocalConfirmation && !(await lab.State()).IsProvisioned, "key proof transport bypassed local confirmation");
+        var oldPublishes = publishes;
+        Check(!await resumed.ProcessNextAsync(None) && publishes == oldPublishes, "lost HTTP acknowledgment blindly republished different ciphertext");
+        var local = await lab.State();
+        Check(await lab.Coordinator.ConfirmLocalAsync(ClientRole.AdminSetup, local.Version, start.GetConfirmationSecretCopy(), claimHash, None) == SetupOperationStatus.Succeeded,
+            "originating confirmation after HTTP exchange");
+        lab.Clock.Now = lab.Offer.ExpiresAtUtc.AddMinutes(1);
+        pending = Request(EnrollmentExchange.Query, Array.Empty<byte>());
+        Check(await resumed.ProcessNextAsync(None) && Outcome() == EnrollmentExchange.Confirmed, "late query lost final owner confirmation");
+        pending = Request(EnrollmentExchange.Query, Array.Empty<byte>());
+        var concurrent = await Task.WhenAll(resumed.ProcessNextAsync(None), resumed.ProcessNextAsync(None));
+        Check(concurrent.Count(processed => processed) == 1, "concurrent polling double-published a nonce");
+        Check((await lab.State()).TrustedParentKeys.Single().Equals(lab.PhoneOne.Anchor), "transport replaced attested parent");
+        var callsBeforeExpiry = polls;
+        lab.Clock.Now = lab.Offer.ExpiresAtUtc.AddDays(1);
+        await Reject<InvalidDataException>(() => resumed.ProcessNextAsync(None));
+        Check(polls == callsBeforeExpiry, "expired retained session reached HTTP");
+
+        using var changed = new Lab(); using var changedStart = await changed.Begin();
+        var stateBefore = await changed.State();
+        using var changedTransport = new HttpRelayTransport(new Uri(changed.Offer.RelayEndpoint), changed.Offer.MailboxId, changed.Offer.EncryptionKeyId,
+            "synthetic-device-credential-00001", new HttpHandler(async (_, _) =>
+            {
+                Check(await changed.Coordinator.CancelAsync(ClientRole.AdminSetup, stateBefore.Version, changedStart.GetConfirmationSecretCopy(), None) == SetupOperationStatus.Succeeded,
+                    "synthetic cancellation");
+                using var replacement = await changed.Begin(); // Same offer, DIFFERENT secrets; must not accept the old HTTP completion.
+                return Json(new { duplicate = false, retainUntil = changed.Offer.ExpiresAtUtc.AddDays(1).ToUnixTimeMilliseconds() }, HttpStatusCode.Created);
+            }), TimeSpan.FromSeconds(2));
+        using var changedRelay = new NativeEnrollmentRelay(changed.Store, changed.Exchange, changedTransport, changed.Clock);
+        await Reject<InvalidDataException>(() => changedRelay.ProvisionPendingAsync(None));
+        Console.WriteLine("PASS enrollment HTTP: real file/attestation/CAS, derived capability, poison rejection, lost acknowledgments/restart, mandatory local confirmation, late query and changed-session guard");
+    }
+
+    private sealed class HttpHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request, cancellationToken);
+    }
+    private static HttpResponseMessage Json(object body, HttpStatusCode status) => new(status) { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") };
+    private static HttpResponseMessage Binary(byte[] body)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body) };
+        response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream"); return response;
     }
 
     private sealed class Lab : IDisposable
