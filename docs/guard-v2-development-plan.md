@@ -187,6 +187,8 @@ Android lifecycle M3.2, 2026-09-30: `AndroidEnrollmentCeremony` сохраняе
 
 **Приёмка:** clean setup и одна проверенная карточка на Android/PWA, свежая аппаратная подпись и её проверка .NET. Реальные тесты отпечатка заменяют пустые `@Ignore` placeholders. Инженерная проверка телефона на этом этапе ещё не означает приглашение к семейному использованию. Тесты: T05–T06, T13–T16.
 
+Зашифрованная граница M3, 2026-09-30: `NativeEnrollmentExchange` принимает GREX claim/chain/proof/query и вызывает настоящий durable coordinator; не имеет маршрута local-confirm. Kotlin шифрует HPKE существующим фиксированным suite; ответы Windows отдельно подписаны и связаны с полными offer/claim hashes, свежим nonce, version и сроком до минуты. Три исхода строго различаются: требуется proof телефона, требуется исходное локальное подтверждение, owner уже сохранён. Проверены реальные синтетические attestation/file/CAS, restart, exact retry, запрос после истечения QR, tamper/expiry/cancellation и предел chain 64 KiB без увеличения обычного GRF1. Kotlin проверяет реальные .NET ответы, .NET независимо расшифровывает Kotlin claim/proof/query; Android 34 JVM tests/debug APK/lint PASS. Физическая биометрия и live relay НЕ проверены. Следующий шаг: scoped GREX endpoint/credentials + HTTP delivery, durable Android outstanding nonce/result/active-owner reconciliation, затем setup/scanner/биометрия/Recovery Kit. Текущий возвращаемый verified result ещё не активирует владельца; основная система всё ещё не готова.
+
 ### M4. Первый законченный сценарий — приложение
 
 **Результат:** неизвестная тестовая программа реально заблокирована в VM, разрешена с телефона на 15 минут и снова закрыта по сроку.

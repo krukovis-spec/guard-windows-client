@@ -75,6 +75,37 @@ class AndroidEnrollmentCeremony(context: Context) {
         try { store.forSend(offer); return proof } catch (error: Exception) { proof.fill(0); throw error }
     }
 
+    fun encryptedClaim(offer: EnrollmentOffer, nonce: ByteArray): ByteArray {
+        val state = forSend(offer)
+        val encoded = EnrollmentExchange.claim(offer, requireNotNull(state.claim), state.certificateChain(), state.possessionProof(), state.signature(), nonce)
+        store.forSend(offer) // expiry during HPKE must not release a new submission
+        return encoded
+    }
+
+    fun encryptedKeyProof(offer: EnrollmentOffer, result: EnrollmentResult, nonce: ByteArray): ByteArray {
+        require(result.outcome == EnrollmentExchange.NEEDS_PHONE_PROOF)
+        val state = forSend(offer)
+        val proof = answerKeyConfirmation(offer, result.encapsulatedKey(), result.encryptedChallenge())
+        return try {
+            EnrollmentExchange.keyProof(offer, requireNotNull(state.claim), proof, nonce).also { store.forSend(offer) }
+        } finally { proof.fill(0) }
+    }
+
+    /** A post-timeout query is allowed, but cannot generate/replace keys or assert local ownership. */
+    fun encryptedStatusQuery(offer: EnrollmentOffer, nonce: ByteArray): ByteArray {
+        val state = requireNotNull(store.load(offer)); require(state.isSigned); checkKeys(state)
+        return EnrollmentExchange.query(offer, requireNotNull(state.claim), nonce)
+    }
+
+    fun receiveExchangeResult(offer: EnrollmentOffer, raw: ByteArray, expectedNonce: ByteArray): EnrollmentResult {
+        val state = requireNotNull(store.load(offer)); require(state.isSigned); checkKeys(state)
+        check(System.currentTimeMillis() >= state.observedUnixMillis) { "clock rollback" }
+        val result = EnrollmentExchange.receive(raw, offer, requireNotNull(state.claim),
+            AndroidRelayEncryptionKey.openExisting(state.encryptionAlias), expectedNonce, System.currentTimeMillis())
+        check(System.currentTimeMillis() in result.issuedUnixMillis until result.expiryUnixMillis)
+        return result // Not active-owner promotion; durable reconciliation must consume the outstanding nonce.
+    }
+
     fun abandon(offer: EnrollmentOffer) = store.abandon(offer)
 
     private fun checkKeys(state: PendingEnrollment) {

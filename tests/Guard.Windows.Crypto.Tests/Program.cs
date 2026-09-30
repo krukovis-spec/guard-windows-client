@@ -15,6 +15,16 @@ namespace Guard.Windows.Crypto.Tests
 
         private static int Main(string[] args)
         {
+            if (args.Length == 1 && args[0] == "--export-enrollment-exchange")
+            {
+                Console.Write(NativeEnrollmentChecks.ExportExchange());
+                return 0;
+            }
+            if (args.Length == 2 && args[0] == "--verify-android-exchange")
+            {
+                NativeEnrollmentChecks.VerifyAndroidExchange(args[1]);
+                return 0;
+            }
             if (args.Length == 1 && args[0] == "--check-google-source")
             {
                 using var source = new GoogleAndroidAttestationSource();
