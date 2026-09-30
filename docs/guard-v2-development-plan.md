@@ -1,8 +1,8 @@
 # Guard v2: канонический план разработки
 
-Статус: планирование завершения продукта по запросу Ивана от 2026-09-29. P0 containment завершён; новые изменения application code начнутся после следующей команды Ивана запустить разработку по этому плану.
+Статус: исполнение M0–M9 разрешено Иваном. P0 containment завершён; интеграция и приёмка продукта продолжаются в `codex/guard-v2-integrated`. Готовой системы пока нет.
 
-Последнее обновление: 2026-09-29.
+Последнее обновление: 2026-09-30.
 
 Актуальный маршрут исполнения — раздел «Подробный план завершения M0–M9» ниже. Исторические Stage 0–7 и старые количества тестов описывают сделанные foundations, а не готовность продукта. Один канонический план остаётся в этом файле.
 
@@ -70,6 +70,10 @@
 
 Итог 2026-09-30: неудачный offline BCD заменён чистой установкой Windows 11 Enterprise Evaluation с ISO на единственный 80-ГиБ диск VM; локальный `GuardLabAdmin` дошёл до рабочего стола. Hyper-V подтвердил Generation 2, Secure Boot, vTPM и ProductionOnly; снимок `clean-windows-20260930` создан, восстановлен после штатного выключения и повторно загружен до экрана входа. Это проверка возврата VM, а не доказательство защиты Guard. Имя ISO содержит 26H2, но `setup.exe` и watermark гостя показывают build 26100; точный выпуск ещё не подтверждён. M0 остаётся частичным: recovery-носитель, тестовые аккаунты, официальный хеш этой версии и финальная приёмка на Windows 11 Pro открыты; M1 ещё не выполнялся. На основной Windows Guard/политики не запускались.
 
+Автоматический доступ 2026-09-30: после вставки Иваном настоящего пароля в защищённое окно PowerShell Direct успешно подключился как `DESKTOP-8C2FU3H\GuardLabAdmin`. Повторный ввод не нужен. Проверенная DPAPI CurrentUser-копия находится вне Git в `%LOCALAPPDATA%\GuardV2Lab\Access\guest-credential.xml`, каталог доступен только пользователю/SYSTEM. Guest baseline PASS: EnterpriseEval / 26H2 / CIM build 26300.9457, Secure Boot и TPM готовы, один включённый локальный администратор, эффективные AppLocker rules пусты, WinRE включён. BitLocker FullyEncrypted, но Protection Off: защищённую загрузку с шифрованием не считать принятой. Watermark/setup 26100 не определяют актуальную сборку гостя; официальный хеш именно этой версии ISO ещё не сверён.
+
+`scripts/lab/Get-GuestBaseline.ps1` и `Test-AppLockerFeasibility.ps1` проверяют UUID/виртуальное оборудование/роль администратора/отличие от host до guest probes или изменений. `scripts/lab/Test-LabSafety.ps1` на Windows PowerShell 5.1 PASS: синтаксис, отказ на host, две безвредные marker-программы с разными SHA-256, bounded process/sentinel self-tests, удаление временных бинарников. `Invoke-AppLockerLab.ps1` закрепляет единственную выделенную VM и диск, проверяет текущий WMI BIOSGUID, выполняет эксперимент только через PowerShell Direct и возвращает clean snapshot с повторным подключением. Первые два прогона остановились на ошибках harness (чтение результата процесса, затем XML-порядок rules/extensions); оба завершились `SnapshotRecovery=BOOT_VERIFIED`. После исправлений третий прогон завершился PASS и снова `BOOT_VERIFIED`; отключение окна VMConnect при этом ожидаемо, повторный интерактивный вход для автоматизации не нужен.
+
 **Результат:** можно безопасно собрать точную версию и повторить проверки на отдельной тестовой Windows.
 
 1. После команды начать: проверить статус/remote и безопасный diff, создать и push свежий checkpoint текущего кода вместе с согласованным планом. Старый checkpoint сохранить. Новую ветку `codex/guard-v2-integrated` создать от этой базы; пользовательские изменения не включать без установленного scope.
@@ -83,6 +87,20 @@
 ### M1. Проверить осуществимость защиты всех аккаунтов
 
 **Результат:** выбран и доказан на VM системный механизм, совместимый с телефонными разрешениями и автоматическим отзывом.
+
+VM-прототип AppLocker 2026-09-30 — **эксперимент PASS, строгая защита НЕ ПРИНЯТА**. Среда: EnterpriseEval 26H2 / 26300.9457, elevated локальный администратор, Everyone `S-1-1-0`, service enforcement включён, без `Administrators:*`. Использован только LAB-набор широких Windows/Program Files paths для сохранения загрузки; это не production-каталог. Фактически проверено на безвредных EXE:
+
+| Проверка T07–T09 (частично) | Наблюдение |
+|---|---|
+| Без policy и AuditOnly | marker v1 запускается |
+| Default-deny | marker v1 не запускается, Win32 1260 |
+| Exact hash grant | marker v1 запускается, иной hash v2 заблокирован |
+| Удаление grant | новый запуск v1 заблокирован |
+| Уже запущенный v1 после отзыва | продолжает работать; завершён только тестовым runner |
+| Повышенный администратор очищает policy | успешно; v1 и v2 снова запускаются |
+| Очистка + clean snapshot restore | пустая effective policy, fresh PowerShell Direct session, `BOOT_VERIFIED` |
+
+Evidence: commit `4044748`, `scripts/lab/Invoke-AppLockerLab.ps1`, очищенный результат в `%LOCALAPPDATA%\GuardV2Lab\Access\applocker-result.json`; пароль в отчёт/Git не входит. Signed App Control, новые/стандартные аккаунты, DLL/script/MSI/MSIX, остановка служб и независимое истечение TTL **NOT RUN**. Следующий обязательный шаг — unsigned/audit → signed machine-wide App Control прототип с off-PC signer и проверенным recovery, затем совместимость динамических прав/отзыва. Не заменять его молча AppLocker-only режимом.
 
 1. Составить минимальную базу разрешённых компонентов Windows/Guard. Проверить App Control for Business как машинный слой и AppLocker как возможный слой динамических ограничений. Ни `Administrators:*`, ни «разрешить всё подписанное Microsoft», ни широкие writable-path правила не допускаются как готовое решение.
 2. Проверить пересечение правил: разрешение AppLocker не должно предполагаться способным отменить запрет App Control. Для неизвестного приложения доказать полный путь добавления точного разрешения в выбранные слои и его удаления.
@@ -267,8 +285,8 @@
 
 | Этап | Статус | Условие перехода |
 |---|---|---|
-| M0 | Частично: checkpoint/safe baseline PASS, VM создана и Windows image применён; guest boot/snapshot/recovery NOT RUN | Проверенный disposable guest с snapshot и recovery |
-| M1 | Документация/риск исследованы; VM proof NOT RUN | Принятая матрица системной защиты и совместимый dynamic approval path |
+| M0 | Частично: safe baseline, guest baseline, PowerShell Direct и snapshot restore/boot PASS; recovery-media, официальный ISO hash и финальный Pro gate открыты | Проверенный disposable guest с полным recovery |
+| M1 | Частично: реальный AppLocker prototype PASS; admin clear и продолжение процесса после revoke подтверждены как ограничения; signed App Control/TTL gate открыт | Принятая матрица системной защиты и совместимый dynamic approval path |
 | M2 | Дополнены одноразовый locator redemption и bounded PWA paging; интеграция открыта | Реальный encrypted exchange, BFF registration/view enrollment и durable receipts |
 | M3 | Foundations есть; сценарий открыт | Доверенная привязка и реальная аппаратная подпись |
 | M4–M8 | Не приняты | Соответствующие T/E и наблюдаемый пользовательский результат |
