@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-09-30 — signed dynamic grant prototype, issuance gate remains failing
+
+- Reused the existing runner/ConfigCI and host-only ephemeral signer. Added v3 base update containing one native SHA-256 hash for marker v1, no SHA-1/page/path/publisher grants; v2 stays a separate identity. Native merge must preserve policy IDs and link the rule to UMCI. Prepared signed v4 revoke/v5 recovery before any deployment; recovery remains off guest until cleanup. Added a clearly native-only external-deadline observation after reboot; no fake Guard timer, installed service or product crash-test claim.
+- Actual first and instrumented second trials FAIL at signed-exact-grant: v1 remains Blocked before the subsequent reboot/expiry stages. Native v3 signed/authorized/enforced flags true, UMCI link true; ConfigCI native SHA-256 differs from flat file hash. Exact event status 0xc0e90002; cause not established. Revoke/expiry NOT RUN. Both experiments again prove signed audit/enforce/admin-removal rejection; signed authorized recovery/targeted removal, snapshot boot/inventory PASS and artifacts removed.
+- Read-only local ETW provider metadata (not private logs) revealed hash/scenario field names with spaces and PolicyGUID separate from the legacy PolicyID string. Fixed the diagnostic whitelist accordingly; new hash fields not yet observed in guest. Next compare actual block hash and test post-reboot grant, shortening already-established base/audit/tamper repetitions. Do not repeat the same unchanged failing grant or call native-only expiry a working lease mechanism.
+- Product code/build evidence unchanged; host protection/account/EFI state untouched. PS7 parse/host refusal/signature/marker/temp-cleanup checks PASS before trials; final PS5/PS7 checks rerun before commit. Memory PROJECT_ONLY in existing plan/capsule/worklog, no service connection changes.
+
 ## 2026-09-30 — signed policy activation fixed and real tamper/recovery evidence
 
 - Root cause established by a single-variable VM comparison: .NET generated SignedData v3 for the custom policy OID; v1-compatible unsigned metadata activates correctly. Existing signer now locates this ASN.1 field structurally, validates its expected TLV, changes only that byte, then verifies the original content, signature, OID and signer. No added dependency, certificate store write or private-key persistence; original AppControl Manager author's compatibility documentation cross-checked with .NET source.
