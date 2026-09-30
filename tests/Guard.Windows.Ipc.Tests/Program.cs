@@ -32,7 +32,8 @@ namespace Guard.Windows.Ipc.Tests
                 ("contains a client disconnect during response write", ContainsResponseDisconnect),
                 ("queries a real identification-only pipe token before reading", SetupClientChecks.ReadIdentificationToken),
                 ("binds setup to the exact running SYSTEM service", SetupClientChecks.RejectWrongServiceBinding),
-                ("bounds and correlates setup responses over a real test pipe", SetupClientChecks.CheckResponses)
+                ("bounds and correlates setup responses over a real test pipe", SetupClientChecks.CheckResponses),
+                ("keeps native setup capability, comparison and uncertain results separate", NativeSetupSessionChecks.Run)
             };
             var failures = 0;
             foreach (var test in tests)

@@ -21,6 +21,7 @@ using Guard.Protocol.Relay;
 using Guard.Service;
 using Guard.Storage;
 using Guard.Windows.Cryptography;
+using Guard.Windows.Ipc;
 using Guard.Windows.Storage;
 
 namespace Guard.Windows.Crypto.Tests;
@@ -270,7 +271,12 @@ internal static class EnrollmentConfigurationChecks
                 new GuardIpcRequest(1, Guid.NewGuid().ToString("D"), GuardVerb.BeginNativeSetup, Array.Empty<byte>()), default);
             Check(denied.Status == GuardIpcResponseStatus.Unavailable, "unconfigured native setup fallback");
         }
-        var begun = await Send(GuardVerb.BeginNativeSetup, Array.Empty<byte>());
+        GuardIpcResponse? lastResponse = null;
+        await using var client = await NativeSetupSession.BeginAsync(async (verb, input, token) => {
+            token.ThrowIfCancellationRequested();
+            return lastResponse = await Send(verb, input);
+        }, () => Now, default);
+        var begun = lastResponse!;
         Check(begun.Status == GuardIpcResponseStatus.Success && opens == 1 && network.Calls == 0, "native begin failed or used network");
         using var started = JsonDocument.Parse(begun.GetPayloadCopy());
         Check(started.RootElement.EnumerateObject().Count() == 5 && !started.RootElement.TryGetProperty("qr", out _) &&
@@ -292,13 +298,16 @@ internal static class EnrollmentConfigurationChecks
         Check(failed.Status == GuardIpcResponseStatus.Unavailable && failed.PayloadLength == 0 &&
             (await boundary.LoadAsync(default)).Version == pending.Version, "failed HTTP revealed QR or changed ownership");
         network.Fail = false;
-        var advanced = await Send(GuardVerb.AdvanceNativeSetup, Poll(secret));
+        var clientView = await client.RefreshAsync(default);
+        var advanced = lastResponse!;
         Check(advanced.Status == GuardIpcResponseStatus.Success, "retry native provisioning");
         using var snapshot = JsonDocument.Parse(advanced.GetPayloadCopy());
         Check(snapshot.RootElement.GetProperty("phase").GetString() == "scan-phone" &&
             snapshot.RootElement.GetProperty("qr").GetString()!.StartsWith("guard-enroll://v2?offer=", StringComparison.Ordinal) &&
             snapshot.RootElement.GetProperty("claimHash").ValueKind == JsonValueKind.Null && opens == 1, "native QR gate or cached runtime");
         var version = snapshot.RootElement.GetProperty("stateVersion").GetInt64();
+        Check(clientView.Phase == NativeSetupPhase.ScanPhone && clientView.StateVersion == version &&
+            clientView.QrText == snapshot.RootElement.GetProperty("qr").GetString(), "typed setup client changed real service QR");
         var confirm = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, confirmationSecret = secret,
             expectedVersion = version, claimHash = new string('0', 64) });
         Check((await Send(GuardVerb.ConfirmNativeSetup, confirm)).Status == GuardIpcResponseStatus.Rejected &&
@@ -317,8 +326,8 @@ internal static class EnrollmentConfigurationChecks
         Check(resumedSnapshot.RootElement.GetProperty("phase").GetString() == "restart-required" &&
             resumedSnapshot.RootElement.GetProperty("qr").ValueKind == JsonValueKind.Null &&
             (await boundary.LoadAsync(default)).Version == version, "restart regenerated QR or state");
-        var cancel = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, confirmationSecret = secret, expectedVersion = version });
-        Check((await Send(GuardVerb.CancelNativeSetup, cancel)).Status == GuardIpcResponseStatus.Success, "originating session could not cancel");
+        Check((await client.CancelAsync(clientView.StateVersion, default)).Phase == NativeSetupPhase.Cancelled,
+            "originating typed client could not cancel");
         Check((await Send(GuardVerb.AdvanceNativeSetup, Poll(secret))).Status == GuardIpcResponseStatus.Forbidden &&
             (await boundary.LoadAsync(default)).Enrollment == null, "cancelled capability remained usable");
     }
