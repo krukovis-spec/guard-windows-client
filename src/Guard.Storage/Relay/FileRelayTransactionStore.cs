@@ -144,6 +144,7 @@ namespace Guard.Storage.Relay
                 initialState.PolicyLedger.Count != 0 ||
                 initialState.ReconcileIntents.Count != 0 ||
                 initialState.SignedReceipts.Count != 0 ||
+                initialState.RecipientOutboundCursors.Count != 0 ||
                 initialState.Outbox.Count != 0)
             {
                 throw new ArgumentException(
@@ -782,16 +783,19 @@ namespace Guard.Storage.Relay
                 {
                     if (next.TrackedRequests.Count !=
                             current.TrackedRequests.Count + 1 ||
-                        next.Outbox.Count != current.Outbox.Count + 1)
+                        next.Outbox.Count <= current.Outbox.Count)
                     {
                         return false;
                     }
 
+                    var addedFrames = new RelayEncryptedOutboxItem[next.Outbox.Count - current.Outbox.Count];
+                    for (var index = 0; index < addedFrames.Length; index++)
+                        addedFrames[index] = next.Outbox[current.Outbox.Count + index];
                     return SameState(
                         current.WithPublishedRequest(
                             next.TrackedRequests[
                                 next.TrackedRequests.Count - 1],
-                            next.Outbox[next.Outbox.Count - 1]),
+                            addedFrames),
                         next);
                 }
 
@@ -1304,6 +1308,8 @@ namespace Guard.Storage.Relay
                        right.FrameId,
                        StringComparison.Ordinal) &&
                    left.OutboundCursor == right.OutboundCursor &&
+                   string.Equals(left.RecipientKeyId, right.RecipientKeyId, StringComparison.Ordinal) &&
+                   left.RecipientCursor == right.RecipientCursor &&
                    left.Kind == right.Kind &&
                    CryptographicOperations.FixedTimeEquals(
                        left.GetEncryptedFrameCopy(),

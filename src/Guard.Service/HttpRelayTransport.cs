@@ -23,7 +23,7 @@ namespace Guard.Service
     /// </summary>
     internal sealed class HttpRelayTransport : IDisposable
     {
-        internal const long MaximumCursor = 9007199254740991; // Worker's JS safe integer.
+        internal const long MaximumCursor = RelayTransactionState.MaximumRecipientCursor;
         internal const int PageSize = 16;
         private const int MaximumEncodedFrameCharacters = ((RelayProtocol.MaximumFrameBytes + 2) / 3) * 4;
         private const int MaximumPollResponseBytes = PageSize * (MaximumEncodedFrameCharacters + 4) + 128;
@@ -100,7 +100,8 @@ namespace Guard.Service
             var bytes = item.GetEncryptedFrameCopy();
             var frame = RelayCanonicalEncoding.DecodeRelayFrame(bytes);
             RequireFrameBinding(frame);
-            if (frame.FrameId != item.FrameId || frame.Cursor != item.OutboundCursor || frame.Kind != item.Kind ||
+            if (frame.FrameId != item.FrameId || frame.Cursor != item.RecipientCursor ||
+                frame.RecipientKeyId != item.RecipientKeyId || frame.Kind != item.Kind ||
                 (frame.Kind != RelayFrameKind.Request && frame.Kind != RelayFrameKind.Receipt) || frame.Cursor == 0)
                 throw new InvalidDataException("Durable outbox metadata does not match its device frame.");
 

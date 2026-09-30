@@ -514,6 +514,8 @@ namespace Guard.Domain.Relay
             string frameId,
             long outboundCursor,
             RelayFrameKind kind,
+            string recipientKeyId,
+            long recipientCursor,
             byte[] encryptedFrame)
         {
             RelayTrackedRequest.RequireToken(frameId, nameof(frameId));
@@ -528,6 +530,12 @@ namespace Guard.Domain.Relay
                 throw new ArgumentOutOfRangeException(nameof(kind));
             }
 
+            RelayTrackedRequest.RequireToken(recipientKeyId, nameof(recipientKeyId));
+            if (recipientCursor <= 0 || recipientCursor > RelayTransactionState.MaximumRecipientCursor)
+            {
+                throw new ArgumentOutOfRangeException(nameof(recipientCursor));
+            }
+
             if (encryptedFrame == null ||
                 encryptedFrame.Length == 0 ||
                 encryptedFrame.Length > RelayProtocol.MaximumFrameBytes)
@@ -540,14 +548,21 @@ namespace Guard.Domain.Relay
             FrameId = frameId;
             OutboundCursor = outboundCursor;
             Kind = kind;
+            RecipientKeyId = recipientKeyId;
+            RecipientCursor = recipientCursor;
             _encryptedFrame = RelayTrackedRequest.Copy(encryptedFrame);
         }
 
         public string FrameId { get; }
 
+        /// <summary>Local queue sequence, never the recipient's GRF1 wire cursor.</summary>
         public long OutboundCursor { get; }
 
         public RelayFrameKind Kind { get; }
+
+        public string RecipientKeyId { get; }
+
+        public long RecipientCursor { get; }
 
         public byte[] GetEncryptedFrameCopy()
         {

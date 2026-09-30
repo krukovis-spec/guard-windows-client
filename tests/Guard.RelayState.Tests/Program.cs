@@ -35,6 +35,8 @@ namespace Guard.RelayState.Tests
                 ("fails closed before relay enrollment", FailsClosedBeforeEnrollment),
                 ("enforces aggregate and outbox bounds", EnforcesAggregateBounds),
                 ("does not ack an outbox frame before CAS", DoesNotAckBeforeCas),
+                ("persists independent recipient cursors and atomic fanout", PersistsRecipientCursors),
+                ("never resets legacy delivery history during codec migration", PreservesLegacyHistory),
                 ("persists terminal expiry without policy mutation", PersistsTerminalExpiry),
                 ("persists an idempotent AlreadyResolved receipt", PersistsAlreadyResolvedReceipt)
             };
@@ -168,7 +170,8 @@ namespace Guard.RelayState.Tests
                     published.PolicyLedger,
                     published.ReconcileIntents,
                     published.SignedReceipts,
-                    published.Outbox);
+                    published.Outbox,
+                    published.RecipientOutboundCursors);
                 AssertThrows<ArgumentException>(
                     () => bundle.Store.TryCommitAsync(
                         published.Version,
@@ -603,7 +606,8 @@ namespace Guard.RelayState.Tests
                     committedInboundCursor: 0,
                     highestOutboundCursor: 1,
                     acknowledgedOutboundCursor: 1,
-                    policyRevision: 0);
+                    policyRevision: 0,
+                    recipientOutboundCursors: new[] { new KeyValuePair<string, long>("recipient-test-0001", 1) });
                 AssertThrows<ArgumentException>(
                     () => bundle.Store.InitializeAsync(
                         seeded,
@@ -641,7 +645,26 @@ namespace Guard.RelayState.Tests
                     "frame-oversized-0001",
                     1,
                     RelayFrameKind.Request,
+                    "recipient-test-0001",
+                    1,
                     new byte[RelayProtocol.MaximumFrameBytes + 1]));
+            AssertThrows<ArgumentOutOfRangeException>(() => new RelayEncryptedOutboxItem(
+                "frame-cursor-0001", 1, RelayFrameKind.Request, "recipient-test-0001",
+                RelayTransactionState.MaximumRecipientCursor + 1, Bytes(160, 1)));
+            var recipients = Enumerable.Range(0, RelayTransactionState.MaximumOutboundRecipients)
+                .Select(index => new KeyValuePair<string, long>("recipient-bound-" + index.ToString("D4"), 1)).ToArray();
+            var saturatedRecipients = new RelayTransactionState("device-relay-0001", 1, 2, 4, 0,
+                recipients.Length, recipients.Length, 0, recipientOutboundCursors: recipients);
+            AssertThrows<InvalidOperationException>(() => saturatedRecipients.WithPublishedRequest(PendingRequest(),
+                Outbox(recipients.Length + 1, RelayFrameKind.Request, "frame-new-key-001", "recipient-new-0001", 1)));
+            AssertThrows<ArgumentException>(() => new RelayTransactionState("device-relay-0001", 1, 2, 4, 0, 2, 2, 0,
+                recipientOutboundCursors: new[] { recipients[0], recipients[0] }));
+            var exhaustedCursor = new RelayTransactionState("device-relay-0001", 1, 2, 4, 0,
+                RelayTransactionState.MaximumRecipientCursor, RelayTransactionState.MaximumRecipientCursor, 0,
+                recipientOutboundCursors: new[] { new KeyValuePair<string, long>("recipient-test-0001", RelayTransactionState.MaximumRecipientCursor) });
+            AssertThrows<InvalidOperationException>(() => exhaustedCursor.WithPublishedRequest(PendingRequest(),
+                new RelayEncryptedOutboxItem("frame-cursor-0001", RelayTransactionState.MaximumRecipientCursor + 1,
+                    RelayFrameKind.Request, "recipient-test-0001", 1, Bytes(160, 1))));
 
             var floors = new List<RelayReplayFloor>();
             for (var index = 0;
@@ -775,6 +798,95 @@ namespace Guard.RelayState.Tests
                         .GetAwaiter().GetResult().Outbox.Count,
                     "A committed ack did not remove its frame.");
             }
+        }
+
+        private static void PersistsRecipientCursors()
+        {
+            const string phone = "recipient-phone-0001";
+            const string view = "recipient-view-00001";
+            using (var directory = new TemporaryDirectory())
+            {
+                using (var bundle = CreateStore(directory.PathValue))
+                {
+                    var initial = InitialState();
+                    bundle.Store.InitializeAsync(initial, CancellationToken.None).GetAwaiter().GetResult();
+                    var batch = initial.WithPublishedRequest(PendingRequest(),
+                        Outbox(1, RelayFrameKind.Request, "frame-phone-00001", phone, 1),
+                        Outbox(2, RelayFrameKind.Request, "frame-view-000001", view, 1));
+                    Assert(batch.Version == 1 && batch.TrackedRequests.Count == 1 && batch.Outbox.Count == 2,
+                        "Fanout split one request across multiple state versions.");
+                    Commit(bundle.Store, initial, batch);
+                    var partialAck = batch.WithAcknowledgedOutboundCursor(1);
+                    Commit(bundle.Store, batch, partialAck);
+                    Assert(partialAck.Outbox[0].RecipientKeyId == view && partialAck.Outbox[0].RecipientCursor == 1,
+                        "Local queue acknowledgement consumed another recipient's wire history.");
+                    var next = partialAck.WithPublishedRequest(PendingRequest("request-relay-0002"),
+                        Outbox(3, RelayFrameKind.Request, "frame-phone-00002", phone, 2));
+                    Commit(bundle.Store, partialAck, next);
+                    var drained = next.WithAcknowledgedOutboundCursor(3);
+                    Commit(bundle.Store, next, drained);
+                    Assert(drained.Outbox.Count == 0 && drained.RecipientOutboundCursors[phone] == 2 &&
+                        drained.RecipientOutboundCursors[view] == 1, "Acknowledgement erased recipient heads.");
+
+                    var forged = new RelayTransactionState(drained.DeviceId, drained.Version + 1,
+                        drained.DeviceEpoch, drained.AuthorityEpoch, drained.CommittedInboundCursor,
+                        drained.HighestOutboundCursor, drained.AcknowledgedOutboundCursor, drained.PolicyRevision,
+                        drained.ReplayFloors, drained.TrackedRequests, drained.PolicyLedger, drained.ReconcileIntents,
+                        drained.SignedReceipts, drained.Outbox,
+                        new[] { new KeyValuePair<string, long>(phone, 1), new KeyValuePair<string, long>(view, 2) });
+                    AssertThrows<ArgumentException>(() => bundle.Store.TryCommitAsync(drained.Version, forged,
+                        CancellationToken.None).GetAwaiter().GetResult());
+                    AssertThrows<InvalidOperationException>(() => drained.WithPublishedRequest(PendingRequest("request-relay-0003"),
+                        Outbox(4, RelayFrameKind.Request, "frame-view-000002", view, 3)));
+                    AssertThrows<InvalidOperationException>(() => drained.WithPublishedRequest(PendingRequest("request-relay-0003"),
+                        Outbox(5, RelayFrameKind.Request, "frame-view-000002", view, 2)));
+                    AssertEqual(drained.Version, bundle.Store.LoadAsync(CancellationToken.None).GetAwaiter().GetResult().Version,
+                        "Rejected cursor transitions modified persisted state.");
+                }
+                using (var reopened = CreateStore(directory.PathValue))
+                {
+                    var loaded = reopened.Store.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(loaded.Outbox.Count == 0 && loaded.RecipientOutboundCursors[phone] == 2 &&
+                        loaded.RecipientOutboundCursors[view] == 1, "Reopen lost delivered recipient history.");
+                    var next = loaded.WithPublishedRequest(PendingRequest("request-relay-0003"),
+                        Outbox(4, RelayFrameKind.Request, "frame-view-000002", view, 2),
+                        Outbox(5, RelayFrameKind.Request, "frame-phone-00003", phone, 3));
+                    Commit(reopened.Store, loaded, next);
+                    var persisted = reopened.Store.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(persisted.RecipientOutboundCursors[phone] == 3 && persisted.RecipientOutboundCursors[view] == 2 &&
+                        persisted.Outbox[0].GetEncryptedFrameCopy().SequenceEqual(next.Outbox[0].GetEncryptedFrameCopy()),
+                        "Durable fanout metadata or exact retry bytes changed.");
+                    AssertThrows<NotSupportedException>(() => ((IDictionary<string, long>)persisted.RecipientOutboundCursors).Add(phone, 99));
+                }
+            }
+        }
+
+        private static void PreservesLegacyHistory()
+        {
+            var codec = typeof(FileRelayTransactionStore).Assembly.GetType("Guard.Storage.Relay.RelayStateCodec", true)!;
+            var encode = codec.GetMethod("Encode", BindingFlags.Public | BindingFlags.Static)!;
+            var decode = codec.GetMethod("Decode", BindingFlags.Public | BindingFlags.Static)!;
+            var initial = InitialState();
+            var v2 = (byte[])encode.Invoke(null, new object[] { initial })!;
+            var recipientCountOffset = 8 + 4 + 4 + System.Text.Encoding.UTF8.GetByteCount(initial.DeviceId) + 7 * 8;
+            var v1 = new byte[v2.Length - 4];
+            Buffer.BlockCopy(v2, 0, v1, 0, recipientCountOffset);
+            Buffer.BlockCopy(v2, recipientCountOffset + 4, v1, recipientCountOffset, v2.Length - recipientCountOffset - 4);
+            v1[11] = 1;
+            var untouched = (RelayTransactionState)decode.Invoke(null, new object[] { v1 })!;
+            Assert(untouched.DeviceId == initial.DeviceId && untouched.Version == 0 && untouched.DeviceEpoch == initial.DeviceEpoch &&
+                untouched.AuthorityEpoch == initial.AuthorityEpoch && untouched.RecipientOutboundCursors.Count == 0,
+                "Untouched legacy enrollment was reset or changed.");
+            // A V1 history has no complete recipient ledger, even if its outbox is empty.
+            var withHistory = (byte[])v1.Clone();
+            var firstInt64 = 8 + 4 + 4 + System.Text.Encoding.UTF8.GetByteCount(initial.DeviceId);
+            withHistory[firstInt64 + 7] = 1;
+            try
+            {
+                decode.Invoke(null, new object[] { withHistory });
+                throw new InvalidOperationException("Legacy history silently reset recipient floors.");
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is StateStoreCorruptionException) { }
         }
 
         private static void PersistsAlreadyResolvedReceipt()
@@ -1034,12 +1146,16 @@ namespace Guard.RelayState.Tests
         private static RelayEncryptedOutboxItem Outbox(
             long cursor,
             RelayFrameKind kind,
-            string frameId)
+            string frameId,
+            string recipientKeyId = "recipient-test-0001",
+            long? recipientCursor = null)
         {
             return new RelayEncryptedOutboxItem(
                 frameId,
                 cursor,
                 kind,
+                recipientKeyId,
+                recipientCursor ?? cursor,
                 Bytes(160, checked((int)cursor + 80)));
         }
 
