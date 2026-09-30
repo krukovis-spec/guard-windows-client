@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
+import android.security.keystore.StrongBoxUnavailableException
 import androidx.biometric.BiometricManager
 import app.guard.parent.protocol.ApprovalDecision
 import app.guard.parent.protocol.GuardWire
@@ -26,8 +27,6 @@ import java.security.spec.X509EncodedKeySpec
 import java.security.SecureRandom
 import java.time.Clock
 import java.util.Base64
-
-const val APPROVAL_KEY_ALIAS = "guard.parent.approval.v1"
 
 fun interface SnapshotDecryptor { fun decrypt(locator: String): ByteArray }
 fun interface DeviceSnapshotVerifier { fun verify(snapshotEnvelope: ByteArray): VerifiedSnapshot }
@@ -58,12 +57,17 @@ internal fun parseQuery(raw: String?): Map<String, List<String>> {
 
 data class EnrollmentMaterial(val publicKeySpki: ByteArray, val certificateChain: List<ByteArray>)
 
-class AndroidApprovalKeyStore(private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }) {
-    fun enroll(attestationChallenge: ByteArray): EnrollmentMaterial {
-        require(attestationChallenge.size in 16..128)
-        check(!keyStore.containsAlias(APPROVAL_KEY_ALIAS)) { "existing approval key requires explicit recovery" }
+class AndroidApprovalKeyStore(private val alias: String,
+    private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }) {
+    private companion object { val generationLock = Any() }
+    init { require(alias.matches(Regex("guard\\.parent\\.approval\\.[a-z0-9.]{1,96}"))) { "approval alias" } }
+
+    /** Only a persisted PREPARED ceremony may call this. Existing keys are read, never replaced. */
+    fun loadOrEnroll(attestationChallenge: ByteArray): EnrollmentMaterial = synchronized(generationLock) {
+        require(attestationChallenge.size == 32)
+        if (keyStore.containsAlias(alias)) return@synchronized material()
         val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-        val builder = KeyGenParameterSpec.Builder(APPROVAL_KEY_ALIAS, KeyProperties.PURPOSE_SIGN)
+        val builder = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
             .setDigests(KeyProperties.DIGEST_SHA256)
             .setUserAuthenticationRequired(true)
@@ -71,33 +75,37 @@ class AndroidApprovalKeyStore(private val keyStore: KeyStore = KeyStore.getInsta
             .setInvalidatedByBiometricEnrollment(true)
             .setAttestationChallenge(attestationChallenge)
         // StrongBox is an optimization only; hardware evidence below is the actual gate.
-        if (android.os.Build.VERSION.SDK_INT >= 28) builder.setIsStrongBoxBacked(true)
+        builder.setIsStrongBoxBacked(true)
         try { generator.initialize(builder.build()); generator.generateKeyPair() }
-        catch (_: Exception) {
-            // A device may not provide StrongBox. Recreate with TEE allowed, then prove hardware backing.
-            val tee = KeyGenParameterSpec.Builder(APPROVAL_KEY_ALIAS, KeyProperties.PURPOSE_SIGN)
-                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1")).setDigests(KeyProperties.DIGEST_SHA256)
-                .setUserAuthenticationRequired(true).setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
-                .setInvalidatedByBiometricEnrollment(true).setAttestationChallenge(attestationChallenge).build()
-            generator.initialize(tee); generator.generateKeyPair()
+        catch (_: StrongBoxUnavailableException) {
+            // Do not overwrite a key left behind by a provider failure, or hide unrelated failures.
+            check(!keyStore.containsAlias(alias)) { "partial key generation requires inspection" }
+            generator.initialize(builder.setIsStrongBoxBacked(false).build()); generator.generateKeyPair()
         }
-        val privateKey = keyStore.getKey(APPROVAL_KEY_ALIAS, null) as PrivateKey
+        material()
+    }
+
+    fun material(): EnrollmentMaterial {
+        val privateKey = keyStore.getKey(alias, null) as? PrivateKey ?: throw KeyPermanentlyInvalidatedException()
         val keyInfo = KeyFactory.getInstance(privateKey.algorithm, "AndroidKeyStore").getKeySpec(privateKey, KeyInfo::class.java)
-        val hardwareBacked = if (android.os.Build.VERSION.SDK_INT >= 31) {
-            keyInfo.securityLevel == KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT ||
-                keyInfo.securityLevel == KeyProperties.SECURITY_LEVEL_STRONGBOX
-        } else {
-            @Suppress("DEPRECATION")
-            keyInfo.isInsideSecureHardware
-        }
+        val hardwareBacked = keyInfo.securityLevel == KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT ||
+            keyInfo.securityLevel == KeyProperties.SECURITY_LEVEL_STRONGBOX
         check(hardwareBacked) { "software-backed key rejected" }
-        val chain = keyStore.getCertificateChain(APPROVAL_KEY_ALIAS).map { it.encoded }
-        check(chain.isNotEmpty()) { "attestation chain missing" }
-        return EnrollmentMaterial(chain.first().let { (keyStore.getCertificate(APPROVAL_KEY_ALIAS) as X509Certificate).publicKey.encoded }, chain)
+        // KeyInfo reports per-operation authorization as -1 (builder input is 0).
+        check(keyInfo.keySize == 256 && keyInfo.origin == KeyProperties.ORIGIN_GENERATED &&
+            keyInfo.purposes == KeyProperties.PURPOSE_SIGN && keyInfo.digests.toSet() == setOf(KeyProperties.DIGEST_SHA256) &&
+            keyInfo.isUserAuthenticationRequired && keyInfo.userAuthenticationValidityDurationSeconds == -1 &&
+            keyInfo.userAuthenticationType == KeyProperties.AUTH_BIOMETRIC_STRONG &&
+            keyInfo.isUserAuthenticationRequirementEnforcedBySecureHardware && keyInfo.isInvalidatedByBiometricEnrollment &&
+            !keyInfo.isUserAuthenticationValidWhileOnBody) { "approval key policy" }
+        val chain = keyStore.getCertificateChain(alias)?.map { it.encoded } ?: error("attestation chain missing")
+        check(chain.size in 2..8 && chain.all { it.size in 1..16384 } && chain.sumOf { it.size } <= 65536) { "attestation chain size" }
+        return EnrollmentMaterial((keyStore.getCertificate(alias) as X509Certificate).publicKey.encoded, chain)
     }
 
     fun biometricSignature(): Signature {
-        val key = keyStore.getKey(APPROVAL_KEY_ALIAS, null) as? PrivateKey ?: throw KeyPermanentlyInvalidatedException()
+        material()
+        val key = keyStore.getKey(alias, null) as? PrivateKey ?: throw KeyPermanentlyInvalidatedException()
         return try { Signature.getInstance("SHA256withECDSA").apply { initSign(key) } }
         catch (error: android.security.keystore.KeyPermanentlyInvalidatedException) { throw KeyPermanentlyInvalidatedException(error) }
     }

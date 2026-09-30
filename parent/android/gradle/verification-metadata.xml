@@ -5,6 +5,11 @@
       <verify-signatures>false</verify-signatures>
    </configuration>
    <components>
+      <component group="org.jetbrains.kotlinx" name="kotlinx-coroutines-bom" version="1.7.1">
+         <artifact name="kotlinx-coroutines-bom-1.7.1.pom">
+            <sha256 value="b925aa988c40a5c7aa0c77b21373feb18c39414926bd51c76ef44434f5bae9c2" origin="Verified POM and published SHA256 against Maven Central HTTPS on 2026-09-30"/>
+         </artifact>
+      </component>
       <component group="org.jetbrains.kotlinx" name="kotlinx-coroutines-bom" version="1.8.0">
          <artifact name="kotlinx-coroutines-bom-1.8.0.pom">
             <sha256 value="1239e9dbe1397cd5971342956b2511bc3ace7b641842e4372a088dcfa8b9ad55" origin="Verified against Maven Central HTTPS on 2026-09-24"/>
