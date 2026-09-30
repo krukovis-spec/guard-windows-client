@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-09-30 — signed policy activation fixed and real tamper/recovery evidence
+
+- Root cause established by a single-variable VM comparison: .NET generated SignedData v3 for the custom policy OID; v1-compatible unsigned metadata activates correctly. Existing signer now locates this ASN.1 field structurally, validates its expected TLV, changes only that byte, then verifies the original content, signature, OID and signer. No added dependency, certificate store write or private-key persistence; original AppControl Manager author's compatibility documentation cross-checked with .NET source.
+- Actual pinned PS7 runner EXIT 0 / PASS: audit after reboot emits exact 3076/marker Allowed; enforcement after reboot emits 3077/marker Blocked. Native signature/authorization/enforcement true. Elevated admin's CiTool removal returns -2147023250, policy and block remain. Higher-version signed recovery, reboot, targeted removal PASS; marker runs again. Clean snapshot fresh-session boot/inventory BOOT_VERIFIED, original 14 policies/AppLocker empty; public signing artifacts removed.
+- PS5.1 host refusal/parse/marker/temp-cleanup and PS7 signature/exact-content/corrupt-signature checks PASS; diff check PASS. Product application code and previous build evidence unchanged. This proves one signed-policy tamper scenario, not all-account/admin protection, dynamic TTL, strict catalog, final Win11Pro or phone acceptance. Next exercise exact signed grants/revoke and expired grants without a live reconciler.
+- Memory gate PROJECT_ONLY updates existing plan/capsule/worklog. Existing checkpoint a46b73d retained; no new baseline. Host Guard/system policies untouched; no service auth/deploy changes.
+
 ## 2026-09-30 — unsigned App Control evidence and signed-policy activation gate
 
 - Ivan authorized autonomous M0–M9 completion; native goal active, no heartbeat created. Continue one executor without per-increment prompts; VM-only system actions, UAC, physical phone and final family-install boundaries remain. VMConnect is stale after VM restart; PowerShell Direct access works through the existing protected DPAPI credential.
