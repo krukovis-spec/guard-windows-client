@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-09-30 — guarded guest probe and harmless enforcement markers
+
+- Computer Use verified that Ivan had already opened and signed into the lab desktop. PowerShell Direct rejected two secure-dialog entries and a single computer-qualified retry as invalid credentials; no protection or account action ran. The attempted credential is user-encrypted outside Git with a protected user/SYSTEM-only directory, and no plaintext password was read or logged. Further credential retries are paused pending clarification.
+- Added `scripts/lab/Get-GuestBaseline.ps1`: remote-only UUID/virtual-machine/admin/host-name guard followed by observational OS, accounts, AppLocker, TPM, BitLocker and recovery facts. Added a harmless Framework marker with bounded hold time and two compile-time variants, using the existing compiler without dependencies.
+- Check: Windows PowerShell 5.1 `scripts/lab/Test-LabSafety.ps1` PASS: parser, host execution rejected before guest probes, both marker parser self-tests, different exact SHA-256 identities, temporary output cleanup. Guest execution and T07–T09 NOT RUN. Product code did not change; prior product build evidence is unchanged.
+- Scoped code-review-loop: one pass over these three test files; score 7→8/10, no remaining issue in the checked host path; guest integration remains unverified, so status `single_pass_complete`, not release-clean. Security guidance gate found no secret, injection or supply-chain issue in the tracked diff. Memory gate `PROJECT_ONLY` records the access blocker and reproducible safe test command here and in the capsule.
+
 ## 2026-09-30 — clean evaluation Windows and VM checkpoint restore
 
 - Clean-installed Windows 11 Enterprise Evaluation from the Microsoft-hosted ISO onto the sole 80 GiB `GuardV2-Lab-20260930` virtual disk, replacing the failed offline BCD attempt. Local `GuardLabAdmin` reached the desktop; no real account credentials were recorded in project files. ISO filename says 26H2, but its `setup.exe` and the guest watermark show build 26100; exact release identity remains unverified.
