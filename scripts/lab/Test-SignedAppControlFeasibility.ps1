@@ -143,7 +143,7 @@ if ($Phase -eq 'VerifyGrant') {
             $codes = [ordered]@{}
             foreach ($data in @($eventXml.Event.EventData.Data)) {
                 $name = $data.GetAttribute('Name')
-                if ($name -in @('SHA256Hash','SHA256FlatHash','SHA1Hash','Status','StatusCode','SigningScenario','PolicyID','PolicyId')) { $codes[$name] = $data.InnerText }
+                if ($name -in @('SHA256 Hash','SHA256 Flat Hash','SI Signing Scenario','Status','StatusCode','PolicyGUID','PolicyID')) { $codes[$name] = $data.InnerText }
             }
             [pscustomobject]$codes
         })
