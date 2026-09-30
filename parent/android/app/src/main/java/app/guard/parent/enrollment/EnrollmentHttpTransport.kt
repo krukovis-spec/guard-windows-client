@@ -13,6 +13,8 @@ import javax.net.ssl.HttpsURLConnection
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+internal class EnrollmentExchangeUnavailable : IOException("enrollment exchange unavailable")
+
 /** Ordinary platform TLS, fixed offer-pinned destination, no redirects/cookies/proxy or error-body logging. */
 internal class EnrollmentHttpTransport(private val connect: (URL) -> HttpsURLConnection = {
     it.openConnection(Proxy.NO_PROXY) as HttpsURLConnection
@@ -75,7 +77,7 @@ internal class EnrollmentHttpTransport(private val connect: (URL) -> HttpsURLCon
                         continuation.resume(response)
                     } catch (_: Exception) {
                         // Never propagate URL/headers/body/provider exceptions that could include capabilities.
-                        continuation.resumeWithException(IOException("enrollment exchange unavailable"))
+                        continuation.resumeWithException(EnrollmentExchangeUnavailable())
                     }
                 })
         }

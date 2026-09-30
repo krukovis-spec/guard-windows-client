@@ -3,6 +3,11 @@ package app.guard.parent.enrollment
 import app.guard.parent.protocol.EnrollmentExchange
 import app.guard.parent.protocol.EnrollmentResult
 import app.guard.parent.protocol.EnrollmentWire
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 
 /** Presentation only: callers must obtain result from ceremony.inspect, never relay JSON/HTTP flags. */
 internal enum class EnrollmentStage {
@@ -29,3 +34,37 @@ internal fun enrollmentStage(state: PendingEnrollment, verifiedResult: Enrollmen
 internal fun enrollmentComparison(state: PendingEnrollment): String =
     EnrollmentWire.claimHash(requireNotNull(state.claim)).joinToString("") { "%02x".format(it) }
         .chunked(8).joinToString("\n")
+
+/** Owned by one foreground screen. Inspect re-verifies stored evidence; exchange never signs or confirms locally. */
+internal suspend fun awaitEnrollment(
+    inspect: suspend () -> Pair<PendingEnrollment, EnrollmentResult?>,
+    exchange: suspend () -> Unit,
+    display: (PendingEnrollment, EnrollmentResult?, Boolean) -> Unit,
+    now: () -> Long = System::currentTimeMillis
+) {
+    var failures = 0
+    while (true) {
+        currentCoroutineContext().ensureActive()
+        val (before, priorResult) = inspect()
+        currentCoroutineContext().ensureActive()
+        display(before, priorResult, failures != 0)
+        if (!enrollmentStage(before, priorResult, now()).canSynchronize) return
+        try {
+            exchange()
+            failures = 0
+        } catch (timeout: TimeoutCancellationException) {
+            currentCoroutineContext().ensureActive() // A transport deadline is retryable, screen cancellation is not.
+            failures = minOf(failures + 1, 5)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: EnrollmentExchangeUnavailable) { failures = minOf(failures + 1, 5) }
+        // Storage/key/cryptographic failures deliberately escape instead of becoming endless network retries.
+        val (after, verified) = inspect()
+        currentCoroutineContext().ensureActive()
+        display(after, verified, failures != 0)
+        val stage = enrollmentStage(after, verified, now())
+        if (!stage.canSynchronize) return
+        // One logical exchange; older query-only attempts use 10s instead of continuous 2s setup traffic.
+        val normalDelay = if (stage == EnrollmentStage.QUERY_ONLY) 10000L else 2000L
+        delay(if (failures == 0) normalDelay else maxOf(normalDelay, minOf(2000L shl (failures - 1), 30000)))
+    }
+}

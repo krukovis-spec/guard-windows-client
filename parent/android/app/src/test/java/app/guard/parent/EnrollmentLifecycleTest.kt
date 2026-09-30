@@ -12,6 +12,8 @@ import java.time.*
 import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import kotlinx.coroutines.*
+import kotlinx.coroutines.test.*
 
 /** Real files and JCA signatures, NOT Android hardware/attestation/biometric evidence. */
 class EnrollmentLifecycleTest {
@@ -196,6 +198,111 @@ class EnrollmentLifecycleTest {
         assertEquals(EnrollmentStage.QUERY_ONLY, enrollmentStage(stopped, null, state.offer.expiryUnixMillis + 86_399_999))
         assertEquals(EnrollmentStage.RECOVERY, enrollmentStage(stopped, null, state.offer.expiryUnixMillis + 86_400_000))
         assertTrue(stopped.isSigned)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun `foreground waiting backs off network failures then follows verified comparison and confirmation`() = runTest {
+        val ready = ready(); store.saveCapability(ready.offer, ByteArray(32) { 3 })
+        val completed = signed(store.load(ready.offer)!!)
+        var result: EnrollmentResult? = null
+        var calls = 0
+        val stages = mutableListOf<Pair<EnrollmentStage, Boolean>>()
+        val polling = launch {
+            awaitEnrollment(inspect = { completed to result }, exchange = {
+                when (++calls) {
+                    1, 2 -> throw EnrollmentExchangeUnavailable()
+                    3 -> result = EnrollmentResult(EnrollmentExchange.NEEDS_LOCAL_CONFIRMATION, 2, start, start + 60000, byteArrayOf(), byteArrayOf())
+                    4 -> result = EnrollmentResult(EnrollmentExchange.CONFIRMED, 3, start, start + 60000, byteArrayOf(), byteArrayOf())
+                    else -> error("polling continued after confirmed result")
+                }
+            }, display = { state, verified, retrying -> stages += enrollmentStage(state, verified, start + testScheduler.currentTime) to retrying },
+                now = { start + testScheduler.currentTime })
+        }
+        runCurrent(); assertEquals(1, calls); assertEquals(EnrollmentStage.WAITING to true, stages.last())
+        advanceTimeBy(1999); runCurrent(); assertEquals(1, calls)
+        advanceTimeBy(1); runCurrent(); assertEquals(2, calls)
+        advanceTimeBy(3999); runCurrent(); assertEquals(2, calls)
+        advanceTimeBy(1); runCurrent(); assertEquals(3, calls); assertEquals(EnrollmentStage.COMPARE to false, stages.last())
+        advanceTimeBy(2000); runCurrent(); assertEquals(4, calls)
+        assertEquals(EnrollmentStage.CONFIRMED to false, stages.last()); assertTrue(polling.isCompleted)
+        advanceTimeBy(60000); runCurrent(); assertEquals(4, calls)
+        assertArrayEquals(completed.signature(), store.load(ready.offer)!!.signature())
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun `polling stops on screen cancellation and distinguishes deadline from integrity failure`() = runTest {
+        val ready = ready(); store.saveCapability(ready.offer, ByteArray(32) { 3 })
+        val completed = signed(store.load(ready.offer)!!)
+        var calls = 0; var displays = 0
+        val polling = launch {
+            awaitEnrollment(inspect = { completed to null }, exchange = {
+                calls++
+                withTimeout(10) { delay(20) }
+            }, display = { _, _, _ -> displays++ }, now = { start + testScheduler.currentTime })
+        }
+        runCurrent(); advanceTimeBy(10); runCurrent()
+        assertEquals(1, calls); assertTrue(polling.isActive) // timeout retries instead of silently stopping
+        advanceTimeBy(2000); runCurrent(); assertEquals(2, calls)
+        polling.cancelAndJoin()
+        val stoppedDisplays = displays
+        advanceTimeBy(60000); runCurrent()
+        assertEquals(2, calls); assertEquals(stoppedDisplays, displays)
+        for (failure in listOf(GeneralSecurityException("synthetic bad signature"), java.io.IOException("synthetic disk failure"))) {
+            var attempts = 0
+            try {
+                awaitEnrollment(inspect = { completed to null }, exchange = { attempts++; throw failure },
+                    display = { _, _, _ -> }, now = { start })
+                fail("integrity/storage failure became a retry loop")
+            } catch (actual: Exception) { assertSame(failure, actual) }
+            assertEquals(1, attempts)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun `query-only polling stays sparse and repeated failures have a bounded backoff`() = runTest {
+        val ready = ready(); store.saveCapability(ready.offer, ByteArray(32) { 3 })
+        signed(store.load(ready.offer)!!); store.abandon(ready.offer)
+        val stopped = store.load(ready.offer)!!
+        var calls = 0
+        val polling = launch {
+            awaitEnrollment(inspect = { stopped to null }, exchange = { calls++; throw EnrollmentExchangeUnavailable() },
+                display = { _, _, _ -> }, now = { start + testScheduler.currentTime })
+        }
+        runCurrent(); assertEquals(1, calls)
+        for ((index, pause) in listOf(10000L, 10000L, 10000L, 16000L, 30000L, 30000L).withIndex()) {
+            advanceTimeBy(pause - 1); runCurrent(); assertEquals(index + 1, calls)
+            advanceTimeBy(1); runCurrent(); assertEquals(index + 2, calls)
+        }
+        polling.cancelAndJoin()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun `polling never signs and only observes queryable or terminal durable states`() = runTest {
+        val ready = ready()
+        var calls = 0
+        var displayed: EnrollmentStage? = null
+        suspend fun run(state: PendingEnrollment, now: Long) = awaitEnrollment(inspect = { state to null },
+            exchange = { calls++; throw IllegalStateException("unexpected exchange") },
+            display = { current, verified, _ -> displayed = enrollmentStage(current, verified, now) }, now = { now })
+        run(ready, start); assertEquals(EnrollmentStage.BIOMETRIC, displayed); assertEquals(0, calls)
+        run(ready, ready.offer.expiryUnixMillis); assertEquals(EnrollmentStage.EXPIRED, displayed); assertEquals(0, calls)
+        store.saveCapability(ready.offer, ByteArray(32) { 3 }); signed(store.load(ready.offer)!!)
+        store.abandon(ready.offer)
+        val stopped = store.load(ready.offer)!!
+        var state = stopped
+        val polling = launch {
+            awaitEnrollment(inspect = { state to null }, exchange = {
+                assertEquals(EnrollmentStage.QUERY_ONLY, enrollmentStage(state, null, start))
+                calls++
+                // Simulate retention ending: next inspection must stop, not sign or create another attempt.
+                state = PendingEnrollmentStore(directory, TestClock(start)).load(ready.offer)!!
+            }, display = { current, verified, _ -> displayed = enrollmentStage(current, verified,
+                if (calls == 0) start else ready.offer.expiryUnixMillis + 86_400_000) },
+                now = { if (calls == 0) start else ready.offer.expiryUnixMillis + 86_400_000 })
+        }
+        runCurrent()
+        assertEquals(1, calls); assertEquals(EnrollmentStage.RECOVERY, displayed); assertTrue(polling.isCompleted)
+        assertEquals(stopped.approvalAlias, store.load(ready.offer)!!.approvalAlias)
     }
 
     private class TestClock(var time: Long) : Clock() {

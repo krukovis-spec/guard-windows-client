@@ -30,6 +30,10 @@ import java.util.Date
 class EnrollmentActivity : FragmentActivity() {
     private val scope = MainScope()
     private var job: Job? = null
+    private var waiting: Job? = null
+    private var selectedOffer: EnrollmentOffer? = null
+    private var displayedStage: EnrollmentStage? = null
+    private var foreground = false
     private var scanning = false
     private var transcript: EnrollmentTranscript? = null
     private var signing: EnrollmentSigningOperation? = null
@@ -64,14 +68,21 @@ class EnrollmentActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart(); stopped = false
-        if (!scanning) showSaved()
+        if (!scanning) selectedOffer?.let { showOffer(it) } ?: showSaved()
+    }
+
+    override fun onResume() { super.onResume(); foreground = true; startWaiting() }
+
+    override fun onPause() {
+        foreground = false; waiting?.cancel()
+        super.onPause()
     }
 
     override fun onStop() {
         stopped = true
         signing?.cancel(); signing = null
         prompt?.cancelAuthentication(); prompt = null
-        job?.cancel(); job = null
+        job?.cancel(); waiting?.cancel()
         transcript?.close(); transcript = null
         super.onStop()
     }
@@ -79,6 +90,7 @@ class EnrollmentActivity : FragmentActivity() {
     override fun onDestroy() { scope.cancel(); super.onDestroy() }
 
     private fun showSaved() = work(R.string.enrollment_loading) {
+        selectedOffer = null; displayedStage = null
         val saved = withContext(Dispatchers.IO) { ceremony.listPending() }
         content.removeAllViews()
         label(R.string.enrollment_title, 24f)
@@ -153,6 +165,7 @@ class EnrollmentActivity : FragmentActivity() {
 
     private fun render(state: PendingEnrollment, result: app.guard.parent.protocol.EnrollmentResult?) {
         val stage = enrollmentStage(state, result, System.currentTimeMillis())
+        selectedOffer = state.offer; displayedStage = stage
         content.removeAllViews(); device(state.offer)
         val message = when (stage) {
             EnrollmentStage.RESCAN -> R.string.enrollment_rescan
@@ -174,14 +187,7 @@ class EnrollmentActivity : FragmentActivity() {
             }
         }
         if (stage == EnrollmentStage.BIOMETRIC) button(R.string.enrollment_sign) { authenticate(state.offer) }
-        if (stage.canSynchronize) button(R.string.enrollment_update) {
-            work(R.string.enrollment_sending) {
-                require(state.offer.relayEndpoint == binding.canonicalRelayEndpoint)
-                withContext(Dispatchers.IO) { ceremony.synchronize(state.offer) }
-                val (current, verified) = withContext(Dispatchers.IO) { ceremony.inspect(state.offer) }
-                render(current, verified)
-            }
-        }
+        if (stage.canSynchronize) button(R.string.enrollment_update) { showOffer(state.offer) }
         if (!state.abandoned && stage != EnrollmentStage.CONFIRMED) button(R.string.enrollment_stop) {
             AlertDialog.Builder(this).setMessage(R.string.enrollment_stop_warning)
                 .setNegativeButton(R.string.enrollment_keep, null)
@@ -233,12 +239,48 @@ class EnrollmentActivity : FragmentActivity() {
         }
     }
 
-    // Single foreground operation. Durable files, not Activity/Bundle state, are the restart source.
+    private fun startWaiting() {
+        if (!foreground || stopped || scanning || signing != null || job?.isActive == true || waiting?.isActive == true) return
+        val offer = selectedOffer ?: return
+        val previous = waiting
+        waiting = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                previous?.join()
+                ensureActive()
+                awaitEnrollment(
+                    inspect = {
+                        require(offer.relayEndpoint == binding.canonicalRelayEndpoint)
+                        withContext(Dispatchers.IO) { ceremony.inspect(offer) }
+                    },
+                    exchange = { withContext(Dispatchers.IO) { ceremony.synchronize(offer) }; Unit },
+                    display = { state, verified, retrying ->
+                        val stage = enrollmentStage(state, verified, System.currentTimeMillis())
+                        // Preserve scroll position and accessibility focus while the same code is being compared.
+                        if (stage != displayedStage) render(state, verified)
+                        val message = if (!stage.canSynchronize) R.string.enrollment_scope else if (retrying)
+                            R.string.enrollment_retrying else R.string.enrollment_auto_waiting
+                        val text = getString(message)
+                        if (status.text.toString() != text) status.text = text
+                    })
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (!stopped) status.setText(R.string.enrollment_failed) }
+            finally { if (waiting === coroutineContext.job) waiting = null }
+        }
+        waiting?.start()
+    }
+
+    // User actions first cancel/join polling. Durable files, not Activity/Bundle state, are the restart source.
     private fun work(message: Int, action: suspend () -> Unit) {
         if (stopped || scanning || job?.isActive == true || signing != null) return
-        job = scope.launch {
+        val previous = job
+        val poll = waiting
+        poll?.cancel(); waiting = null
+        job = scope.launch(start = CoroutineStart.LAZY) {
             status.setText(message); setButtons(false)
-            try { action(); status.setText(R.string.enrollment_scope) }
+            try {
+                previous?.join(); poll?.join(); ensureActive()
+                action(); status.setText(R.string.enrollment_scope)
+            }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {
                 // Prompt construction/start may throw before it can deliver an error callback.
@@ -247,8 +289,14 @@ class EnrollmentActivity : FragmentActivity() {
                 prompt?.cancelAuthentication(); prompt = null
                 status.setText(R.string.enrollment_failed)
             }
-            finally { if (!stopped && !scanning && signing == null) setButtons(true) }
+            finally {
+                if (job === coroutineContext.job) {
+                    job = null
+                    if (!stopped && !scanning && signing == null) { setButtons(true); startWaiting() }
+                }
+            }
         }
+        job?.start()
     }
 
     private fun device(offer: EnrollmentOffer) {
