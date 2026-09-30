@@ -9,6 +9,11 @@ namespace Guard.Windows.RelayCrypto.Tests
     {
         private static int Main(string[] args)
         {
+            if (args.Length == 1 && args[0] == "--export-enrollment-key-confirmation")
+            {
+                EnrollmentTranscriptChecks.ExportKeyConfirmation();
+                return 0;
+            }
             if (args.Length == 2 && args[0] == "--verify-android-enrollment")
             {
                 EnrollmentTranscriptChecks.VerifyAndroid(args[1]);

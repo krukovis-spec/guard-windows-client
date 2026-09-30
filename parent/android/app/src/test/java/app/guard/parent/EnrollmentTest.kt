@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test
 import java.io.File
 import java.security.Signature
 import java.util.Base64
+import java.util.Properties
 
 /** Public test keys only, same input and reviewed digest constants as the .NET harness. */
 class EnrollmentTest {
@@ -63,6 +64,29 @@ class EnrollmentTest {
         assertThrows(IllegalArgumentException::class.java) { opened.proofFor(claim(offer(epoch = 3))) }
         opened.close()
         assertThrows(IllegalStateException::class.java) { opened.proofFor(claim(offer())) }
+    }
+
+    @Test fun `phone answers dotnet key confirmation only for exact claim key and authenticated ciphertext`() {
+        val vector = Properties().apply {
+            requireNotNull(EnrollmentTest::class.java.getResourceAsStream("/enrollment-key-confirmation-v1.properties")).use { load(it) }
+        }
+        fun field(name: String) = hex(vector.getProperty(name))
+        val claim = EnrollmentWire.decodeClaimForSignature(field("claim"))
+        val enc = field("enc"); val cipher = field("cipher")
+        assertArrayEquals(field("proof"), EnrollmentWire.answerKeyConfirmation(claim, ExchangeVector.key, enc, cipher))
+        // A different transcript must not be accepted even with the same phone encryption key.
+        val changed = EnrollmentKeyClaim(claim.offerHash().apply { this[0] = (this[0].toInt() xor 1).toByte() },
+            claim.approvalKeyId, claim.approvalKey(), claim.encryptionKeyId, claim.encryptionKey())
+        assertThrows(java.security.GeneralSecurityException::class.java) { EnrollmentWire.answerKeyConfirmation(changed, ExchangeVector.key, enc, cipher) }
+        assertThrows(IllegalArgumentException::class.java) { EnrollmentWire.answerKeyConfirmation(claim(offer()), ExchangeVector.key, enc, cipher) }
+        assertThrows(java.security.GeneralSecurityException::class.java) {
+            EnrollmentWire.answerKeyConfirmation(claim, ExchangeVector.key, enc, cipher.copyOf().apply { this[0] = (this[0].toInt() xor 1).toByte() })
+        }
+        for (size in listOf(0, 47, 49)) assertThrows(IllegalArgumentException::class.java) {
+            EnrollmentWire.answerKeyConfirmation(claim, ExchangeVector.key, enc, cipher.copyOf(size))
+        }
+        assertThrows(IllegalArgumentException::class.java) { EnrollmentWire.answerKeyConfirmation(claim, ExchangeVector.key, enc.copyOf(64), cipher) }
+        assertArrayEquals(field("enc"), enc); assertArrayEquals(field("cipher"), cipher)
     }
 
     @Test fun `canonical enrollment fields reject invalid profiles and preserve immutable buffers`() {

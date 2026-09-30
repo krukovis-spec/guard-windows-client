@@ -16,12 +16,14 @@ using Guard.Windows.Cryptography;
 namespace Guard.Windows;
 
 // This result goes only to the authenticated originating elevated setup session. Never serialize/log it.
-public sealed class NativeEnrollmentStart
+public sealed class NativeEnrollmentStart : IDisposable
 {
     private readonly byte[] _confirmationSecret;
-    internal NativeEnrollmentStart(string qr, byte[] confirmationSecret) { QrText = qr; _confirmationSecret = (byte[])confirmationSecret.Clone(); }
-    public string QrText { get; }
-    public byte[] GetConfirmationSecretCopy() => (byte[])_confirmationSecret.Clone();
+    private string? _qr;
+    internal NativeEnrollmentStart(string qr, byte[] confirmationSecret) { _qr = qr; _confirmationSecret = (byte[])confirmationSecret.Clone(); }
+    public string QrText => _qr ?? throw new ObjectDisposedException(nameof(NativeEnrollmentStart));
+    public byte[] GetConfirmationSecretCopy() { ObjectDisposedException.ThrowIf(_qr == null, this); return (byte[])_confirmationSecret.Clone(); }
+    public void Dispose() { CryptographicOperations.ZeroMemory(_confirmationSecret); _qr = null; }
 }
 
 /// <summary>One protected file transaction owns the ceremony, phone-key confirmation and final owner.
@@ -71,7 +73,7 @@ public sealed class NativeEnrollmentCoordinator
         DeviceEnrollmentState candidate;
         try
         {
-            // Snapshot/bound all remote evidence before the first await or cryptographic operation.
+            // Snapshot/bound all remote evidence before status fetching or cryptographic verification.
             candidate = new DeviceEnrollmentState(session.Offer, session.GetConfirmationHashCopy(), claim, certificates, signature, mac,
                 new byte[65], new byte[48], new byte[32]);
         }
