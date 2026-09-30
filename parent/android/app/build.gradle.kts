@@ -2,6 +2,13 @@ plugins {
     id("com.android.application")
 }
 
+// Public release pin only, never taken from a QR, intent, preference or environment at runtime.
+val enrollmentRelay = providers.gradleProperty("guardEnrollmentRelay").orElse("").get()
+require(enrollmentRelay.isEmpty() || (enrollmentRelay.length <= 256 && enrollmentRelay.matches(Regex(
+    "https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?(?:/[a-z0-9_-]+)*")))) {
+    "guardEnrollmentRelay must be a canonical HTTPS endpoint"
+}
+
 android {
     namespace = "app.guard.parent"
     compileSdk = 36
@@ -12,6 +19,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "ENROLLMENT_RELAY", "\"$enrollmentRelay\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -26,6 +34,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.fragment:fragment-ktx:1.8.9")
     implementation("androidx.biometric:biometric:1.1.0")
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.12.2")

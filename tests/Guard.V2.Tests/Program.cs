@@ -72,8 +72,10 @@ namespace Guard.V2.Tests
             Assert(IpcSecurityPolicy.CanInvoke(ClientRole.AdminSetup, GuardVerb.BeginSetup), "Admin setup must be allowed.");
             Assert(IpcSecurityPolicy.CanInvoke(ClientRole.AdminSetup, GuardVerb.BindChildAccount), "Admin child binding must be allowed.");
             foreach (ClientRole role in Enum.GetValues(typeof(ClientRole)))
-                Assert(IpcSecurityPolicy.CanInvoke(role, GuardVerb.GetDeviceProvisioning) == (role == ClientRole.AdminSetup),
-                    "Public device provisioning must be restricted to local admin setup.");
+                foreach (var verb in new[] { GuardVerb.GetDeviceProvisioning, GuardVerb.BeginNativeSetup, GuardVerb.AdvanceNativeSetup,
+                    GuardVerb.ConfirmNativeSetup, GuardVerb.CancelNativeSetup, GuardVerb.GetNativeSetupResult })
+                    Assert(IpcSecurityPolicy.CanInvoke(role, verb) == (role == ClientRole.AdminSetup),
+                        "Device provisioning and native setup must be admin-only.");
             Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.AdminSetup, GuardVerb.ApplyParentDecision), "Admin IPC is not a parent-decision channel.");
             Assert(IpcSecurityPolicy.CanInvoke(ClientRole.Proxy, GuardVerb.EvaluateDomain), "Proxy domain evaluation must be allowed.");
             Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.Proxy, GuardVerb.GetStatus), "Proxy status must be denied.");

@@ -28,8 +28,13 @@ internal sealed partial class GuardServiceIpcOperationHandler
         if (role != ClientRole.AdminSetup) return Response(request, GuardIpcResponseStatus.Forbidden);
         if (_stateStore is not ServiceAuthoritativeStateBoundary boundary)
             return Response(request, GuardIpcResponseStatus.Unavailable);
+        var callerToken = token;
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+        budget.CancelAfter(TimeSpan.FromSeconds(25));
+        token = budget.Token;
         byte[]? secret = null;
         byte[]? claimHash = null;
+        string? enrollmentId = null;
         long expectedVersion = 0;
         var input = request.GetPayloadCopy();
         try
@@ -49,16 +54,25 @@ internal sealed partial class GuardServiceIpcOperationHandler
                     {
                         GuardVerb.AdvanceNativeSetup => new[] { "version", "confirmationSecret" },
                         GuardVerb.CancelNativeSetup => new[] { "version", "confirmationSecret", "expectedVersion" },
+                        GuardVerb.GetNativeSetupResult => new[] { "version", "enrollmentId", "claimHash" },
                         _ => new[] { "version", "confirmationSecret", "expectedVersion", "claimHash" }
                     });
                     if (value.GetProperty("version").GetInt32() != 1) throw new InvalidDataException();
-                    var encodedSecret = value.GetProperty("confirmationSecret").GetString();
-                    if (encodedSecret?.Length != 44) throw new InvalidDataException();
-                    secret = Convert.FromBase64String(encodedSecret);
-                    if (secret.Length != 32 || Convert.ToBase64String(secret) != encodedSecret) throw new InvalidDataException();
-                    if (request.Verb != GuardVerb.AdvanceNativeSetup &&
+                    if (request.Verb == GuardVerb.GetNativeSetupResult)
+                    {
+                        enrollmentId = value.GetProperty("enrollmentId").GetString();
+                        if (enrollmentId == null || !GuardIdentifier.IsCanonicalToken(enrollmentId)) throw new InvalidDataException();
+                    }
+                    else
+                    {
+                        var encodedSecret = value.GetProperty("confirmationSecret").GetString();
+                        if (encodedSecret?.Length != 44) throw new InvalidDataException();
+                        secret = Convert.FromBase64String(encodedSecret);
+                        if (secret.Length != 32 || Convert.ToBase64String(secret) != encodedSecret) throw new InvalidDataException();
+                    }
+                    if (request.Verb is GuardVerb.ConfirmNativeSetup or GuardVerb.CancelNativeSetup &&
                         (expectedVersion = value.GetProperty("expectedVersion").GetInt64()) < 0) throw new InvalidDataException();
-                    if (request.Verb == GuardVerb.ConfirmNativeSetup)
+                    if (request.Verb is GuardVerb.ConfirmNativeSetup or GuardVerb.GetNativeSetupResult)
                     {
                         var hash = value.GetProperty("claimHash").GetString();
                         if (hash?.Length != 64) throw new InvalidDataException();
@@ -79,14 +93,38 @@ internal sealed partial class GuardServiceIpcOperationHandler
                     if (state.IsProvisioned || state.SetupChallenge?.IsActive(_clock.UtcNow) == true)
                         return Response(request, GuardIpcResponseStatus.Conflict);
                 }
+                else if (request.Verb == GuardVerb.GetNativeSetupResult)
+                {
+                    if (!MatchesConfirmed(state, enrollmentId!, claimHash!)) return Response(request, GuardIpcResponseStatus.Rejected);
+                }
                 else if (secret == null || !OwnsSession(state, secret))
                     return Response(request, GuardIpcResponseStatus.Forbidden);
 
-                _nativeEnrollment ??= _openNativeEnrollment != null ?
-                    await _openNativeEnrollment(token).ConfigureAwait(false) :
-                    _configurations != null ? await ServiceNativeEnrollment.OpenAsync(boundary, _configurations, token).ConfigureAwait(false) :
-                    throw new InvalidDataException("Native enrollment is not configured.");
-                var runtime = _nativeEnrollment;
+                if (request.Verb == GuardVerb.GetNativeSetupResult)
+                {
+                    // The original secret is erased at owner CAS. This is a read of the
+                    // exact committed transcript, never a substitute confirmation authority.
+                    var recoveryRequired = _clock.UtcNow < state.Enrollment!.Offer.CreatedAtUtc ||
+                        _clock.UtcNow >= state.Enrollment.Offer.ExpiresAtUtc.AddDays(1);
+                    var relayPassCompleted = false;
+                    if (!recoveryRequired)
+                    {
+                        try
+                        {
+                            var delivery = await OpenNativeAsync(boundary, token).ConfigureAwait(false);
+                            await delivery.Relay.ProcessNextAsync(token).ConfigureAwait(false);
+                            relayPassCompleted = true; // A completed poll/reply pass, NOT a phone receipt.
+                        }
+                        catch (Exception e) when (e is InvalidDataException or IOException or HttpRequestException or CryptographicException) { }
+                        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested) { }
+                    }
+                    // Relay failure must not obscure an already durable owner commit.
+                    var completed = await boundary.LoadAsync(callerToken).ConfigureAwait(false);
+                    if (!MatchesConfirmed(completed, enrollmentId!, claimHash!)) return Response(request, GuardIpcResponseStatus.Conflict);
+                    return JsonResponse(request, new { version = 1, stateVersion = completed.Version, enrollmentId,
+                        claimHash = Convert.ToHexStringLower(claimHash!), phase = "confirmed", relayPassCompleted, recoveryRequired });
+                }
+                var runtime = await OpenNativeAsync(boundary, token).ConfigureAwait(false);
                 if (request.Verb == GuardVerb.BeginNativeSetup)
                 {
                     var offer = runtime.CreateOffer(state, _clock.UtcNow);
@@ -134,6 +172,8 @@ internal sealed partial class GuardServiceIpcOperationHandler
             { return Response(request, GuardIpcResponseStatus.Unavailable); }
             finally { _nativeSetupGate.Release(); }
         }
+        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
+        { return Response(request, GuardIpcResponseStatus.Unavailable); }
         finally
         {
             CryptographicOperations.ZeroMemory(input);
@@ -143,6 +183,16 @@ internal sealed partial class GuardServiceIpcOperationHandler
 
     private static bool OwnsSession(DeviceSecurityState state, byte[] secret) => state.Enrollment != null &&
         CryptographicOperations.FixedTimeEquals(SHA256.HashData(secret), state.Enrollment.GetConfirmationHashCopy());
+
+    private static bool MatchesConfirmed(DeviceSecurityState state, string enrollmentId, byte[] claimHash) =>
+        state.IsProvisioned && state.Enrollment is { Confirmed: true, Candidate: not null } session &&
+        session.Offer.EnrollmentId == enrollmentId && CryptographicOperations.FixedTimeEquals(claimHash,
+            RelayCanonicalEncoding.ComputeEnrollmentClaimHash(session.Candidate));
+
+    private async Task<ServiceNativeEnrollment> OpenNativeAsync(ServiceAuthoritativeStateBoundary boundary, CancellationToken token) =>
+        _nativeEnrollment ??= _openNativeEnrollment != null ? await _openNativeEnrollment(token).ConfigureAwait(false) :
+        _configurations != null ? await ServiceNativeEnrollment.OpenAsync(boundary, _configurations, token).ConfigureAwait(false) :
+        throw new InvalidDataException("Native enrollment is not configured.");
 
     private static GuardIpcResponse JsonResponse(GuardIpcRequest request, object value)
     {

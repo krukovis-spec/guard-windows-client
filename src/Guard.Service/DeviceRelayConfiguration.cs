@@ -183,7 +183,7 @@ internal sealed class ServiceNativeEnrollment : IDisposable
     private readonly DeviceIdentity _identity;
     internal NativeEnrollmentCoordinator Coordinator { get; }
     internal NativeEnrollmentRelay Relay { get; }
-    private ServiceNativeEnrollment(GoogleAndroidAttestationSource source, HttpRelayTransport transport,
+    internal ServiceNativeEnrollment(GoogleAndroidAttestationSource source, HttpRelayTransport transport,
         NativeEnrollmentCoordinator coordinator, NativeEnrollmentRelay relay, DeviceRelayConfiguration configuration,
         EnrollmentDeploymentTrust trust, DeviceIdentity identity)
     { _source = source; _transport = transport; Coordinator = coordinator; Relay = relay;

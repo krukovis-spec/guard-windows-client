@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,16 +15,34 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Guard.Windows.Ipc;
 
-/// <summary>Read-only setup queries. Requires a trusted installation; not an administrator-tamper boundary.</summary>
+/// <summary>Authenticated setup IPC. Requires a trusted installation; not an administrator-tamper boundary.</summary>
 public static class GuardSetupQueryClient
 {
-    public static async Task<GuardIpcResponse> QueryAsync(GuardVerb verb, CancellationToken cancellationToken)
+    public static Task<GuardIpcResponse> QueryAsync(GuardVerb verb, CancellationToken cancellationToken)
     {
         if (verb != GuardVerb.GetStatus && verb != GuardVerb.GetReadiness && verb != GuardVerb.GetDeviceProvisioning)
             throw new ArgumentOutOfRangeException(nameof(verb));
+        return SendAsync(new GuardIpcRequest(GuardProtocol.CurrentVersion, Guid.NewGuid().ToString("D"), verb, Array.Empty<byte>()),
+            GuardProtocol.DefaultIpcReadTimeoutMilliseconds, cancellationToken);
+    }
 
+    // Retain the session capability privately; never auto-confirm a returned claim hash.
+    public static Task<GuardIpcResponse> NativeSetupAsync(GuardVerb verb, byte[] payload, CancellationToken cancellationToken)
+    {
+        if (verb != GuardVerb.BeginNativeSetup && verb != GuardVerb.AdvanceNativeSetup &&
+            verb != GuardVerb.ConfirmNativeSetup && verb != GuardVerb.CancelNativeSetup && verb != GuardVerb.GetNativeSetupResult)
+            throw new ArgumentOutOfRangeException(nameof(verb));
+        ArgumentNullException.ThrowIfNull(payload);
+        if (payload.Length > 512 || (verb == GuardVerb.BeginNativeSetup ? payload.Length != 0 : payload.Length == 0))
+            throw new ArgumentException("Invalid native setup payload size.", nameof(payload));
+        return SendAsync(new GuardIpcRequest(GuardProtocol.CurrentVersion, Guid.NewGuid().ToString("D"), verb, payload),
+            GuardProtocol.MaximumIpcReadTimeoutMilliseconds, cancellationToken);
+    }
+
+    private static async Task<GuardIpcResponse> SendAsync(GuardIpcRequest request, int timeoutMilliseconds, CancellationToken cancellationToken)
+    {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(GuardProtocol.DefaultIpcReadTimeoutMilliseconds);
+        deadline.CancelAfter(timeoutMilliseconds);
         var token = deadline.Token;
         using var pipe = CreatePipe("Guard.V2.AdminSetup.v1");
         await pipe.ConnectAsync(token).ConfigureAwait(false);
@@ -44,7 +63,6 @@ public static class GuardSetupQueryClient
             throw new UnauthorizedAccessException("The pipe server changed during authentication.");
         token.ThrowIfCancellationRequested();
 
-        var request = new GuardIpcRequest(GuardProtocol.CurrentVersion, Guid.NewGuid().ToString("D"), verb, Array.Empty<byte>());
         var response = await ExchangeAsync(pipe, request, token).ConfigureAwait(false);
         // Keep the original process handle until acceptance: exit/PID reuse or
         // a service restart invalidates this response, including a buffered one.
@@ -100,7 +118,9 @@ public static class GuardSetupQueryClient
 
     internal static async Task<GuardIpcResponse> ExchangeAsync(Stream pipe, GuardIpcRequest request, CancellationToken token)
     {
-        await pipe.WriteAsync(IpcFrameCodec.Encode(request), token).ConfigureAwait(false);
+        var frame = IpcFrameCodec.Encode(request);
+        try { await pipe.WriteAsync(frame, token).ConfigureAwait(false); }
+        finally { CryptographicOperations.ZeroMemory(frame); }
         await pipe.FlushAsync(token).ConfigureAwait(false);
         // The service handles exactly one frame, then closes this connection.
         // One extra byte detects overflow, without an unbounded CopyToAsync.

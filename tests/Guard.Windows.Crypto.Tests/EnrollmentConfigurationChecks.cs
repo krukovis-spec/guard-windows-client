@@ -11,14 +11,17 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Guard.Contracts;
+using Guard.Contracts.Relay;
 using Guard.Application;
 using Guard.Application.Readiness;
 using Guard.Domain;
 using Guard.Domain.Readiness;
 using Guard.Protocol;
+using Guard.Protocol.Relay;
 using Guard.Service;
 using Guard.Storage;
 using Guard.Windows.Cryptography;
+using Guard.Windows.Ipc;
 using Guard.Windows.Storage;
 
 namespace Guard.Windows.Crypto.Tests;
@@ -219,11 +222,13 @@ internal static class EnrollmentConfigurationChecks
                 freshState, freshConfig, trust, new Clock());
             var begun = await freshRuntime.Coordinator.BeginAsync(ClientRole.AdminSetup,
                 freshConfig.CreateOffer(trust, freshBoundary.Identity, freshState, "Lab", Now), default);
-            using (begun.Start) Check(begun.Status == Guard.Application.SetupOperationStatus.Succeeded, "imported profile did not reach actual enrollment");
+            using var freshStart = begun.Start;
+            Check(begun.Status == Guard.Application.SetupOperationStatus.Succeeded, "imported profile did not reach actual enrollment");
             File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, staged);
             await ThrowsAsync(Import); // even identical import is forbidden once setup has begun
             Check(File.Exists(freshPaths.DeviceRelayInstallFile) && installed.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile)),
                 "active setup accepted/replaced installer profile");
+            await CheckNativeConfirmIpcAsync(freshBoundary, freshConfig, trust, freshStart!);
             CryptographicOperations.ZeroMemory(freshRaw);
         }
         finally { Directory.Delete(root, recursive: true); }
@@ -252,7 +257,8 @@ internal static class EnrollmentConfigurationChecks
             using var wire = new MemoryStream(IpcFrameCodec.Encode(request));
             return await dispatcher.DispatchAsync(role, await IpcFrameCodec.DecodeAsync(wire, TimeSpan.FromSeconds(5), default), default);
         }
-        foreach (var verb in new[] { GuardVerb.BeginNativeSetup, GuardVerb.AdvanceNativeSetup, GuardVerb.ConfirmNativeSetup, GuardVerb.CancelNativeSetup })
+        foreach (var verb in new[] { GuardVerb.BeginNativeSetup, GuardVerb.AdvanceNativeSetup, GuardVerb.ConfirmNativeSetup,
+            GuardVerb.CancelNativeSetup, GuardVerb.GetNativeSetupResult })
             foreach (var role in Enum.GetValues<ClientRole>().Where(r => r != ClientRole.AdminSetup))
                 Check((await Send(verb, Array.Empty<byte>(), role)).Status is GuardIpcResponseStatus.Forbidden or GuardIpcResponseStatus.InvalidRequest,
                     "non-admin native setup role");
@@ -265,7 +271,12 @@ internal static class EnrollmentConfigurationChecks
                 new GuardIpcRequest(1, Guid.NewGuid().ToString("D"), GuardVerb.BeginNativeSetup, Array.Empty<byte>()), default);
             Check(denied.Status == GuardIpcResponseStatus.Unavailable, "unconfigured native setup fallback");
         }
-        var begun = await Send(GuardVerb.BeginNativeSetup, Array.Empty<byte>());
+        GuardIpcResponse? lastResponse = null;
+        await using var client = await NativeSetupSession.BeginAsync(async (verb, input, token) => {
+            token.ThrowIfCancellationRequested();
+            return lastResponse = await Send(verb, input);
+        }, () => Now, default);
+        var begun = lastResponse!;
         Check(begun.Status == GuardIpcResponseStatus.Success && opens == 1 && network.Calls == 0, "native begin failed or used network");
         using var started = JsonDocument.Parse(begun.GetPayloadCopy());
         Check(started.RootElement.EnumerateObject().Count() == 5 && !started.RootElement.TryGetProperty("qr", out _) &&
@@ -287,13 +298,16 @@ internal static class EnrollmentConfigurationChecks
         Check(failed.Status == GuardIpcResponseStatus.Unavailable && failed.PayloadLength == 0 &&
             (await boundary.LoadAsync(default)).Version == pending.Version, "failed HTTP revealed QR or changed ownership");
         network.Fail = false;
-        var advanced = await Send(GuardVerb.AdvanceNativeSetup, Poll(secret));
+        var clientView = await client.RefreshAsync(default);
+        var advanced = lastResponse!;
         Check(advanced.Status == GuardIpcResponseStatus.Success, "retry native provisioning");
         using var snapshot = JsonDocument.Parse(advanced.GetPayloadCopy());
         Check(snapshot.RootElement.GetProperty("phase").GetString() == "scan-phone" &&
             snapshot.RootElement.GetProperty("qr").GetString()!.StartsWith("guard-enroll://v2?offer=", StringComparison.Ordinal) &&
             snapshot.RootElement.GetProperty("claimHash").ValueKind == JsonValueKind.Null && opens == 1, "native QR gate or cached runtime");
         var version = snapshot.RootElement.GetProperty("stateVersion").GetInt64();
+        Check(clientView.Phase == NativeSetupPhase.ScanPhone && clientView.StateVersion == version &&
+            clientView.QrText == snapshot.RootElement.GetProperty("qr").GetString(), "typed setup client changed real service QR");
         var confirm = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, confirmationSecret = secret,
             expectedVersion = version, claimHash = new string('0', 64) });
         Check((await Send(GuardVerb.ConfirmNativeSetup, confirm)).Status == GuardIpcResponseStatus.Rejected &&
@@ -312,10 +326,91 @@ internal static class EnrollmentConfigurationChecks
         Check(resumedSnapshot.RootElement.GetProperty("phase").GetString() == "restart-required" &&
             resumedSnapshot.RootElement.GetProperty("qr").ValueKind == JsonValueKind.Null &&
             (await boundary.LoadAsync(default)).Version == version, "restart regenerated QR or state");
-        var cancel = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, confirmationSecret = secret, expectedVersion = version });
-        Check((await Send(GuardVerb.CancelNativeSetup, cancel)).Status == GuardIpcResponseStatus.Success, "originating session could not cancel");
+        Check((await client.CancelAsync(clientView.StateVersion, default)).Phase == NativeSetupPhase.Cancelled,
+            "originating typed client could not cancel");
         Check((await Send(GuardVerb.AdvanceNativeSetup, Poll(secret))).Status == GuardIpcResponseStatus.Forbidden &&
             (await boundary.LoadAsync(default)).Enrollment == null, "cancelled capability remained usable");
+    }
+
+    private static async Task CheckNativeConfirmIpcAsync(ServiceAuthoritativeStateBoundary boundary, DeviceRelayConfiguration config,
+        EnrollmentDeploymentTrust trust, NativeEnrollmentStart start)
+    {
+        // Real synthetic CA/phone keys, never a fake "verified" result or production trust override.
+        using var phone = new AndroidAttestationChecks.Fixture();
+        using var phoneEncryption = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+        var coordinator = new NativeEnrollmentCoordinator(boundary.NativeEnrollmentStore, phone.Verifier,
+            _ => Task.FromResult(AndroidAttestationRevocations.FromTrustedResponse(Encoding.UTF8.GetBytes("{\"entries\":{}}"),
+                Now.AddMinutes(-1), Now.AddHours(1))), new Clock());
+        var state = await boundary.LoadAsync(default);
+        var offer = state.Enrollment!.Offer;
+        var encryptionPoint = phoneEncryption.ExportSubjectPublicKeyInfo()[26..];
+        var claim = new EnrollmentKeyClaim(RelayCanonicalEncoding.ComputeEnrollmentOfferHash(offer), phone.Anchor.KeyId,
+            phone.Anchor.GetSubjectPublicKeyInfoCopy(), "phone-encryption-ipc-test", encryptionPoint);
+        var hash = RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim);
+        var encoded = start.QrText.Split("&secret=", StringSplitOptions.None)[1].Replace('-', '+').Replace('_', '/');
+        var qrSecret = Convert.FromBase64String(encoded + "=");
+        var mac = RelayCanonicalEncoding.ComputeEnrollmentClaimProof(SHA256.HashData(qrSecret), claim);
+        CryptographicOperations.ZeroMemory(qrSecret);
+        var staged = await coordinator.StageAsync(ClientRole.ParentRelay, claim, mac,
+            phone.Chain(AndroidAttestationChecks.Description(challenge: RelayCanonicalEncoding.ComputeEnrollmentOfferHash(offer)), at: Now),
+            phone.Sign(hash), default);
+        Check(staged == SetupOperationStatus.Succeeded, "synthetic attested stage failed: " + staged);
+        Check(!(await boundary.LoadAsync(default)).IsProvisioned, "attested stage became owner");
+        var candidate = (await boundary.LoadAsync(default)).Enrollment!;
+        var privateKey = phoneEncryption.ExportParameters(true).D!;
+        var witness = RelayCryptography.Decrypt(privateKey, encryptionPoint, candidate.GetEncapsulatedKeyCopy(),
+            candidate.GetEncryptedChallengeCopy(), hash, NativeEnrollmentCoordinator.KeyConfirmationInfo(hash));
+        var proof = NativeEnrollmentCoordinator.ComputePhoneKeyProof(witness, hash);
+        CryptographicOperations.ZeroMemory(privateKey); CryptographicOperations.ZeroMemory(witness);
+        Check(await coordinator.ConfirmPhoneKeyAsync(ClientRole.ParentRelay, hash, proof, default) == SetupOperationStatus.Succeeded,
+            "phone decryption proof failed");
+        var network = new EnrollmentSetupHttp();
+        var transport = config.CreateTransport(trust, boundary.Identity, await boundary.LoadAsync(default), Now, network);
+        var exchange = new NativeEnrollmentExchange(boundary.NativeEnrollmentStore, coordinator, boundary.Identity.Encryption, boundary.Identity.Signing, new Clock());
+        var runtime = new ServiceNativeEnrollment(new GoogleAndroidAttestationSource(), transport, coordinator,
+            new NativeEnrollmentRelay(boundary.NativeEnrollmentStore, exchange, transport, new Clock()), config, trust, boundary.Identity);
+        using var handler = Handler(boundary, trust, _ => Task.FromResult(runtime));
+        var dispatcher = new SecureIpcRequestDispatcher(handler);
+        var capability = start.GetConfirmationSecretCopy();
+        try
+        {
+            var secret = Convert.ToBase64String(capability);
+            async Task<GuardIpcResponse> Send(GuardVerb verb, object payload) => await dispatcher.DispatchAsync(ClientRole.AdminSetup,
+                new GuardIpcRequest(1, Guid.NewGuid().ToString("D"), verb, JsonSerializer.SerializeToUtf8Bytes(payload)), default);
+            var advanced = await Send(GuardVerb.AdvanceNativeSetup, new { version = 1, confirmationSecret = secret });
+            Check(advanced.Status == GuardIpcResponseStatus.Success, "candidate IPC inspection failed");
+            using var snapshot = JsonDocument.Parse(advanced.GetPayloadCopy());
+            Check(snapshot.RootElement.GetProperty("phase").GetString() == "compare-phone" &&
+                snapshot.RootElement.GetProperty("qr").ValueKind == JsonValueKind.Null &&
+                snapshot.RootElement.GetProperty("claimHash").GetString() == Convert.ToHexStringLower(hash), "comparison commitment mismatch");
+            var version = snapshot.RootElement.GetProperty("stateVersion").GetInt64();
+            var wrong = await Send(GuardVerb.ConfirmNativeSetup, new { version = 1, confirmationSecret = secret,
+                expectedVersion = version, claimHash = new string('0', 64) });
+            Check(wrong.Status == GuardIpcResponseStatus.Rejected && !(await boundary.LoadAsync(default)).IsProvisioned,
+                "wrong phone comparison became owner");
+            var correct = new { version = 1, confirmationSecret = secret, expectedVersion = version, claimHash = Convert.ToHexStringLower(hash) };
+            Check((await Send(GuardVerb.ConfirmNativeSetup, correct)).Status == GuardIpcResponseStatus.Success &&
+                (await boundary.LoadAsync(default)).IsProvisioned, "actual attested owner commit through IPC failed");
+            Check((await Send(GuardVerb.ConfirmNativeSetup, correct)).Status == GuardIpcResponseStatus.Forbidden, "spent confirmation capability was reused");
+            Check((await Send(GuardVerb.GetNativeSetupResult, new { version = 1, enrollmentId = offer.EnrollmentId,
+                claimHash = new string('0', 64) })).Status == GuardIpcResponseStatus.Rejected, "terminal query accepted another transcript");
+            var terminal = await Send(GuardVerb.GetNativeSetupResult, new { version = 1, enrollmentId = offer.EnrollmentId,
+                claimHash = Convert.ToHexStringLower(hash) });
+            using var terminalPayload = JsonDocument.Parse(terminal.GetPayloadCopy());
+            Check(terminal.Status == GuardIpcResponseStatus.Success && terminalPayload.RootElement.GetProperty("phase").GetString() == "confirmed",
+                "lost confirmation response could not be reconciled");
+            network.Fail = true;
+            var offline = await Send(GuardVerb.GetNativeSetupResult, new { version = 1, enrollmentId = offer.EnrollmentId,
+                claimHash = Convert.ToHexStringLower(hash) });
+            using var offlinePayload = JsonDocument.Parse(offline.GetPayloadCopy());
+            Check(offline.Status == GuardIpcResponseStatus.Success && !offlinePayload.RootElement.GetProperty("relayPassCompleted").GetBoolean() &&
+                offlinePayload.RootElement.GetProperty("phase").GetString() == "confirmed", "relay outage obscured durable owner or became delivery success");
+            var owner = await boundary.LoadAsync(default);
+            Check((await Send(GuardVerb.CancelNativeSetup, new { version = 1, confirmationSecret = secret,
+                expectedVersion = owner.Version })).Status == GuardIpcResponseStatus.Forbidden &&
+                (await boundary.LoadAsync(default)).Version == owner.Version, "cancel removed confirmed owner");
+        }
+        finally { CryptographicOperations.ZeroMemory(capability); }
     }
 
     private sealed class EnrollmentSetupHttp : HttpMessageHandler

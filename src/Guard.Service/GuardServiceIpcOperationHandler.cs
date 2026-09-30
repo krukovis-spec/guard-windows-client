@@ -122,6 +122,7 @@ namespace Guard.Service
                 case GuardVerb.AdvanceNativeSetup:
                 case GuardVerb.ConfirmNativeSetup:
                 case GuardVerb.CancelNativeSetup:
+                case GuardVerb.GetNativeSetupResult:
                     return await NativeSetupAsync(authenticatedRole, request, cancellationToken).ConfigureAwait(false);
 
                 case GuardVerb.BindChildAccount:

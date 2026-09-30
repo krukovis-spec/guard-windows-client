@@ -218,7 +218,7 @@ internal static class AndroidAttestationChecks
             Anchor = new ParentTrustAnchor(ParentKeyAlgorithm.EcdsaP256Sha256, _leafKey.ExportSubjectPublicKeyInfo());
             Proof = _leafKey.SignHash(ClaimHash, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
         }
-        public byte[][] Chain(byte[] description, bool intermediateAttestation = false, bool expired = false)
+        public byte[][] Chain(byte[] description, bool intermediateAttestation = false, bool expired = false, DateTimeOffset? at = null)
         {
             var issuerRequest = Request("CN=Guard Synthetic Attestation Issuer", _issuerKey, ca: true);
             if (intermediateAttestation) issuerRequest.CertificateExtensions.Add(new X509Extension(AndroidApprovalAttestation.ExtensionOid, Description(), false));
@@ -226,7 +226,8 @@ internal static class AndroidAttestationChecks
             using var issuer = issuerPublic.CopyWithPrivateKey(_issuerKey);
             var leafRequest = Request("CN=Guard Synthetic Approval Key", _leafKey, ca: false);
             leafRequest.CertificateExtensions.Add(new X509Extension(AndroidApprovalAttestation.ExtensionOid, description, false));
-            using var leaf = leafRequest.Create(issuer, Now.AddHours(-2), expired ? Now.AddHours(-1) : Now.AddHours(1), new byte[] { 1 });
+            var issued = at ?? Now;
+            using var leaf = leafRequest.Create(issuer, issued.AddHours(-2), expired ? issued.AddHours(-1) : issued.AddHours(1), new byte[] { 1 });
             return new[] { leaf.RawData, issuer.RawData, _root.RawData };
         }
         public bool Verify(byte[] description) => Check(Chain(description));
