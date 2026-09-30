@@ -43,6 +43,18 @@ object EnrollmentExchange {
     }
     fun query(offer: EnrollmentOffer, claim: EnrollmentKeyClaim, nonce: ByteArray): ByteArray = seal(3, offer, claim, nonce, byteArrayOf())
 
+    /** Public routing metadata only, not a verified device response. */
+    internal fun requestMetadata(raw: ByteArray, offer: EnrollmentOffer, claim: EnrollmentKeyClaim): Pair<Int, ByteArray> {
+        val r = Input(raw.copyOf(), "GREX")
+        val kind = r.readInt().also { require(it in 1..3) }
+        require(MessageDigest.isEqual(r.fixed(32), EnrollmentWire.offerHash(offer)) &&
+            MessageDigest.isEqual(r.fixed(32), EnrollmentWire.claimHash(claim))) { "enrollment binding" }
+        val nonce = r.fixed(32)
+        require(r.fixed(65)[0].toInt() == 4)
+        val cipher = r.bytes(MAX_BYTES - HEADER_BYTES - 69); require(cipher.size >= 16); r.done()
+        return kind to nonce
+    }
+
     fun receive(raw: ByteArray, offer: EnrollmentOffer, claim: EnrollmentKeyClaim, key: RelayEncryptionKey,
         expectedNonce: ByteArray, nowUnixMillis: Long): EnrollmentResult {
         require(raw.size <= 414 && expectedNonce.size == 32) // Reply has no certificate chain; at most 221 signed plaintext bytes.
