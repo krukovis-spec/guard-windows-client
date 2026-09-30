@@ -18,7 +18,7 @@ if ($env:COMPUTERNAME -eq $HostComputerName -or
 $os = Get-CimInstance Win32_OperatingSystem
 $version = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 $adminGroup = Get-LocalGroup -SID 'S-1-5-32-544'
-$adminMembers = @(Get-LocalGroupMember -Group $adminGroup.Name | Select-Object Name,@{n='SID';e={$_.SID.Value}},ObjectClass,PrincipalSource)
+$adminMembers = @(Get-LocalGroupMember -Group $adminGroup.Name | Select-Object Name,@{n='SID';e={$_.SID.Value}},@{n='ObjectClass';e={[string]$_.ObjectClass}},@{n='PrincipalSource';e={[string]$_.PrincipalSource}})
 $tpm = Get-Tpm
 $bitLocker = Get-BitLockerVolume -MountPoint 'C:'
 $appLockerXml = Get-AppLockerPolicy -Effective -Xml
@@ -41,7 +41,7 @@ finally { $sha.Dispose() }
     BitLockerProtection = $bitLocker.ProtectionStatus.ToString()
     BitLockerVolumeStatus = $bitLocker.VolumeStatus.ToString()
     AdminMembers = $adminMembers
-    LocalAccounts = @(Get-LocalUser | Select-Object Name,@{n='SID';e={$_.SID.Value}},Enabled,PrincipalSource)
+    LocalAccounts = @(Get-LocalUser | Select-Object Name,@{n='SID';e={$_.SID.Value}},Enabled,@{n='PrincipalSource';e={[string]$_.PrincipalSource}})
     Services = @(Get-Service -Name AppIDSvc,BFE,vmicvmsession | Select-Object Name,@{n='Status';e={$_.Status.ToString()}},@{n='StartType';e={$_.StartType.ToString()}})
     AppLockerPolicySha256 = $policyHash
     AppLockerCollections = @($appLocker.AppLockerPolicy.RuleCollection | Where-Object { $null -ne $_ } | ForEach-Object {

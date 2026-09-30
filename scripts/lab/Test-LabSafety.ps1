@@ -1,15 +1,17 @@
 $ErrorActionPreference = 'Stop'
-foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1')) {
+foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLockerFeasibility.ps1', 'Invoke-AppLockerLab.ps1')) {
     $tokens = $null
     $parseErrors = $null
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
     if ($parseErrors.Count) { throw ('Parse failure: ' + $file) }
 }
-try {
-    & (Join-Path $PSScriptRoot 'Get-GuestBaseline.ps1') -ExpectedUuid ([guid]::Empty) -HostComputerName $env:COMPUTERNAME
-    throw 'Host guard did not reject execution'
-} catch {
-    if ($_.Exception.Message -ne 'This probe can run only in the validated disposable Hyper-V guest.') { throw }
+foreach ($probe in @('Get-GuestBaseline.ps1', 'Test-AppLockerFeasibility.ps1')) {
+    try {
+        & (Join-Path $PSScriptRoot $probe) -ExpectedUuid ([guid]::Empty) -HostComputerName $env:COMPUTERNAME
+        throw 'Host guard did not reject execution'
+    } catch {
+        if ($_.Exception.Message -ne 'This probe can run only in the validated disposable Hyper-V guest.') { throw }
+    }
 }
 $compiler = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { throw 'Existing Framework compiler unavailable' }
@@ -25,8 +27,19 @@ try {
     & $compiler /nologo /target:exe /optimize+ /warnaserror+ /define:VARIANT_TWO ('/out:' + $markerTwo) (Join-Path $PSScriptRoot 'Marker.cs')
     if ($LASTEXITCODE -ne 0) { throw 'Marker v2 compile failed' }
     foreach ($marker in @($markerOne, $markerTwo)) {
-        & $marker --self-test
-        if ($LASTEXITCODE -ne 0) { throw 'Marker self-test failed' }
+        $process = New-Object Diagnostics.Process
+        $process.StartInfo.FileName = $marker
+        $process.StartInfo.Arguments = '--self-test'
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        try {
+            $process.Start() | Out-Null
+            if (-not $process.WaitForExit(15000)) { $process.Kill(); throw 'Marker self-test timed out' }
+            $sentinel = $process.StandardOutput.ReadToEnd().Trim()
+            if ($process.ExitCode -ne 0 -or $sentinel -notmatch '^MARKER_SELF_TEST_PASS v[12]$') { throw 'Marker self-test failed' }
+            $sentinel
+        } finally { $process.Dispose() }
     }
     $hashOne = (Get-FileHash -LiteralPath $markerOne -Algorithm SHA256).Hash
     $hashTwo = (Get-FileHash -LiteralPath $markerTwo -Algorithm SHA256).Hash
