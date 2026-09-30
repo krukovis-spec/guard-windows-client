@@ -36,6 +36,7 @@ namespace Guard.Service.Tests
                 ("parses only the explicit one-time bootstrap argument", BootstrapAndIpcChecks.ParsesExplicitBootstrapArgumentAsync),
                 ("rejects bootstrap outside the service execution boundary", BootstrapAndIpcChecks.RejectsBootstrapOutsideServiceBoundaryAsync),
                 ("bootstraps state in fail-closed boundary order", BootstrapAndIpcChecks.BootstrapsInFailClosedOrderAsync),
+                ("imports device profile before IPC and refuses failed import", BootstrapAndIpcChecks.ImportsProfileBeforeIpcAsync),
                 ("composes explicit bootstrap and a functional production handler", BootstrapAndIpcChecks.ComposesExplicitBootstrapAndFunctionalHandlerAsync),
                 ("handles bounded status setup and child binding operations", BootstrapAndIpcChecks.HandlesBoundedSetupStatusAndBindingAsync),
                 ("returns an admin-only fail-closed readiness snapshot", BootstrapAndIpcChecks.ReturnsAdminOnlyReadinessSnapshotAsync),
@@ -496,6 +497,9 @@ namespace Guard.Service.Tests
         private sealed class RejectingStateInitializer :
             IServiceAuthoritativeStateInitializer
         {
+            public Task ImportDeviceRelayProfileAsync(CancellationToken cancellationToken) =>
+                throw new InvalidOperationException("Unexpected device profile import.");
+
             public Task InitializeNewAsync(
                 CancellationToken cancellationToken)
             {

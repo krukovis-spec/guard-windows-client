@@ -128,6 +128,49 @@ internal static class EnrollmentConfigurationChecks
             guard.Check = () => { if (File.Exists(freshPaths.DeviceRelayConfigurationPendingFile)) throw new UnauthorizedAccessException("synthetic ACL change"); };
             await ThrowsAsync(() => freshStore.InstallNewAsync(freshRaw, trust, freshBoundary, Now, default));
             Check(!File.Exists(freshPaths.DeviceRelayConfigurationFile) && !File.Exists(freshPaths.DeviceRelayConfigurationPendingFile), "failed guard published profile");
+            guard.Check = () => { };
+            var handoffProtector = new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.InstallPurpose, true);
+            // Actual encrypted installer handoff, never plaintext/token in args, using only owned temporary files.
+            async Task Import() => await freshStore.ImportStagedAsync(trust, freshBoundary, handoffProtector, Now, default);
+            await ThrowsAsync(Import); // no staged file
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, protector.Protect(freshRaw));
+            await ThrowsAsync(Import); // storage purpose is not the installer purpose
+            Check(File.Exists(freshPaths.DeviceRelayInstallFile) && !File.Exists(freshPaths.DeviceRelayConfigurationFile), "bad handoff was consumed");
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, new byte[8193]);
+            await ThrowsAsync(Import);
+            var staged = handoffProtector.Protect(freshRaw);
+            Check(!Encoding.UTF8.GetString(staged).Contains(Credential, StringComparison.Ordinal), "installer handoff contains plaintext credential");
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, staged);
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallPendingFile, Array.Empty<byte>());
+            await ThrowsAsync(Import);
+            File.Delete(freshPaths.DeviceRelayInstallPendingFile);
+            await ThrowsAsync(() => freshStore.ImportStagedAsync(trust, freshBoundary, handoffProtector, Now, cancelled.Token));
+            Check(staged.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayInstallFile)), "cancel consumed handoff");
+            guard.Check = () => { if (File.Exists(freshPaths.DeviceRelayConfigurationFile)) throw new UnauthorizedAccessException("synthetic interruption after commit"); };
+            await ThrowsAsync(Import);
+            var installed = File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile);
+            Check(staged.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayInstallFile)), "interruption lost installer handoff");
+            guard.Check = () => { };
+            var different = Profile(freshBoundary.Identity); different["accessToken"] = Credential + "-different";
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, handoffProtector.Protect(JsonSerializer.SerializeToUtf8Bytes(different)));
+            await ThrowsAsync(Import);
+            Check(installed.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile)), "retry rotated credential");
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, staged);
+            await Import(); // exact retry completes consumption only
+            Check(!File.Exists(freshPaths.DeviceRelayInstallFile) && installed.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile)),
+                "resume overwrote installed record or left handoff behind");
+            await ThrowsAsync(Import); // flag is one-shot; normal startup must not retain it
+            var freshState = await freshBoundary.LoadAsync(default);
+            var freshConfig = freshStore.Load(trust, freshBoundary.Identity, freshState, Now);
+            using var freshRuntime = ServiceNativeEnrollment.Create(freshBoundary.NativeEnrollmentStore, freshBoundary.Identity,
+                freshState, freshConfig, trust, new Clock());
+            var begun = await freshRuntime.Coordinator.BeginAsync(ClientRole.AdminSetup,
+                freshConfig.CreateOffer(trust, freshBoundary.Identity, freshState, "Lab", Now), default);
+            using (begun.Start) Check(begun.Status == Guard.Application.SetupOperationStatus.Succeeded, "imported profile did not reach actual enrollment");
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, staged);
+            await ThrowsAsync(Import); // even identical import is forbidden once setup has begun
+            Check(File.Exists(freshPaths.DeviceRelayInstallFile) && installed.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile)),
+                "active setup accepted/replaced installer profile");
             CryptographicOperations.ZeroMemory(freshRaw);
         }
         finally { Directory.Delete(root, recursive: true); }
@@ -144,6 +187,6 @@ internal static class EnrollmentConfigurationChecks
     { try { action(); } catch (Exception e) when (e is ArgumentException or InvalidDataException or InvalidOperationException or JsonException or CryptographicException or IOException) { return; }
         throw new InvalidOperationException("Expected configuration rejection"); }
     private static async Task ThrowsAsync(Func<Task> action)
-    { try { await action(); } catch (Exception e) when (e is InvalidDataException or InvalidOperationException or OperationCanceledException or UnauthorizedAccessException) { return; }
+    { try { await action(); } catch (Exception e) when (e is InvalidDataException or IOException or InvalidOperationException or OperationCanceledException or UnauthorizedAccessException or CryptographicException) { return; }
         throw new InvalidOperationException("Expected installation rejection"); }
 }

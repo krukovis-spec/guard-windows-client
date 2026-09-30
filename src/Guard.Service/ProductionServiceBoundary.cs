@@ -5,6 +5,7 @@ using Guard.Application;
 using Guard.Domain;
 using Guard.Storage;
 using Guard.Windows.Storage;
+using Guard.Windows.Cryptography;
 
 namespace Guard.Service
 {
@@ -35,6 +36,8 @@ namespace Guard.Service
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceIdentityPendingFile);
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceRelayConfigurationFile);
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceRelayConfigurationPendingFile);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceRelayInstallFile);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceRelayInstallPendingFile);
         }
 
         public void PrepareEmptyBoundary()
@@ -153,6 +156,13 @@ namespace Guard.Service
                 nextState,
                 cancellationToken);
         }
+
+        public Task ImportDeviceRelayProfileAsync(CancellationToken cancellationToken) =>
+            new DeviceRelayConfigurationStore(_paths,
+                new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.Purpose), _dataBoundaryGuard)
+            .ImportStagedAsync(EnrollmentDeploymentTrust.FromServiceAssembly(), this,
+                new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.InstallPurpose),
+                TimeProvider.System.GetUtcNow(), cancellationToken);
 
         public ValueTask DisposeAsync()
         {

@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — connect one-time installer profile to service startup
+
+- Implemented explicit fixed-path encrypted profile import before IPC using the existing startup/state boundary and protected record, no new dependency/interface. Normal startup never imports; duplicate/mixed bootstrap flags refuse. No credential or caller-chosen path in args, config or IPC. SYSTEM-only staging files use a distinct DPAPI purpose.
+- Current pristine state, compiled deployment pins and device identity remain mandatory. Successful import consumes only staging; interruption after durable publish resumes only byte-identical input without rotation. Wrong purpose/size/pending publication/cancellation/different profile and import after setup refuse, with encrypted handoff retained. Service ordering/composition and actual temporary DPAPI files through native enrollment Begin checked; VM/SYSTEM ACL and full installer/operator UI NOT tested or finished.
+- Focused Service/Crypto PASS and fresh `scripts/run-safe-tests.ps1`: Release +29 v2 harnesses +45 legacy checks PASS. Fixed the test helper's missing InvalidDataException catch during the first focused run; no production workaround. Self-review checked all import callers, failure ordering, no replacement/public IPC and existing fail-closed readiness. PROJECT_ONLY updates preserve the M3 handoff contract; no connection/auth/VM/host mutations. Strict M1 and requested final scope remain open.
+
 ## 2026-10-01 — M1 mechanism revalidation and explicit architecture decision
 
 - Read-only revalidation of actual pinned VM result, lab observation code and local Windows policy schema: first grant Allowed; after actual deadline and boot still Allowed with no reconciler; signed revoke/boot Blocked; recovery BOOT_VERIFIED. No repeated VM experiment or claim that a real installed Guard service was crashed.

@@ -25,6 +25,8 @@ namespace Guard.Windows.Storage
             DeviceIdentityPendingFile = DeviceIdentityFile + ".pending";
             DeviceRelayConfigurationFile = Path.Combine(RootDirectory, "device.relay");
             DeviceRelayConfigurationPendingFile = DeviceRelayConfigurationFile + ".pending";
+            DeviceRelayInstallFile = DeviceRelayConfigurationFile + ".install";
+            DeviceRelayInstallPendingFile = DeviceRelayInstallFile + ".pending";
             RelayRootDirectory = Path.Combine(RootDirectory, "relay");
             RelayStateFile = Path.Combine(RelayRootDirectory, "state.dat");
             RelayStateBackupFile = RelayStateFile + ".bak";
@@ -53,6 +55,8 @@ namespace Guard.Windows.Storage
         public string DeviceRelayConfigurationFile { get; }
 
         public string DeviceRelayConfigurationPendingFile { get; }
+        public string DeviceRelayInstallFile { get; }
+        public string DeviceRelayInstallPendingFile { get; }
 
         public string RelayRootDirectory { get; }
 

@@ -58,7 +58,48 @@ namespace Guard.Service.Tests
                         ServiceStartupOptions.InitializeAuthoritativeStateArgument
                     },
                     out hostArgs));
+            var import = ServiceStartupOptions.Parse(new[] { ServiceStartupOptions.ImportDeviceRelayProfileArgument }, out hostArgs);
+            Assert(import.ImportDeviceRelayProfile && !import.InitializeAuthoritativeState && hostArgs.Length == 0,
+                "Explicit import leaked into host config or initialized a new identity.");
+            Assert(!ServiceStartupOptions.Normal.ImportDeviceRelayProfile, "Normal startup enabled import.");
+            foreach (var value in new[] { "--Import-Device-Relay-Profile", "--import-device-relay-profile=true" })
+                Assert(!ServiceStartupOptions.Parse(new[] { value }, out hostArgs).ImportDeviceRelayProfile,
+                    "Nonexact import argument was accepted.");
+            foreach (var other in new[] { ServiceStartupOptions.ImportDeviceRelayProfileArgument, ServiceStartupOptions.InitializeAuthoritativeStateArgument })
+                AssertThrows<ArgumentException>(() => ServiceStartupOptions.Parse(
+                    new[] { ServiceStartupOptions.ImportDeviceRelayProfileArgument, other }, out hostArgs));
             return Task.CompletedTask;
+        }
+
+        public static async Task ImportsProfileBeforeIpcAsync()
+        {
+            var options = ServiceStartupOptions.Parse(new[] { ServiceStartupOptions.ImportDeviceRelayProfileArgument }, out _);
+            foreach (var fail in new[] { false, true })
+            {
+                var events = new List<string>();
+                var initializer = new ServiceBoundaryInitializer(new OrderedWriterLease(events), new OrderedBoundaryGuard(events),
+                    new OrderedBoundaryBootstrapper(events), new OrderedStateStore(events),
+                    new OrderedStateInitializer(events) { FailImport = fail }, new OrderedPolicyReconciler(events),
+                    new NoProxyIdentityProvider(), new OrderedPipeSupervisor(events), options);
+                if (fail)
+                {
+                    await AssertThrowsAsync<InvalidOperationException>(() => initializer.InitializeAsync(default));
+                    Assert(!events.Contains("pipes") && !events.Contains("reconcile") && !events.Contains("load"),
+                        "Failed import exposed IPC or proceeded into policy startup.");
+                }
+                else
+                {
+                    await initializer.InitializeAsync(default);
+                    AssertSequence(events, new[] { "acl", "lease", "acl", "import-profile", "acl", "load", "reconcile", "pipes" });
+                    await initializer.ShutdownAsync(default);
+                }
+                Assert(!events.Contains("initialize-state") && !events.Contains("prepare-empty-boundary"),
+                    "Import mode recreated the device boundary/identity.");
+            }
+            using var host = GuardServiceHost.Build(new[] { ServiceStartupOptions.ImportDeviceRelayProfileArgument });
+            Assert(host.Services.GetRequiredService<ServiceStartupOptions>().ImportDeviceRelayProfile &&
+                !host.Services.GetRequiredService<ServiceAuthoritativeStateBoundary>().IsAcquired,
+                "Import composition opened production storage before the execution guard.");
         }
 
         public static async Task RejectsBootstrapOutsideServiceBoundaryAsync()
@@ -617,6 +658,15 @@ namespace Guard.Service.Tests
         private sealed class OrderedStateInitializer :
             IServiceAuthoritativeStateInitializer
         {
+            internal bool FailImport { get; init; }
+            public Task ImportDeviceRelayProfileAsync(CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _events.Add("import-profile");
+                if (FailImport) throw new InvalidOperationException("Synthetic rejected profile.");
+                return Task.CompletedTask;
+            }
+
             private readonly List<string> _events;
 
             public OrderedStateInitializer(List<string> events)

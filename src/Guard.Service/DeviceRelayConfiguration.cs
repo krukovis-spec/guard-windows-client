@@ -102,6 +102,7 @@ internal sealed class DeviceRelayConfiguration
 internal sealed class DeviceRelayConfigurationStore(GuardDataPaths paths, IStateDataProtector protector, IServiceDataBoundaryGuard boundary)
 {
     internal const string Purpose = "guard-v2-device-relay-configuration-v1";
+    internal const string InstallPurpose = "guard-v2-device-relay-install-v1";
     internal const int MaximumPlaintextBytes = 4096;
     private readonly ProtectedServiceRecord _record = new(paths.DeviceRelayConfigurationFile, paths.DeviceRelayConfigurationPendingFile,
         protector, boundary, MaximumPlaintextBytes, 8192);
@@ -119,7 +120,8 @@ internal sealed class DeviceRelayConfigurationStore(GuardDataPaths paths, IState
     }
 
     internal async Task InstallNewAsync(byte[] trustedProfile, EnrollmentDeploymentTrust trust,
-        ServiceAuthoritativeStateBoundary service, DateTimeOffset now, CancellationToken cancellationToken)
+        ServiceAuthoritativeStateBoundary service, DateTimeOffset now, CancellationToken cancellationToken,
+        bool resumeIdenticalInstall = false)
     {
         if (trustedProfile == null || trustedProfile.Length > MaximumPlaintextBytes) throw new InvalidDataException("Connection profile size.");
         var plaintext = (byte[])trustedProfile.Clone();
@@ -132,7 +134,40 @@ internal sealed class DeviceRelayConfigurationStore(GuardDataPaths paths, IState
             if (pristineState.Version != 0 || pristineState.IsProvisioned || pristineState.SetupChallenge != null ||
                 pristineState.Enrollment != null || pristineState.ChildAccountSid != null || config.DeviceEpoch != 1 || config.AuthorityEpoch != 1)
                 throw new InvalidOperationException("Connection installation requires pristine initial state.");
-            await _record.PublishNewAsync(plaintext, cancellationToken).ConfigureAwait(false);
+            if (resumeIdenticalInstall && File.Exists(paths.DeviceRelayConfigurationFile))
+            {
+                // Crash after publication but before consuming the installer handoff: no replacement or rotation.
+                var saved = _record.Read();
+                try
+                {
+                    if (!CryptographicOperations.FixedTimeEquals(saved, plaintext))
+                        throw new InvalidDataException("Installed connection differs from installer handoff.");
+                }
+                finally { CryptographicOperations.ZeroMemory(saved); }
+            }
+            else await _record.PublishNewAsync(plaintext, cancellationToken).ConfigureAwait(false);
+        }
+        finally { CryptographicOperations.ZeroMemory(plaintext); }
+    }
+
+    // Only the explicit SCM startup mode calls this, before IPC, under the service writer lease.
+    // The SYSTEM installer stages DPAPI ciphertext with InstallPurpose, never a token in args/appsettings.
+    internal async Task ImportStagedAsync(EnrollmentDeploymentTrust trust, ServiceAuthoritativeStateBoundary service,
+        IStateDataProtector handoffProtector, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!service.IsAcquired) throw new InvalidOperationException("Profile import requires the service writer lease.");
+        var handoff = new ProtectedServiceRecord(paths.DeviceRelayInstallFile, paths.DeviceRelayInstallPendingFile,
+            handoffProtector, boundary, MaximumPlaintextBytes, 8192);
+        var plaintext = handoff.Read();
+        try
+        {
+            await InstallNewAsync(plaintext, trust, service, now, cancellationToken, resumeIdenticalInstall: true).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            boundary.DemandReady();
+            cancellationToken.ThrowIfCancellationRequested();
+            // Consume only this exact protected handoff after a validated durable install. Failure retains it for retry.
+            File.Delete(paths.DeviceRelayInstallFile);
         }
         finally { CryptographicOperations.ZeroMemory(plaintext); }
     }
