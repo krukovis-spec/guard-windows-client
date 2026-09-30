@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — first-device bootstrap without a guessed phone and stale-scope rejection
+
+- Reproduced HTTP 400 provisioning a device without a future phone recipient. Reused the existing explicit scope list: device `[]` now allows own inbox/GREX but no GRF1 destination; missing/null/wildcard/duplicates and empty approval scope remain invalid. No new role, schema, dependency or placeholder key. Only the existing off-PC admin operation may later set/withdraw confirmed recipients; real operator/installer integration is not yet implemented.
+- Traced shared authorization across awaits: one synchronous current-token/scope check before mailbox-local mutations rejects revocation/expiry or changed authority without using the old snapshot. Frame expiry also rechecked before publish; initial admin bootstrap moved its emptiness check after digest, avoiding two concurrent winners. Existing GREX tests now provision zero future recipients. All 54 Worker tests + typecheck PASS: HTTP/SQLite/crypto transport, first bootstrap concurrency, grant/withdraw and privilege denial, nine slow-body scenarios for frames, token creation/deletion, ack, intent operations and locator redemption with unchanged state after denial. No claim of distributed BFF revocation or retrospective deletion of delivered frames.
+- PROJECT_ONLY capsule/plan/Worker README updated. No deployed cloud/account/auth/secret changed, so service-connection registry unchanged; no host or VM policy/phone run. Actual release identity/provisioning/setup UI and M1 strict expiry remain open. Ponytail reused validation/SQL/runner, without another bootstrap role or store.
+
 ## 2026-10-01 — deployment trust pins and protected device relay configuration
 
 - Added compiled public release pins with no runtime trust fallback, strict bounded device profile under separate DPAPI purpose, and ServiceNativeEnrollment composition using persistent keys, actual Google roots/status and existing coordinator/HTTP. Reused immutable protected-file publication for identity/config; no new dependency, system action or network during composition. Import itself reads current pristine state through the held writer boundary; no caller-supplied stale-state authorization or overwrite. It remains an internal pre-IPC installer operation, not a child/relay/phone API.

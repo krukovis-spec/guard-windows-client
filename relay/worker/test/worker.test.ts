@@ -33,6 +33,112 @@ function buildFrame(cursor: number, id: string, kind = 1, recipient = parentReci
 }
 
 describe("mailbox authorization and signing intent", () => {
+  it("commits only one concurrent initial mailbox administrator", async () => {
+    const mailbox = "mailbox-bootstrap-race-0001";
+    const responses = await Promise.all([adminToken, "z".repeat(32)].map(accessToken => request("/v1/admin/bootstrap", {
+      method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" },
+      body: JSON.stringify({ mailboxId: mailbox, accessToken }),
+    })));
+    expect(responses.map(response => response.status).sort()).toEqual([201, 409]);
+    await runInDurableObject(env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox)), (_instance, state) => {
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens WHERE role='admin'")][0]!.n).toBe(1);
+    });
+  });
+
+  it("rejects stale scope, role or lifetime after reading a slow mutating request", async () => {
+    const cases = [
+      ["frames", "POST", deviceToken, "UPDATE tokens SET publish_recipient_key_ids='[]' WHERE role='device'", 403],
+      ["frames", "POST", deviceToken, "UPDATE tokens SET expires_at=0 WHERE role='device'", 401],
+      ["tokens", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
+      ["tokens", "DELETE", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
+      ["ack", "POST", deviceToken, "UPDATE tokens SET recipient_key_id='recipient-other-0001' WHERE role='device'", 403],
+      ...["reserve", "finalize", "cancel"].map(operation => ["intents/" + operation, "POST", approvalToken,
+        "UPDATE tokens SET authority_epoch=2 WHERE role='approval'", 403] as const),
+      ["locators/redeem", "POST", approvalToken, "UPDATE tokens SET view_recipient_key_ids='[\"recipient-other-0001\"]' WHERE role='approval'", 403],
+    ] as const;
+    for (const [index, [route, method, token, mutation, status]] of cases.entries()) {
+      const mailbox = `mailbox-slow-scope-${index}-0001`, prefix = `/v1/mailboxes/${mailbox}`;
+      const post = (path: string, bearerToken: string, body: unknown) => request(path, {
+        method: "POST", headers: { ...bearer(bearerToken), "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      expect((await post("/v1/admin/bootstrap", bootstrapToken, { mailboxId: mailbox, accessToken: adminToken })).status).toBe(201);
+      for (const [accessToken, role] of [[deviceToken, "device"], [approvalToken, "approval"]] as const)
+        expect((await post(prefix + "/tokens", adminToken, { accessToken, role, expiresAt: Date.now() + 600000,
+          recipientKeyId: role === "device" ? deviceRecipient : parentRecipient,
+          publishRecipientKeyIds: [role === "device" ? parentRecipient : deviceRecipient],
+          ...(role === "approval" ? { approvalKeyId: "approval-signing-0001", authorityEpoch: 1, viewRecipientKeyIds: [parentRecipient] } : {}),
+        })).status).toBe(201);
+      const payload = route === "frames" ? buildFrame(1, "frame-slow-scope-001", 1, parentRecipient, mailbox) : new TextEncoder().encode(JSON.stringify(
+        route === "tokens" ? (method === "DELETE" ? { accessToken: deviceToken } : {
+          accessToken: "x".repeat(32), role: "reader", recipientKeyId: parentRecipient, publishRecipientKeyIds: [], expiresAt: Date.now() + 600000,
+        }) : route === "ack" ? { recipientKeyId: deviceRecipient, cursor: 0 } : route === "locators/redeem" ? { locator: "A".repeat(43) } :
+          { keyId: "approval-signing-0001", authorityEpoch: 1, intentId: "intent-slow-test-0001" }));
+      await runInDurableObject(env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox)), async (instance, state) => {
+        let started!: () => void;
+        const reading = new Promise<void>(resolve => { started = resolve; });
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; }, pull() { started(); } }, { highWaterMark: 0 });
+        const pending = instance.fetch(new Request(`https://mailbox.internal${prefix}/${route}`, {
+          method, headers: { "x-guard-token": token, "content-type": route === "frames" ? "application/octet-stream" : "application/json" }, body: stream,
+        }));
+        await reading;
+        state.storage.sql.exec(mutation);
+        const capture = () => ["tokens", "frames", "acknowledgements", "intents", "sequence_floors", "parent_locators"]
+          .map(table => [...state.storage.sql.exec(`SELECT * FROM ${table} ORDER BY rowid`)]);
+        const before = capture();
+        controller.enqueue(payload); controller.close();
+        expect((await pending).status, route).toBe(status);
+        expect(capture(), route + " mutated state after scope change").toEqual(before);
+      });
+    }
+  });
+
+  it("starts a device without invented phone recipients and grants only an explicit later scope", async () => {
+    const mailbox = "mailbox-before-phone-0001", prefix = `/v1/mailboxes/${mailbox}`;
+    const jsonCall = (path: string, token: string, body: unknown, method = "POST") => request(path, {
+      method, headers: { ...bearer(token), "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    expect((await jsonCall("/v1/admin/bootstrap", bootstrapToken, { mailboxId: mailbox, accessToken: adminToken })).status).toBe(201);
+    const scope = { accessToken: deviceToken, role: "device", recipientKeyId: deviceRecipient,
+      publishRecipientKeyIds: [] as string[], expiresAt: Date.now() + 600000 };
+    expect((await jsonCall(prefix + "/tokens", adminToken, scope)).status).toBe(201);
+    const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox));
+    await runInDurableObject(stub, (_instance, state) => { new DeviceMailbox(state, env); });
+    const publish = (id: string, kind = 1, recipient = parentRecipient) => request(prefix + "/frames", {
+      method: "POST", headers: bearer(deviceToken), body: buildFrame(1, id, kind, recipient, mailbox),
+    });
+    for (const kind of [1, 2, 3, 4])
+      expect((await publish(`frame-unbound-${kind}-0001`, kind)).status).toBe(403);
+    expect((await publish("frame-to-self-0001", 1, deviceRecipient)).status).toBe(403);
+    expect((await request(prefix + `/poll?recipient=${deviceRecipient}&after=0`, { headers: bearer(deviceToken) })).status).toBe(200);
+    expect((await request(prefix + `/poll?recipient=${parentRecipient}&after=0`, { headers: bearer(deviceToken) })).status).toBe(403);
+    expect((await jsonCall(prefix + "/ack", deviceToken, { recipientKeyId: parentRecipient, cursor: 1 })).status).toBe(403);
+    for (const body of [{ ...scope, publishRecipientKeyIds: [parentRecipient] }, { ...scope, role: "admin", recipientKeyId: undefined }])
+      expect((await jsonCall(prefix + "/tokens", deviceToken, body)).status).toBe(403);
+    expect((await jsonCall(prefix + "/tokens", deviceToken, { accessToken: adminToken }, "DELETE")).status).toBe(403);
+    for (const route of ["registration-tickets", "intents/reserve", "locators/redeem"])
+      expect((await jsonCall(prefix + "/" + route, deviceToken, {})).status).toBe(403);
+    const approval = { ...scope, accessToken: approvalToken, role: "approval", approvalKeyId: "approval-signing-0001",
+      authorityEpoch: 1, viewRecipientKeyIds: [parentRecipient] };
+    for (const body of [approval, { ...scope, publishRecipientKeyIds: null },
+      { ...scope, publishRecipientKeyIds: undefined }, { ...scope, recipientKeyId: undefined },
+      { ...scope, publishRecipientKeyIds: ["*"] }, { ...scope, publishRecipientKeyIds: [parentRecipient, parentRecipient] }])
+      expect((await jsonCall(prefix + "/tokens", adminToken, body)).status).toBe(400);
+    // Invalid updates cannot broaden or invalidate the previously installed empty scope.
+    expect((await publish("frame-still-unbound-01")).status).toBe(403);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM frames")][0]!.n).toBe(0);
+    });
+    expect((await jsonCall(prefix + "/tokens", adminToken, { ...scope, publishRecipientKeyIds: [parentRecipient] })).status).toBe(201);
+    expect((await publish("frame-after-binding-01")).status).toBe(201);
+    expect((await publish("frame-other-parent-01", 1, "recipient-other-0001")).status).toBe(403);
+    // Withdrawing destinations leaves the same token usable for its own inbox/ceremony only.
+    expect((await jsonCall(prefix + "/tokens", adminToken, scope)).status).toBe(201);
+    expect((await publish("frame-after-withdraw-01")).status).toBe(403);
+    expect((await jsonCall(prefix + "/tokens", adminToken, { accessToken: deviceToken }, "DELETE")).status).toBe(204);
+    expect((await request(prefix + `/poll?recipient=${deviceRecipient}&after=0`, { headers: bearer(deviceToken) })).status).toBe(401);
+  });
+
   it("fails closed when bootstrap secret is absent", async () => {
     const result = await request("/v1/admin/bootstrap", { method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ mailboxId: "mailbox-test-0001", accessToken: adminToken }) });
     expect(result.status).toBe(403);

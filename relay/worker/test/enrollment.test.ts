@@ -22,7 +22,7 @@ async function setup(mailbox: string, capability = phone): Promise<number> {
   expect((await call("/v1/admin/bootstrap", bootstrap, "POST", { mailboxId: mailbox, accessToken: admin })).status).toBe(201);
   for (const [token, key] of [[device, recipient], [other, "other-device-key-0001"]])
     expect((await call(`/v1/mailboxes/${mailbox}/tokens`, admin, "POST", { accessToken: token, role: "device", recipientKeyId: key,
-      publishRecipientKeyIds: ["parent-recipient-0001"], expiresAt: Date.now() + 3600000 })).status).toBe(201);
+      publishRecipientKeyIds: [], expiresAt: Date.now() + 3600000 })).status).toBe(201);
   const expiresAt = Date.now() + 300000;
   expect((await call(base(mailbox), device, "POST", { phoneToken: capability, expiresAt })).status).toBe(201);
   return expiresAt;
