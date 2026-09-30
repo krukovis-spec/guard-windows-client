@@ -54,18 +54,12 @@ internal sealed class DeviceIdentityStore(GuardDataPaths paths, IStateDataProtec
 {
     internal const string Purpose = "guard-v2-device-identity-v1";
     internal const int MaximumPlaintextBytes = 1200, MaximumFileBytes = 4096;
+    private readonly ProtectedServiceRecord _record = new(paths.DeviceIdentityFile, paths.DeviceIdentityPendingFile,
+        protector, boundary, MaximumPlaintextBytes, MaximumFileBytes);
 
     internal DeviceIdentity Load()
     {
-        boundary.DemandReady();
-        if (File.Exists(paths.DeviceIdentityPendingFile))
-            throw new InvalidDataException("Interrupted device identity publication requires recovery.");
-        using var file = new FileStream(paths.DeviceIdentityFile, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (file.Length < 1 || file.Length > MaximumFileBytes) throw new InvalidDataException("Device identity size.");
-        var ciphertext = new byte[(int)file.Length];
-        file.ReadExactly(ciphertext);
-        if (file.ReadByte() != -1) throw new InvalidDataException("Device identity changed while reading.");
-        var plaintext = protector.Unprotect(ciphertext);
+        var plaintext = _record.Read();
         DeviceIdentity? identity = null;
         try
         {
@@ -93,32 +87,9 @@ internal sealed class DeviceIdentityStore(GuardDataPaths paths, IStateDataProtec
         using var encryption = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         var deviceId = "device-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var plaintext = Encode(deviceId, signing, encryption);
-        byte[] ciphertext;
-        try { ciphertext = protector.Protect(plaintext); }
+        try { await _record.PublishNewAsync(plaintext, cancellationToken).ConfigureAwait(false); }
         finally { CryptographicOperations.ZeroMemory(plaintext); }
-        if (ciphertext.Length < 1 || ciphertext.Length > MaximumFileBytes) throw new InvalidDataException("Protected device identity size.");
-        var ownsPending = false;
-        try
-        {
-            await using (var pending = new FileStream(paths.DeviceIdentityPendingFile, FileMode.CreateNew,
-                FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                ownsPending = true;
-                await pending.WriteAsync(ciphertext, cancellationToken).ConfigureAwait(false);
-                await pending.FlushAsync(cancellationToken).ConfigureAwait(false);
-                pending.Flush(flushToDisk: true);
-            }
-            cancellationToken.ThrowIfCancellationRequested();
-            boundary.DemandReady();
-            cancellationToken.ThrowIfCancellationRequested();
-            File.Move(paths.DeviceIdentityPendingFile, paths.DeviceIdentityFile, overwrite: false);
-            ownsPending = false;
-            return Load();
-        }
-        finally
-        {
-            if (ownsPending) File.Delete(paths.DeviceIdentityPendingFile);
-        }
+        return Load();
     }
 
     // ponytail: one immutable record, no second journal/rotation protocol; replacement requires explicit recovery.

@@ -45,7 +45,8 @@ namespace Guard.Windows.Crypto.Tests
                 ("DPAPI purpose mismatch and tampering fail closed", RejectsWrongPurposeAndTampering),
                 ("production protector requires LocalSystem", RequiresLocalSystemForProduction),
                 ("DPAPI purposes and payloads are bounded", RejectsInvalidDpapiInputs),
-                ("device identity persists before state and never silently regenerates", DeviceIdentityChecks.Run)
+                ("device identity persists before state and never silently regenerates", DeviceIdentityChecks.Run),
+                ("enrollment configuration requires release pins and exact device binding", EnrollmentConfigurationChecks.Run)
             };
 
             var failures = 0;

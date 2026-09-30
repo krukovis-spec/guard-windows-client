@@ -44,20 +44,10 @@ namespace Guard.Service
         internal HttpRelayTransport(Uri origin, string mailboxId, string recipientKeyId, string accessToken,
             HttpMessageHandler? handler, TimeSpan requestTimeout)
         {
-            if (origin == null || !origin.IsAbsoluteUri || origin.Scheme != Uri.UriSchemeHttps ||
-                !origin.IsDefaultPort || origin.HostNameType != UriHostNameType.Dns || origin.IsLoopback ||
-                origin.UserInfo.Length != 0 || origin.AbsolutePath != "/" ||
-                origin.Query.Length != 0 || origin.Fragment.Length != 0)
-            {
-                throw new ArgumentException("An enrollment-pinned HTTPS origin is required.", nameof(origin));
-            }
+            RequireOrigin(origin);
             RequireIdentifier(mailboxId);
             RequireIdentifier(recipientKeyId);
-            if (accessToken == null || accessToken.Length < 32 || accessToken.Length > 512)
-                throw new ArgumentException("A bounded relay credential is required.", nameof(accessToken));
-            foreach (var character in accessToken)
-                if (character < '!' || character > '~')
-                    throw new ArgumentException("Invalid relay credential encoding.", nameof(accessToken));
+            RequireCredential(accessToken);
             if (requestTimeout <= TimeSpan.Zero || requestTimeout > TimeSpan.FromSeconds(30))
                 throw new ArgumentOutOfRangeException(nameof(requestTimeout));
 
@@ -77,6 +67,23 @@ namespace Guard.Service
                 MaxConnectionsPerServer = 2,
                 PooledConnectionLifetime = TimeSpan.FromMinutes(5)
             }, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
+        }
+
+        internal static void RequireOrigin(Uri origin)
+        {
+            if (origin == null || !origin.IsAbsoluteUri || origin.Scheme != Uri.UriSchemeHttps ||
+                !origin.IsDefaultPort || origin.HostNameType != UriHostNameType.Dns || origin.IsLoopback ||
+                origin.UserInfo.Length != 0 || origin.AbsolutePath != "/" || origin.Query.Length != 0 || origin.Fragment.Length != 0)
+                throw new ArgumentException("An enrollment-pinned HTTPS origin is required.", nameof(origin));
+        }
+
+        internal static void RequireCredential(string accessToken)
+        {
+            if (accessToken == null || accessToken.Length < 32 || accessToken.Length > 512)
+                throw new ArgumentException("A bounded relay credential is required.", nameof(accessToken));
+            foreach (var character in accessToken)
+                if (character < '!' || character > '~')
+                    throw new ArgumentException("Invalid relay credential encoding.", nameof(accessToken));
         }
 
         // One bounded pass. Failure/CAS conflict retains the exact durable bytes for retry.
@@ -307,7 +314,7 @@ namespace Guard.Service
             if (cursor < 0 || cursor > MaximumCursor) throw new ArgumentOutOfRangeException(nameof(cursor));
         }
 
-        private static void RequireObject(JsonElement value, params string[] expectedNames)
+        internal static void RequireObject(JsonElement value, params string[] expectedNames)
         {
             if (value.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Relay JSON object required.");
             var seen = new HashSet<string>(StringComparer.Ordinal);
