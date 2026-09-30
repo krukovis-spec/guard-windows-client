@@ -36,6 +36,15 @@ $projects = @(
 
 Push-Location $root
 try {
+    # --no-build is safe only if the solution actually builds every allowlisted harness.
+    $solution = Get-Content -LiteralPath (Join-Path $root 'guard.sln') -Raw -Encoding UTF8
+    foreach ($name in $projects) {
+        $entry = [regex]::Match($solution, '"' + [regex]::Escape("tests\$name\$name.csproj") + '", "(\{[A-F0-9-]+\})"')
+        if (-not $entry.Success -or -not $solution.Contains($entry.Groups[1].Value + '.Release|Any CPU.ActiveCfg = Release|Any CPU') -or
+            -not $solution.Contains($entry.Groups[1].Value + '.Release|Any CPU.Build.0 = Release|Any CPU')) {
+            throw "Allowlisted test project is missing from the Release solution build: $name"
+        }
+    }
     if (-not $SkipBuild) {
         & dotnet msbuild guard.sln /restore /p:Configuration=Release '/p:Platform=Any CPU' /verbosity:minimal /nologo
         if ($LASTEXITCODE -ne 0) { throw 'Solution build failed.' }
