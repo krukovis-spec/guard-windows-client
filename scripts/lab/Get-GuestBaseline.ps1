@@ -26,6 +26,13 @@ $appLocker = [xml]$appLockerXml
 $sha = [Security.Cryptography.SHA256]::Create()
 try { $policyHash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($appLockerXml))).Replace('-', '').ToLowerInvariant() }
 finally { $sha.Dispose() }
+$ciTool = 'C:\Windows\System32\CiTool.exe'
+if (-not (Test-Path -LiteralPath $ciTool)) { throw 'Native App Control inventory unavailable' }
+$ciOutput = & $ciTool --list-policies -json
+if ($LASTEXITCODE -ne 0) { throw ('Native App Control inventory failed: ' + $LASTEXITCODE) }
+$ciInventory = ($ciOutput | Out-String) | ConvertFrom-Json
+if (-not ($ciInventory.PSObject.Properties.Name -contains 'Policies')) { throw 'Unknown native App Control inventory shape' }
+$ciPolicies = @($ciInventory.Policies | Sort-Object PolicyID | Select-Object PolicyID,FriendlyName,IsSystemPolicy,IsSignedPolicy,IsOnDisk,IsEnforced,IsAuthorized)
 
 [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
@@ -48,7 +55,8 @@ finally { $sha.Dispose() }
         [pscustomobject]@{Type=$_.Type;Mode=$_.EnforcementMode;Rules=@($_.ChildNodes | Where-Object {$_.NodeType -eq 'Element'}).Count}
     })
     HasConfigCi = [bool](Get-Module -ListAvailable ConfigCI)
-    HasCiTool = Test-Path -LiteralPath 'C:\Windows\System32\CiTool.exe'
+    HasCiTool = $true
+    AppControlPolicies = $ciPolicies
     RecoveryEnvironment = (& 'C:\Windows\System32\reagentc.exe' /info | Out-String).Trim()
     RecoveryProbeExit = $LASTEXITCODE
     FreeDiskBytes = (Get-Volume -DriveLetter C).SizeRemaining
