@@ -8,6 +8,8 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using Guard.Domain;
+using Guard.Contracts.Relay;
+using Guard.Protocol.Relay;
 
 namespace Guard.Windows.Cryptography;
 
@@ -33,6 +35,48 @@ public sealed class AndroidApprovalAttestation
         _roots = trustedRoots.Select(CopyCertificate).ToArray();
         _apkSigner = (byte[])apkSignerSha256.Clone();
         _minimumAppVersion = minimumAppVersion;
+    }
+
+    /// <summary>
+    /// Verify a candidate against the locally persisted offer and SYSTEM-held SHA256(setup secret).
+    /// Success is NOT permission to commit: the elevated setup session must confirm this exact claim
+    /// and consume the still-current challenge in a single CAS. A photographed QR is not parent identity.
+    /// </summary>
+    public bool VerifyEnrollmentCandidate(EnrollmentOffer trustedOffer, byte[] setupSecretHash, EnrollmentKeyClaim claim,
+        byte[] possessionMac, IReadOnlyList<byte[]> leafFirst, byte[] proofP1363,
+        AndroidAttestationRevocations revocations, DateTimeOffset now)
+    {
+        try
+        {
+            Require(trustedOffer != null && claim != null && setupSecretHash != null && setupSecretHash.Length == 32);
+            Require(possessionMac != null && possessionMac.Length == 32);
+            Require(now >= trustedOffer.CreatedAtUtc && now < trustedOffer.ExpiresAtUtc);
+            Require(!CryptographicOperations.FixedTimeEquals(trustedOffer.GetChallengeCopy(), setupSecretHash)
+                && !CryptographicOperations.FixedTimeEquals(SHA256.HashData(trustedOffer.GetChallengeCopy()), setupSecretHash));
+            var offerHash = RelayCanonicalEncoding.ComputeEnrollmentOfferHash(trustedOffer);
+            Require(CryptographicOperations.FixedTimeEquals(offerHash, claim.GetOfferHashCopy()));
+            Require(CryptographicOperations.FixedTimeEquals(possessionMac,
+                RelayCanonicalEncoding.ComputeEnrollmentClaimProof(setupSecretHash, claim)));
+            var approval = new ParentTrustAnchor(ParentKeyAlgorithm.EcdsaP256Sha256, claim.GetApprovalKeyCopy());
+            Require(claim.ApprovalKeyId == approval.KeyId);
+            Require(new[] { trustedOffer.SigningKeyId, trustedOffer.EncryptionKeyId, claim.ApprovalKeyId, claim.EncryptionKeyId }
+                .Distinct(StringComparer.Ordinal).Count() == 4);
+            var points = new[] { trustedOffer.GetSigningKeyCopy(), trustedOffer.GetEncryptionKeyCopy(),
+                claim.GetApprovalKeyCopy()[26..], claim.GetEncryptionKeyCopy() };
+            for (var i = 0; i < points.Length; i++)
+            {
+                var point = points[i]; Require(point.Length == 65 && point[0] == 4);
+                using var native = ECDiffieHellman.Create(new ECParameters { Curve = ECCurve.NamedCurves.nistP256,
+                    Q = new ECPoint { X = point[1..33], Y = point[33..65] } });
+                for (var j = 0; j < i; j++) Require(!point.AsSpan().SequenceEqual(points[j]));
+            }
+            return Verify(approval, leafFirst, offerHash, RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim),
+                proofP1363, revocations, now);
+        }
+        catch (Exception error) when (error is ArgumentException or CryptographicException or InvalidOperationException or OverflowException or PlatformNotSupportedException)
+        {
+            return false;
+        }
     }
 
     /// <param name="expectedChallenge">Trusted setup transcript digest, exactly 32 bytes.</param>

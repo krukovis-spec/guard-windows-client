@@ -142,7 +142,7 @@ object GuardWire {
     private fun lifetime(start: Long, end: Long, max: Long) { requireLifetime(start, end, max) }
 }
 
-private class Writer(magic: String) {
+internal class Writer(magic: String) {
     private val out = ByteArrayOutputStream()
     init { out.write(magic.toByteArray(Charsets.US_ASCII)); i32(VERSION) }
     fun i32(value: Int) { out.write(ByteBuffer.allocate(4).putInt(value).array()) }
@@ -156,7 +156,8 @@ private class Writer(magic: String) {
     fun finish(): ByteArray = out.toByteArray().also { require(it.size <= MAX_BYTES) { "oversized relay message" } }
 }
 
-private class Reader(private val raw: ByteArray, magic: String) {
+internal class Reader(encoded: ByteArray, magic: String) {
+    private val raw = encoded.also { require(it.size <= MAX_BYTES) }.copyOf()
     private var position = 0
     init { require(raw.size <= MAX_BYTES); require(String(take(4), Charsets.US_ASCII) == magic); require(i32() == VERSION) }
     fun i32(): Int = ByteBuffer.wrap(take(4)).int
@@ -173,8 +174,16 @@ private class Reader(private val raw: ByteArray, magic: String) {
 
 private fun Int.bounded(minimum: Int, maximum: Int): Int { require(this in minimum..maximum) { "length" }; return this }
 private fun canonicalText(value: String, empty: Boolean): String {
-    require((empty || value.isNotEmpty()) && value.none { it.code < 0x20 || it == '\u007f' }) { "text" }
-    return Normalizer.normalize(value, Normalizer.Form.NFC)
+    require((empty || value.isNotEmpty()) && value.none { Character.isISOControl(it) }) { "text" }
+    require(Normalizer.isNormalized(value, Normalizer.Form.NFC)) { "NFC" }
+    var index = 0
+    while (index < value.length) {
+        val ch = value[index++]
+        if (Character.isHighSurrogate(ch)) {
+            require(index < value.length && Character.isLowSurrogate(value[index++])) { "surrogate" }
+        } else require(!Character.isLowSurrogate(ch)) { "surrogate" }
+    }
+    return value
 }
 private fun canonicalId(value: String): Boolean = value.length in 16..128 && value.all { it.isAsciiLetterOrDigit() || it == '-' || it == '_' || it == '.' || it == ':' }
 private fun Char.isAsciiLetterOrDigit() = this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'

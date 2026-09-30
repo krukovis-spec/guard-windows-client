@@ -7,7 +7,7 @@ using Guard.Contracts.Relay;
 
 namespace Guard.Protocol.Relay
 {
-    public static class RelayCanonicalEncoding
+    public static partial class RelayCanonicalEncoding
     {
         private static readonly UTF8Encoding Utf8 =
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
@@ -970,7 +970,7 @@ namespace Guard.Protocol.Relay
                         "Invalid relay message.");
                 }
 
-                _data = encoded;
+                _data = (byte[])encoded.Clone();
                 for (var index = 0;
                     index < expectedMagic.Length;
                     index++)

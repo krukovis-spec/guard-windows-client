@@ -1,38 +1,50 @@
 package app.guard.parent.enrollment
 
-import java.util.Base64
-import app.guard.parent.security.parseQuery
-import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
+import app.guard.parent.protocol.*
 import java.security.MessageDigest
+import java.util.Base64
 
-data class EnrollmentTranscript(val relayEndpoint: String, val enrollmentId: String, val challenge: ByteArray, val transcriptHash: ByteArray)
-data class EnrollmentRelayBinding(val canonicalRelayEndpoint: String) {
-    init { require(canonicalRelayEndpoint.matches(Regex("^https://[a-z0-9.-]+(?:/[-a-z0-9._~]*)?$"))) }
+class EnrollmentRelayBinding(val canonicalRelayEndpoint: String) {
+    init { EnrollmentWire.requireRelay(canonicalRelayEndpoint) }
 }
 
-/** Scanner adapters pass decoded text here. The QR payload is native-only and never interpreted by web UI. */
-object EnrollmentQrParser {
-    private val token = Regex("^[A-Za-z0-9._~-]{16,256}$")
-    fun parse(text: String, binding: EnrollmentRelayBinding): EnrollmentTranscript {
-        val uri = java.net.URI(text)
-        require(uri.scheme == "guard-enroll" && uri.host == "v1") { "enrollment scheme" }
-        val query = parseQuery(uri.rawQuery)
-        require(query.keys == setOf("relay", "id", "challenge", "transcript") && query.values.all { it.size == 1 }) { "fields" }
-        fun field(name: String) = query[name]!!.single()
-        val endpoint = field("relay")
-        require(endpoint == binding.canonicalRelayEndpoint) { "unbound relay" }
-        val id = field("id"); require(token.matches(id))
-        fun b64(name: String): ByteArray = Base64.getUrlDecoder().decode(field(name))
-        val challenge = b64("challenge").also { require(it.size in 16..128) }
-        val transcript = b64("transcript").also { require(it.size == 32) }
-        require(MessageDigest.getInstance("SHA-256").digest(transcriptBytes(endpoint, id, challenge)).contentEquals(transcript)) { "transcript mismatch" }
-        return EnrollmentTranscript(endpoint, id, challenge, transcript)
+/** Native-only QR possession. This is NOT a completed/attested parent enrollment. */
+class EnrollmentTranscript internal constructor(val offer: EnrollmentOffer, secret: ByteArray) : AutoCloseable {
+    private val setupSecret = secret.copyOf()
+    private var closed = false
+    @Synchronized fun proofFor(claim: EnrollmentKeyClaim): ByteArray {
+        check(!closed) { "closed enrollment" }
+        require(MessageDigest.isEqual(claim.offerHash(), EnrollmentWire.offerHash(offer))) { "different offer" }
+        val proofKey = GuardWire.sha256(setupSecret)
+        return try { EnrollmentWire.claimProof(proofKey, claim) } finally { proofKey.fill(0) }
     }
-    /** Exact enrollment transcript: `GREN`, version int32, relay text, enrollment id text, challenge bytes. */
-    private fun transcriptBytes(endpoint: String, id: String, challenge: ByteArray): ByteArray = ByteArrayOutputStream().apply {
-        write("GREN".toByteArray(Charsets.US_ASCII)); write(ByteBuffer.allocate(4).putInt(1).array())
-        fun text(value: String) { val b = value.toByteArray(Charsets.UTF_8); write(ByteBuffer.allocate(4).putInt(b.size).array()); write(b) }
-        text(endpoint); text(id); write(ByteBuffer.allocate(4).putInt(challenge.size).array()); write(challenge)
-    }.toByteArray()
+    @Synchronized override fun close() { setupSecret.fill(0); closed = true }
+    // No data-class toString/copy that could disclose the secret.
+}
+
+/** No web navigation, URI normalization, duplicate fields or legacy weak GREN v1 transcript. */
+object EnrollmentQrParser {
+    fun parse(text: String, binding: EnrollmentRelayBinding, nowUnixMillis: Long): EnrollmentTranscript {
+        require(text.length <= 2200 && text.startsWith("guard-enroll://v2?offer=")) { "enrollment QR" }
+        val parts = text.removePrefix("guard-enroll://v2?offer=").split("&secret=")
+        require(parts.size == 2) { "fields" }
+        fun decode(value: String, max: Int): ByteArray {
+            require(value.isNotEmpty() && value.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' }) { "base64url" }
+            return Base64.getUrlDecoder().decode(value).also {
+                require(it.size <= max && Base64.getUrlEncoder().withoutPadding().encodeToString(it) == value) { "canonical base64url" }
+            }
+        }
+        val offer = EnrollmentWire.decodeOffer(decode(parts[0], 1536))
+        require(offer.relayEndpoint == binding.canonicalRelayEndpoint) { "unbound relay" }
+        require(nowUnixMillis >= offer.createdUnixMillis && nowUnixMillis < offer.expiryUnixMillis) { "expired enrollment" }
+        val secret = decode(parts[1], 32)
+        try {
+            require(secret.size == 32)
+            val proofKey = GuardWire.sha256(secret)
+            try { require(!MessageDigest.isEqual(secret, offer.challenge()) && !MessageDigest.isEqual(proofKey, offer.challenge())) { "public secret" } }
+            finally { proofKey.fill(0) }
+            return EnrollmentTranscript(offer, secret)
+        }
+        finally { secret.fill(0) }
+    }
 }

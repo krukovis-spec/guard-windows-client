@@ -6,6 +6,8 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Guard.Domain;
+using Guard.Contracts.Relay;
+using Guard.Protocol.Relay;
 using Guard.Windows.Cryptography;
 
 namespace Guard.Windows.Crypto.Tests;
@@ -97,7 +99,51 @@ internal static class AndroidAttestationChecks
             Throws(() => Status(json));
         Throws(() => AndroidAttestationRevocations.FromTrustedResponse("{\"entries\":{}}"u8.ToArray(), Now, Now.AddDays(2)));
         Throws(() => AndroidAttestationRevocations.FromTrustedResponse(new byte[1024 * 1024 + 1], Now, Now.AddHours(1)));
+        EnrollmentCandidate(fixture);
         Console.WriteLine($"PASS Android attestation: real synthetic certificate chains, {bad.Count} property/DER rejection cases, trust/proof/revocation/expiry/limits");
+    }
+
+    private static void EnrollmentCandidate(Fixture fixture)
+    {
+        using var deviceSigning = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var deviceEncryption = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var phoneEncryption = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        static byte[] Point(ECDsa key) => key.ExportSubjectPublicKeyInfo()[26..];
+        var offer = new EnrollmentOffer("https://relay.example.test", "enrollment-test-001", "device-test-00001", "Lab PC",
+            1, 1, "mailbox-test-00001", "device-sign-test1", Point(deviceSigning), "device-enc-test01", Point(deviceEncryption),
+            Now.AddMinutes(-1), Now.AddMinutes(4), Challenge);
+        var offerHash = RelayCanonicalEncoding.ComputeEnrollmentOfferHash(offer);
+        var claim = new EnrollmentKeyClaim(offerHash, fixture.Anchor.KeyId, fixture.Anchor.GetSubjectPublicKeyInfoCopy(),
+            "parent-enc-test01", Point(phoneEncryption));
+        var proofKey = SHA256.HashData("PUBLIC TEST SETUP SECRET ONLY!!!!"u8);
+        var mac = RelayCanonicalEncoding.ComputeEnrollmentClaimProof(proofKey, claim);
+        var signature = fixture.Sign(RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim));
+        var chain = fixture.Chain(Description(challenge: offerHash));
+        bool Verify(EnrollmentKeyClaim candidate, byte[]? candidateMac = null, byte[]? candidateSignature = null,
+            DateTimeOffset? now = null, byte[]? key = null, byte[][]? certificates = null) => fixture.Verifier.VerifyEnrollmentCandidate(
+                offer, key ?? proofKey, candidate, candidateMac ?? mac, certificates ?? chain, candidateSignature ?? signature,
+                fixture.Status, now ?? Now);
+        Check(Verify(claim), "canonical attested candidate rejected");
+        Check(!Verify(claim, key: new byte[32]), "wrong setup secret");
+        Check(!Verify(claim, candidateMac: new byte[32]), "wrong possession proof");
+        Check(!Verify(claim, candidateSignature: new byte[64]), "wrong claim signature");
+        Check(!Verify(claim, now: offer.ExpiresAtUtc), "candidate at expiry");
+        Check(!Verify(claim, now: offer.CreatedAtUtc.AddTicks(-1)), "candidate before offer");
+        Check(!Verify(claim, certificates: fixture.Chain(Description())), "chain for another offer");
+        var changes = new[] {
+            new EnrollmentKeyClaim(new byte[32], claim.ApprovalKeyId, claim.GetApprovalKeyCopy(), claim.EncryptionKeyId, claim.GetEncryptionKeyCopy()),
+            new EnrollmentKeyClaim(offerHash, "arbitrary-key-id1", claim.GetApprovalKeyCopy(), claim.EncryptionKeyId, claim.GetEncryptionKeyCopy()),
+            new EnrollmentKeyClaim(offerHash, claim.ApprovalKeyId, claim.GetApprovalKeyCopy(), offer.EncryptionKeyId, claim.GetEncryptionKeyCopy()),
+            new EnrollmentKeyClaim(offerHash, claim.ApprovalKeyId, claim.GetApprovalKeyCopy(), claim.EncryptionKeyId, offer.GetSigningKeyCopy()),
+            new EnrollmentKeyClaim(offerHash, claim.ApprovalKeyId, claim.GetApprovalKeyCopy(), claim.EncryptionKeyId, new byte[] {4}.Concat(new byte[64]).ToArray())
+        };
+        foreach (var changed in changes)
+        {
+            // Even a QR holder with a real approval signature cannot override bindings/key roles or submit an invalid point.
+            Check(!Verify(changed, RelayCanonicalEncoding.ComputeEnrollmentClaimProof(proofKey, changed),
+                fixture.Sign(RelayCanonicalEncoding.ComputeEnrollmentClaimHash(changed))), "candidate override accepted");
+        }
+        Console.WriteLine("PASS canonical enrollment candidate: real attestation + signature + QR MAC, binding/expiry/key-role rejection");
     }
 
     private static byte[] Description(int level = 1, int version = 100, int keyVersion = 100, int? keyLevel = null, byte[]? challenge = null,
@@ -183,6 +229,7 @@ internal static class AndroidAttestationChecks
             return new[] { leaf.RawData, issuer.RawData, _root.RawData };
         }
         public bool Verify(byte[] description) => Check(Chain(description));
+        public byte[] Sign(byte[] hash) => _leafKey.SignHash(hash, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
         public bool Check(byte[][] chain, AndroidAttestationRevocations? status = null) =>
             Verifier.Verify(Anchor, chain, Challenge, ClaimHash, Proof, status ?? Status, Now);
         private static CertificateRequest Request(string subject, ECDsa key, bool ca)
