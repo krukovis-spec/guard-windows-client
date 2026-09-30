@@ -1,6 +1,9 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
+param([switch]$AppControl)
 $ErrorActionPreference = 'Stop'
+$experimentName = if ($AppControl) {'appcontrol'} else {'applocker'}
+$experimentFile = if ($AppControl) {'Test-AppControlFeasibility.ps1'} else {'Test-AppLockerFeasibility.ps1'}
 $vmName = 'GuardV2-Lab-20260930'
 $vmId = [guid]'8f088b63-9193-4ecc-bb20-415ef11fd4c8'
 $biosGuid = [guid]'236ea6ef-9cc6-4295-9934-6f7497f9d262'
@@ -33,6 +36,7 @@ try {
         param([guid]$Uuid)
         $ErrorActionPreference = 'Stop'
         if ([guid](Get-CimInstance Win32_ComputerSystemProduct).UUID -ne $Uuid) { throw 'Guest identity changed' }
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
         $root = 'C:\GuardLab'
         $marker = Join-Path $root '.vm-identity'
         if ((Test-Path -LiteralPath $root) -and (-not (Test-Path -LiteralPath $marker) -or (Get-Content -LiteralPath $marker -Raw).Trim() -ne $Uuid.ToString())) { throw 'Unowned lab directory' }
@@ -40,9 +44,10 @@ try {
         $Uuid.ToString() | Set-Content -LiteralPath $marker -Encoding ASCII
     } -ArgumentList $biosGuid
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Marker.cs') -Destination 'C:\GuardLab\Marker.cs' -ToSession $session
-    $phase = 'applocker-experiment'
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'MarkerProcess.ps1') -Destination 'C:\GuardLab\MarkerProcess.ps1' -ToSession $session
+    $phase = $experimentName + '-experiment'
     $probeStarted = $true
-    $report.Experiment = Invoke-Command -Session $session -FilePath (Join-Path $PSScriptRoot 'Test-AppLockerFeasibility.ps1') -ArgumentList $biosGuid,$env:COMPUTERNAME
+    $report.Experiment = Invoke-Command -Session $session -FilePath (Join-Path $PSScriptRoot $experimentFile) -ArgumentList $biosGuid,$env:COMPUTERNAME
     if ($report.Experiment.Status -ne 'PASS') { throw $report.Experiment.Failure }
     $report.Status = 'PASS'
 } catch {
@@ -76,6 +81,9 @@ try {
                 }
                 $after = Invoke-Command -Session $bootSession -FilePath (Join-Path $PSScriptRoot 'Get-GuestBaseline.ps1') -ArgumentList $biosGuid,$env:COMPUTERNAME
                 if (@($after.AppLockerCollections | Where-Object { $_.Rules -gt 0 }).Count) { throw 'Unexpected policy after snapshot recovery' }
+                $beforeCi = @($baseline.AppControlPolicies | Sort-Object PolicyID | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.PolicyID,$_.IsSignedPolicy,$_.IsOnDisk,$_.IsEnforced }) -join ';'
+                $afterCi = @($after.AppControlPolicies | Sort-Object PolicyID | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.PolicyID,$_.IsSignedPolicy,$_.IsOnDisk,$_.IsEnforced }) -join ';'
+                if ($beforeCi -ne $afterCi) { throw 'Native App Control policy inventory changed after snapshot recovery' }
                 $report.AfterRecovery = $after
                 $report.SnapshotRecovery = 'BOOT_VERIFIED'
             } finally {
@@ -87,6 +95,6 @@ try {
             $report.RecoveryDescription = $_.Exception.Message
         }
     }
-    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $accessRoot 'applocker-result.json') -Encoding UTF8
+    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $accessRoot ($experimentName + '-result.json')) -Encoding UTF8
 }
 if ($report.Status -eq 'PASS') { exit 0 } else { exit 1 }

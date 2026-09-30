@@ -26,41 +26,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Marker v1 compile failed' }
 & $compiler /nologo /target:exe /optimize+ /warnaserror+ /define:VARIANT_TWO ('/out:' + $v2) (Join-Path $root 'Marker.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Marker v2 compile failed' }
 
-function Get-MarkerDecision([string]$Path) {
-    $process = New-Object Diagnostics.Process
-    $process.StartInfo.FileName = $Path
-    $process.StartInfo.UseShellExecute = $false
-    $process.StartInfo.CreateNoWindow = $true
-    $process.StartInfo.RedirectStandardOutput = $true
-    $process.StartInfo.RedirectStandardError = $true
-    try {
-        $process.Start() | Out-Null
-        if (-not $process.WaitForExit(15000)) { $process.Kill(); throw 'Marker exceeded its bounded run time' }
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $stderr = $process.StandardError.ReadToEnd()
-        if ($process.ExitCode -ne 0 -or $stdout -notmatch '^MARKER_STARTED v[12]') {
-            throw ('Marker sentinel failure: exit=' + $process.ExitCode + '; stdout=' + $stdout.Trim() + '; stderr=' + $stderr.Substring(0, [Math]::Min(1000, $stderr.Length)).Trim())
-        }
-        return 'Allowed'
-    } catch {
-        $exception = $_.Exception
-        while ($exception) {
-            if ($exception -is [ComponentModel.Win32Exception] -and $exception.NativeErrorCode -eq 1260) { return 'Blocked' }
-            $exception = $exception.InnerException
-        }
-        throw
-    } finally { $process.Dispose() }
-}
-
-function Wait-MarkerDecision([string]$Path, [string]$Expected) {
-    $timer = [Diagnostics.Stopwatch]::StartNew()
-    do {
-        $decision = Get-MarkerDecision $Path
-        if ($decision -eq $Expected) { return $decision }
-        Start-Sleep -Milliseconds 200
-    } while ($timer.Elapsed.TotalSeconds -lt 15)
-    throw ('Expected marker decision ' + $Expected + ', observed ' + $decision)
-}
+. (Join-Path $root 'MarkerProcess.ps1')
 
 $windowsInfo = Get-AppLockerFileInformation -Path 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
 $base = [xml](New-AppLockerPolicy -FileInformation $windowsInfo -RuleType Path -User 'S-1-1-0' -ServiceEnforcement Enabled -Xml)
