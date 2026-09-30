@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-09-30 — durable device fanout without cross-recipient cursor gaps
+
+- Root cause: the HTTP adapter equated a global local queue sequence with each recipient's GRF1 cursor. Reused the relay aggregate/CAS/journal and stdlib dictionary: separate recipient metadata/heads, atomic multi-copy request publication, heads survive ack/deletion/reopen; HTTPS checks metadata against exact bytes. Existing single-receipt atomic transaction remains intact. No package/new layer or host protection changes.
+- Schema 2 canonically persists bounded recipient history with the complete state commitment. V1 untouched enrollment can read forward; nonempty/advanced history fails closed without guessed floors, file reset or deletion. Explicit historical migration/re-enrollment remains open. Several Android senders to one device still need shared wire-cursor allocation, not their independent approval-key sequence; production enrollment/inbox/wiring/exchange remains open.
+- Relay-state 19 and Service 26 checks PASS; full Release + all 29 v2 harnesses/45 legacy checks PASS. New evidence covers atomic phone/view fanout, partial ack/reopen/exact bytes, cursor rewrite/gap/limits, and lost relay response after accepting a view copy with exact duplicate retry. Self-review: canonical recipient ordering and known-transition byte comparison preserve all floors, no untrusted HTTP hint changes authority. Memory PROJECT_ONLY updates plan/capsule/worklog and the existing relay contract. M1/UAC/real-phone gates unchanged; no Cloudflare deploy/auth change.
+
 ## 2026-09-30 — local relay recipient isolation and durable retry
 
 - Worker credentials now bind own receive/ack recipient, explicit publish destinations, and approval signing key/epoch plus trusted view links. Fixed cross-recipient deletion/read/publish and cross-key/epoch intent paths; locator view recipient derives from the BFF session and wrong link cannot consume it. Additive/idempotent SQLite migration rejects old unscoped non-admin access without breaking the infrastructure admin. No production credentials or deployed Worker changed.

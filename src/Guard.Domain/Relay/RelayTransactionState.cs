@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using Guard.Contracts;
 using Guard.Contracts.Relay;
 
@@ -20,6 +21,8 @@ namespace Guard.Domain.Relay
         public const int MaximumReconcileIntents = 64;
         public const int MaximumSignedReceipts = 64;
         public const int MaximumOutboxItems = 8;
+        public const int MaximumOutboundRecipients = 128;
+        public const long MaximumRecipientCursor = 9007199254740991;
 
         private readonly RelayReplayFloor[] _replayFloors;
         private readonly RelayTrackedRequest[] _trackedRequests;
@@ -27,6 +30,7 @@ namespace Guard.Domain.Relay
         private readonly RelayReconcileIntent[] _reconcileIntents;
         private readonly RelaySignedReceiptRecord[] _signedReceipts;
         private readonly RelayEncryptedOutboxItem[] _outbox;
+        private readonly Dictionary<string, long> _recipientOutboundCursors;
 
         public RelayTransactionState(
             string deviceId,
@@ -42,7 +46,8 @@ namespace Guard.Domain.Relay
             IEnumerable<RelayPolicyLedgerEntry>? policyLedger = null,
             IEnumerable<RelayReconcileIntent>? reconcileIntents = null,
             IEnumerable<RelaySignedReceiptRecord>? signedReceipts = null,
-            IEnumerable<RelayEncryptedOutboxItem>? outbox = null)
+            IEnumerable<RelayEncryptedOutboxItem>? outbox = null,
+            IEnumerable<KeyValuePair<string, long>>? recipientOutboundCursors = null)
         {
             if (!GuardIdentifier.IsCanonicalToken(deviceId))
             {
@@ -82,6 +87,7 @@ namespace Guard.Domain.Relay
                 outbox,
                 acknowledgedOutboundCursor,
                 highestOutboundCursor);
+            _recipientOutboundCursors = CopyRecipientCursors(recipientOutboundCursors, highestOutboundCursor, _outbox);
         }
 
         public string DeviceId { get; }
@@ -101,6 +107,10 @@ namespace Guard.Domain.Relay
         public long HighestOutboundCursor { get; }
 
         public long AcknowledgedOutboundCursor { get; }
+
+        /// <summary>Durable recipient wire heads; acknowledgement never removes them.</summary>
+        public IReadOnlyDictionary<string, long> RecipientOutboundCursors =>
+            new ReadOnlyDictionary<string, long>(_recipientOutboundCursors);
 
         public long PolicyRevision { get; }
 
@@ -124,7 +134,7 @@ namespace Guard.Domain.Relay
 
         public RelayTransactionState WithPublishedRequest(
             RelayTrackedRequest request,
-            RelayEncryptedOutboxItem encryptedRequestOutboxItem)
+            params RelayEncryptedOutboxItem[] encryptedRequestOutboxItems)
         {
             if (DeviceEpoch <= 0 || AuthorityEpoch <= 0)
             {
@@ -144,26 +154,28 @@ namespace Guard.Domain.Relay
                     nameof(request));
             }
 
-            if (encryptedRequestOutboxItem == null)
+            if (encryptedRequestOutboxItems == null)
             {
-                throw new ArgumentNullException(nameof(encryptedRequestOutboxItem));
+                throw new ArgumentNullException(nameof(encryptedRequestOutboxItems));
             }
 
-            if (encryptedRequestOutboxItem.Kind != RelayFrameKind.Request)
+            var items = CopyBounded(encryptedRequestOutboxItems, MaximumOutboxItems, "encrypted request frames");
+            if (items.Length == 0)
             {
-                throw new ArgumentException(
-                    "A request must publish an encrypted request frame.",
-                    nameof(encryptedRequestOutboxItem));
+                throw new ArgumentException("A request requires at least one encrypted frame.", nameof(encryptedRequestOutboxItems));
             }
+            foreach (var item in items)
+                if (item.Kind != RelayFrameKind.Request)
+                    throw new ArgumentException("A request must publish only request frames.", nameof(encryptedRequestOutboxItems));
 
-            RequireNextOutboundCursor(encryptedRequestOutboxItem);
+            var nextRecipientCursors = AdvanceRecipientCursors(items);
             if (_trackedRequests.Length >= MaximumTrackedRequests)
             {
                 throw new InvalidOperationException(
                     "The bounded tracked-request capacity is exhausted.");
             }
 
-            if (_outbox.Length >= MaximumOutboxItems)
+            if (_outbox.Length + items.Length > MaximumOutboxItems)
             {
                 throw new InvalidOperationException(
                     "The bounded encrypted relay outbox is full.");
@@ -182,10 +194,11 @@ namespace Guard.Domain.Relay
             }
 
             var nextRequests = Append(_trackedRequests, request);
-            var nextOutbox = Append(_outbox, encryptedRequestOutboxItem);
+            var nextOutbox = new List<RelayEncryptedOutboxItem>(_outbox);
+            nextOutbox.AddRange(items);
             return CreateSuccessor(
                 committedInboundCursor: CommittedInboundCursor,
-                highestOutboundCursor: encryptedRequestOutboxItem.OutboundCursor,
+                highestOutboundCursor: items[items.Length - 1].OutboundCursor,
                 acknowledgedOutboundCursor: AcknowledgedOutboundCursor,
                 policyRevision: PolicyRevision,
                 replayFloors: _replayFloors,
@@ -193,7 +206,8 @@ namespace Guard.Domain.Relay
                 policyLedger: _policyLedger,
                 reconcileIntents: _reconcileIntents,
                 signedReceipts: _signedReceipts,
-                outbox: nextOutbox);
+                outbox: nextOutbox.ToArray(),
+                recipientOutboundCursors: nextRecipientCursors);
         }
 
         public RelayTransactionState WithCommittedApproval(
@@ -211,7 +225,7 @@ namespace Guard.Domain.Relay
                     "An approval must consume exactly the next inbound cursor.");
             }
 
-            RequireNextOutboundCursor(transaction.EncryptedReceiptOutboxItem);
+            var nextRecipientCursors = AdvanceRecipientCursors(new[] { transaction.EncryptedReceiptOutboxItem });
             if (transaction.EncryptedReceiptOutboxItem.Kind != RelayFrameKind.Receipt)
             {
                 throw new InvalidOperationException(
@@ -326,7 +340,8 @@ namespace Guard.Domain.Relay
                 policyLedger: nextPolicyLedger,
                 reconcileIntents: nextReconcileIntents,
                 signedReceipts: nextReceipts,
-                outbox: nextOutbox);
+                outbox: nextOutbox,
+                recipientOutboundCursors: nextRecipientCursors);
         }
 
         public RelayTransactionState WithAcknowledgedOutboundCursor(long cursor)
@@ -551,14 +566,22 @@ namespace Guard.Domain.Relay
             return Append(next, nextFloor);
         }
 
-        private void RequireNextOutboundCursor(RelayEncryptedOutboxItem item)
+        private Dictionary<string, long> AdvanceRecipientCursors(RelayEncryptedOutboxItem[] items)
         {
-            if (HighestOutboundCursor == long.MaxValue ||
-                item.OutboundCursor != HighestOutboundCursor + 1)
+            var next = new Dictionary<string, long>(_recipientOutboundCursors, StringComparer.Ordinal);
+            var queueCursor = HighestOutboundCursor;
+            foreach (var item in items)
             {
-                throw new InvalidOperationException(
-                    "An encrypted outbox item must use exactly the next outbound cursor.");
+                next.TryGetValue(item.RecipientKeyId, out var recipientCursor);
+                if (queueCursor == long.MaxValue || item.OutboundCursor != queueCursor + 1 ||
+                    recipientCursor == MaximumRecipientCursor || item.RecipientCursor != recipientCursor + 1)
+                    throw new InvalidOperationException("Outbox queue and recipient cursors must each advance by exactly one.");
+                if (!next.ContainsKey(item.RecipientKeyId) && next.Count >= MaximumOutboundRecipients)
+                    throw new InvalidOperationException("The bounded outbound recipient capacity is exhausted.");
+                next[item.RecipientKeyId] = item.RecipientCursor;
+                queueCursor = item.OutboundCursor;
             }
+            return next;
         }
 
         private RelayTransactionState CreateSuccessor(
@@ -571,7 +594,8 @@ namespace Guard.Domain.Relay
             RelayPolicyLedgerEntry[] policyLedger,
             RelayReconcileIntent[] reconcileIntents,
             RelaySignedReceiptRecord[] signedReceipts,
-            RelayEncryptedOutboxItem[] outbox)
+            RelayEncryptedOutboxItem[] outbox,
+            IEnumerable<KeyValuePair<string, long>>? recipientOutboundCursors = null)
         {
             return new RelayTransactionState(
                 DeviceId,
@@ -587,7 +611,41 @@ namespace Guard.Domain.Relay
                 policyLedger,
                 reconcileIntents,
                 signedReceipts,
-                outbox);
+                outbox,
+                recipientOutboundCursors ?? _recipientOutboundCursors);
+        }
+
+        private static Dictionary<string, long> CopyRecipientCursors(
+            IEnumerable<KeyValuePair<string, long>>? values,
+            long highestOutboundCursor,
+            RelayEncryptedOutboxItem[] outbox)
+        {
+            var result = new Dictionary<string, long>(StringComparer.Ordinal);
+            long total = 0;
+            if (values != null)
+                foreach (var pair in values)
+                {
+                    RelayTrackedRequest.RequireToken(pair.Key, nameof(values));
+                    if (pair.Value <= 0 || pair.Value > MaximumRecipientCursor || result.Count >= MaximumOutboundRecipients ||
+                        result.ContainsKey(pair.Key))
+                        throw new ArgumentException("Invalid or duplicate outbound recipient cursor.", nameof(values));
+                    result.Add(pair.Key, pair.Value);
+                    total = checked(total + pair.Value);
+                }
+            if (total != highestOutboundCursor)
+                throw new ArgumentException("Recipient cursor history must account for the complete local queue history.", nameof(values));
+            var pendingHeads = new Dictionary<string, long>(StringComparer.Ordinal);
+            foreach (var item in outbox)
+            {
+                if (!result.TryGetValue(item.RecipientKeyId, out var head) || item.RecipientCursor > head ||
+                    (pendingHeads.TryGetValue(item.RecipientKeyId, out var previous) && item.RecipientCursor != previous + 1))
+                    throw new ArgumentException("Queued recipient cursors do not match durable history.", nameof(outbox));
+                pendingHeads[item.RecipientKeyId] = item.RecipientCursor;
+            }
+            foreach (var pair in pendingHeads)
+                if (pair.Value != result[pair.Key])
+                    throw new ArgumentException("Queued recipient frames must end at the durable recipient head.", nameof(outbox));
+            return result;
         }
 
         private static RelayReplayFloor[] CopyReplayFloors(

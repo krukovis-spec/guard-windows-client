@@ -25,7 +25,7 @@ namespace Guard.Service.Tests
         public static async Task PreservesDurableOutboxAsync()
         {
             var raw = Frame(RelayFrameKind.Request, 1);
-            var item = new RelayEncryptedOutboxItem("frame-test-000001", 1, RelayFrameKind.Request, raw);
+            var item = new RelayEncryptedOutboxItem("frame-test-000001", 1, RelayFrameKind.Request, Recipient, 1, raw);
             var state = EmptyState().WithPublishedRequest(
                 new RelayTrackedRequest("request-test-0001", 1, new byte[32], new byte[32]), item);
             var store = new RecordingStore(state);
@@ -60,7 +60,11 @@ namespace Guard.Service.Tests
                 return Task.FromResult(Json("{\"frameId\":\"frame-other-00001\",\"duplicate\":false}", HttpStatusCode.Created));
             });
             await ThrowsAsync(() => mismatchTransport.PublishAsync(
-                new RelayEncryptedOutboxItem("frame-other-00001", 1, RelayFrameKind.Request, raw), CancellationToken.None)).ConfigureAwait(false);
+                new RelayEncryptedOutboxItem("frame-other-00001", 1, RelayFrameKind.Request, Recipient, 1, raw), CancellationToken.None)).ConfigureAwait(false);
+            await ThrowsAsync(() => mismatchTransport.PublishAsync(
+                new RelayEncryptedOutboxItem("frame-test-000001", 1, RelayFrameKind.Request, "recipient-other-01", 1, raw), CancellationToken.None)).ConfigureAwait(false);
+            await ThrowsAsync(() => mismatchTransport.PublishAsync(
+                new RelayEncryptedOutboxItem("frame-test-000001", 1, RelayFrameKind.Request, Recipient, 2, raw), CancellationToken.None)).ConfigureAwait(false);
             Assert(mismatchCalls == 0, "Mismatched durable metadata reached the relay.");
 
             var full = EmptyState();
@@ -69,7 +73,7 @@ namespace Guard.Service.Tests
                 var frameId = "frame-bounded-000" + cursor;
                 full = full.WithPublishedRequest(
                     new RelayTrackedRequest("request-bounded-" + cursor, 1, new byte[32], new byte[32]),
-                    new RelayEncryptedOutboxItem(frameId, cursor, RelayFrameKind.Request,
+                    new RelayEncryptedOutboxItem(frameId, cursor, RelayFrameKind.Request, Recipient, cursor,
                         Frame(RelayFrameKind.Request, cursor, frameId: frameId)));
             }
             var fullStore = new RecordingStore(full);
@@ -84,6 +88,52 @@ namespace Guard.Service.Tests
             Assert(await boundedTransport.DeliverOutboxAsync(fullStore, CancellationToken.None).ConfigureAwait(false) &&
                 delivered == RelayTransactionState.MaximumOutboxItems && fullStore.State.Outbox.Count == 0,
                 "A full bounded outbox did not report successful drain.");
+
+            const string viewRecipient = "recipient-view-0001";
+            var phone1 = Frame(RelayFrameKind.Request, 1, frameId: "frame-phone-00001");
+            var view1 = Frame(RelayFrameKind.Request, 1, recipient: viewRecipient, frameId: "frame-view-000001");
+            var fanout = EmptyState().WithPublishedRequest(new RelayTrackedRequest("request-fanout-01", 1, new byte[32], new byte[32]),
+                new RelayEncryptedOutboxItem("frame-phone-00001", 1, RelayFrameKind.Request, Recipient, 1, phone1),
+                new RelayEncryptedOutboxItem("frame-view-000001", 2, RelayFrameKind.Request, viewRecipient, 1, view1));
+            fanout = fanout.WithPublishedRequest(new RelayTrackedRequest("request-fanout-02", 1, new byte[32], new byte[32]),
+                new RelayEncryptedOutboxItem("frame-phone-00002", 3, RelayFrameKind.Request, Recipient, 2,
+                    Frame(RelayFrameKind.Request, 2, frameId: "frame-phone-00002")));
+            var fanoutStore = new RecordingStore(fanout);
+            var accepted = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            var heads = new Dictionary<string, long>(StringComparer.Ordinal);
+            var loseViewResponse = true;
+            using var fanoutTransport = Transport(async (request, cancellationToken) =>
+            {
+                var bytes = await request.Content!.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+                var frame = RelayCanonicalEncoding.DecodeRelayFrame(bytes);
+                var duplicate = accepted.TryGetValue(frame.FrameId, out var prior);
+                if (duplicate)
+                    Assert(prior!.AsSpan().SequenceEqual(bytes), "A lost-response retry changed ciphertext or recipient cursor.");
+                else
+                {
+                    heads.TryGetValue(frame.RecipientKeyId, out var head);
+                    Assert(frame.Cursor == head + 1, "Global queue sequence leaked into a recipient's wire cursor.");
+                    heads[frame.RecipientKeyId] = frame.Cursor;
+                    accepted.Add(frame.FrameId, bytes);
+                }
+                if (frame.FrameId == "frame-view-000001" && loseViewResponse)
+                {
+                    loseViewResponse = false;
+                    throw new HttpRequestException("Synthetic lost response after relay publication.");
+                }
+                return Json(JsonSerializer.Serialize(new { frameId = frame.FrameId, duplicate }),
+                    duplicate ? HttpStatusCode.OK : HttpStatusCode.Created);
+            });
+            await ThrowsAsync(() => fanoutTransport.DeliverOutboxAsync(fanoutStore, CancellationToken.None)).ConfigureAwait(false);
+            Assert(fanoutStore.State.AcknowledgedOutboundCursor == 1 && fanoutStore.State.Outbox.Count == 2 &&
+                fanoutStore.State.Outbox[0].GetEncryptedFrameCopy().AsSpan().SequenceEqual(view1),
+                "Partial recipient delivery dropped the lost-response frame.");
+            Assert(await fanoutTransport.DeliverOutboxAsync(fanoutStore, CancellationToken.None).ConfigureAwait(false),
+                "Independent recipient retry did not drain.");
+            Assert(heads[Recipient] == 2 && heads[viewRecipient] == 1 && accepted.Count == 3 &&
+                fanoutStore.State.AcknowledgedOutboundCursor == 3 && fanoutStore.State.RecipientOutboundCursors[Recipient] == 2 &&
+                fanoutStore.State.RecipientOutboundCursors[viewRecipient] == 1 && fanoutStore.State.PolicyRevision == 0,
+                "Delivery conflated queue heads, recipient heads, or policy authority.");
         }
 
         public static async Task ValidatesBoundedInboxAsync()
@@ -160,7 +210,7 @@ namespace Guard.Service.Tests
             Throws(() => { using var unused = new HttpRelayTransport(Origin, "mailbox:test:0001", Recipient, Credential); });
             Throws(() => { using var unused = new HttpRelayTransport(Origin, Mailbox, Recipient, Credential + "\r\n"); });
 
-            var item = new RelayEncryptedOutboxItem("frame-test-000001", 1, RelayFrameKind.Request, Frame(RelayFrameKind.Request, 1));
+            var item = new RelayEncryptedOutboxItem("frame-test-000001", 1, RelayFrameKind.Request, Recipient, 1, Frame(RelayFrameKind.Request, 1));
             foreach (var status in new[] { HttpStatusCode.TemporaryRedirect, HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden,
                 HttpStatusCode.Conflict, HttpStatusCode.TooManyRequests, HttpStatusCode.ServiceUnavailable })
             {

@@ -17,7 +17,7 @@ namespace Guard.Storage.Relay
         private static readonly UTF8Encoding StrictUtf8 =
             new UTF8Encoding(false, true);
 
-        private const int SchemaVersion = 1;
+        private const int SchemaVersion = 2;
         private const int MaximumIdentifierBytes = 128;
         public const int MaximumPayloadBytes = 768 * 1024;
 
@@ -40,6 +40,15 @@ namespace Guard.Storage.Relay
                 WriteInt64(stream, state.HighestOutboundCursor);
                 WriteInt64(stream, state.AcknowledgedOutboundCursor);
                 WriteInt64(stream, state.PolicyRevision);
+
+                var recipients = new List<string>(state.RecipientOutboundCursors.Keys);
+                recipients.Sort(StringComparer.Ordinal);
+                WriteInt32(stream, recipients.Count);
+                foreach (var recipient in recipients)
+                {
+                    WriteIdentifier(stream, recipient);
+                    WriteInt64(stream, state.RecipientOutboundCursors[recipient]);
+                }
 
                 WriteInt32(stream, state.ReplayFloors.Count);
                 for (var index = 0; index < state.ReplayFloors.Count; index++)
@@ -127,6 +136,8 @@ namespace Guard.Storage.Relay
                     WriteIdentifier(stream, item.FrameId);
                     WriteInt64(stream, item.OutboundCursor);
                     WriteInt32(stream, (int)item.Kind);
+                    WriteIdentifier(stream, item.RecipientKeyId);
+                    WriteInt64(stream, item.RecipientCursor);
                     WriteVariableBytes(
                         stream,
                         item.GetEncryptedFrameCopy(),
@@ -159,7 +170,8 @@ namespace Guard.Storage.Relay
                 using (var stream = new MemoryStream(payload, writable: false))
                 {
                     RequireBytes(stream, Magic, "relay state magic");
-                    if (ReadInt32(stream) != SchemaVersion)
+                    var schemaVersion = ReadInt32(stream);
+                    if (schemaVersion != 1 && schemaVersion != SchemaVersion)
                     {
                         throw new StateStoreCorruptionException(
                             "The relay state schema version is unsupported.");
@@ -177,6 +189,26 @@ namespace Guard.Storage.Relay
                         ReadNonNegativeInt64(stream, "outbound ack cursor");
                     var policyRevision =
                         ReadNonNegativeInt64(stream, "policy revision");
+
+                    // V1 has no recipient history. Only an untouched enrollment can
+                    // carry forward automatically; never guess erased delivery heads.
+                    if (schemaVersion == 1 && (version != 0 || committedInboundCursor != 0 ||
+                        highestOutboundCursor != 0 || acknowledgedOutboundCursor != 0 || policyRevision != 0))
+                        throw new StateStoreCorruptionException("Legacy relay history requires explicit migration; no reset was performed.");
+                    var recipientCursors = new List<KeyValuePair<string, long>>();
+                    if (schemaVersion == SchemaVersion)
+                    {
+                        var recipientCount = ReadBoundedCount(stream, RelayTransactionState.MaximumOutboundRecipients, "outbound recipient");
+                        string? previousRecipient = null;
+                        while (recipientCursors.Count < recipientCount)
+                        {
+                            var recipient = ReadIdentifier(stream);
+                            if (previousRecipient != null && StringComparer.Ordinal.Compare(previousRecipient, recipient) >= 0)
+                                throw new StateStoreCorruptionException("Outbound recipients must be canonical and unique.");
+                            recipientCursors.Add(new KeyValuePair<string, long>(recipient, ReadPositiveInt64(stream, "recipient cursor")));
+                            previousRecipient = recipient;
+                        }
+                    }
 
                     var replayFloorCount = ReadBoundedCount(
                         stream,
@@ -337,6 +369,8 @@ namespace Guard.Storage.Relay
                             ReadEnum<RelayFrameKind>(
                                 stream,
                                 "relay frame kind"),
+                            ReadIdentifier(stream),
+                            ReadPositiveInt64(stream, "recipient cursor"),
                             ReadVariableBytes(
                                 stream,
                                 RelayProtocol.MaximumFrameBytes)));
@@ -347,6 +381,10 @@ namespace Guard.Storage.Relay
                         throw new StateStoreCorruptionException(
                             "Trailing bytes are not allowed in relay transaction state.");
                     }
+
+                    if (schemaVersion == 1 && (replayFloors.Count != 0 || trackedRequests.Count != 0 ||
+                        policyLedger.Count != 0 || reconcileIntents.Count != 0 || signedReceipts.Count != 0 || outbox.Count != 0))
+                        throw new StateStoreCorruptionException("Legacy relay history requires explicit migration; no reset was performed.");
 
                     return new RelayTransactionState(
                         deviceId,
@@ -362,7 +400,8 @@ namespace Guard.Storage.Relay
                         policyLedger,
                         reconcileIntents,
                         signedReceipts,
-                        outbox);
+                        outbox,
+                        recipientCursors);
                 }
             }
             catch (StateStoreCorruptionException)
