@@ -10,8 +10,8 @@ const bootstrapToken = "test-only-bootstrap-token-8f3f0d4dd15ebd16c4f5ac14a1c9e6
 const adminToken = "webauthn-admin-token-0000000000001";
 const deviceToken = "webauthn-device-token-000000000001";
 const approvalToken = "webauthn-approval-token-00000000001";
-const mailboxId = "mailbox-webauthn-main";
-const recipientKeyId = "recipient-parent-main";
+const mailboxId = "mailbox:webauthn:main";
+const recipientKeyId = "p256:" + "V".repeat(43);
 const deviceRecipientKeyId = "recipient-device-main";
 const authOrigin = { origin };
 const jsonOrigin = { origin, "content-type": "application/json" };
@@ -96,7 +96,7 @@ describe.sequential("parent WebAuthn BFF", () => {
       method: "POST",
       headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
       body: JSON.stringify({ accessToken: approvalToken, role: "approval", expiresAt: Date.now() + 600_000,
-        recipientKeyId, publishRecipientKeyIds: [deviceRecipientKeyId], approvalKeyId: "approval-parent-main", authorityEpoch: 1,
+        recipientKeyId, publishRecipientKeyIds: [deviceRecipientKeyId], approvalKeyId: "p256:" + "A".repeat(43), authorityEpoch: 1,
         viewRecipientKeyIds: [recipientKeyId] }),
     });
     expect(response.status).toBe(201);
@@ -311,13 +311,13 @@ describe.sequential("parent WebAuthn BFF", () => {
     expect((await authStub.fetch("https://auth.internal/internal/bff/registration-tickets", {
       method: "POST", headers: { ...jsonOrigin, "x-guard-bff-proof": "forged-proof" }, body,
     })).status).toBe(404);
-    expect((await request(`/v1/mailboxes/other-mailbox/registration-tickets`, {
+    expect((await request(`/v1/mailboxes/other-mailbox-0001/registration-tickets`, {
       method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body,
     })).status).toBe(401);
   });
 
   it("pins ticket bindings on the server and redeems atomically only once, including concurrent attempts", async () => {
-    const ticket = await registrationTicket("mailbox-ticket-race", "view-ticket-race");
+    const ticket = await registrationTicket("mailbox-ticket-race", "view-ticket-race-01");
     const extra = await request("/v1/auth/register/options", {
       method: "POST", headers: jsonOrigin,
       body: JSON.stringify({ registrationTicket: ticket.registrationTicket, mailboxId: "other-mailbox" }),
@@ -334,7 +334,7 @@ describe.sequential("parent WebAuthn BFF", () => {
     await runInDurableObject(authStub, (_instance, state) => {
       const row = state.storage.sql.exec<{ mailbox_id: string; recipient_key_id: string; expires_at: number }>(
         "SELECT u.mailbox_id,u.recipient_key_id,c.expires_at FROM parent_users u JOIN webauthn_challenges c ON c.user_id=u.user_id WHERE c.ceremony_id=?", ceremonyId).one();
-      expect(row).toEqual({ mailbox_id: "mailbox-ticket-race", recipient_key_id: "view-ticket-race", expires_at: Date.parse(ticket.expiresAt) });
+      expect(row).toEqual({ mailbox_id: "mailbox-ticket-race", recipient_key_id: "view-ticket-race-01", expires_at: Date.parse(ticket.expiresAt) });
       expect(state.storage.sql.exec("SELECT 1 FROM parent_registration_tickets WHERE mailbox_id=?", "mailbox-ticket-race").toArray()).toHaveLength(0);
     });
   });

@@ -4,7 +4,8 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const maximumFrame = 64 * 1024;
 const maximumLifetime = 7 * 86400000;
-const identifier = /^[A-Za-z0-9._:-]{16,128}$/u;
+export const isGuardIdentifier = (value: unknown): value is string => typeof value === "string" &&
+  value.length >= 16 && value.length <= 128 && !/[^A-Za-z0-9._:-]/u.test(value);
 const kemSuite = Uint8Array.of(0x4b, 0x45, 0x4d, 0, 0x10);
 const suite = Uint8Array.of(0x48, 0x50, 0x4b, 0x45, 0, 0x10, 0, 1, 0, 2);
 const hpkeVersion = encoder.encode("HPKE-v1");
@@ -28,7 +29,7 @@ export interface ViewEnrollment {
 /** GRF1/GRDE/GRRQ receive only; same fixed RFC 9180 suite and bytes as .NET/Kotlin. */
 export async function createViewSnapshotVerifier(enrollment: ViewEnrollment, now = Date.now): Promise<SnapshotVerifier> {
   const trust = { ...enrollment, devicePublicKey: enrollment.devicePublicKey.slice(), viewPublicKey: enrollment.viewPublicKey.slice() };
-  for (const id of [trust.mailboxId, trust.recipientKeyId, trust.deviceId, trust.deviceKeyId]) requireValid(identifier.test(id));
+  for (const id of [trust.mailboxId, trust.recipientKeyId, trust.deviceId, trust.deviceKeyId]) requireValid(isGuardIdentifier(id));
   for (const epoch of [trust.deviceEpoch, trust.authorityEpoch]) requireValid(typeof epoch === "bigint" && epoch > 0n && epoch <= 0x7fffffffffffffffn);
   for (const label of [trust.deviceLabel, trust.childLabel]) validText(label, 128, false);
   const key = trust.decryptionKey;
@@ -105,7 +106,7 @@ class Reader {
   text(max: number, empty: boolean): string {
     const value = decoder.decode(this.bytes(empty ? 0 : 1, max)); validText(value, max, empty); return value;
   }
-  id(): string { const value = this.text(128, false); requireValid(identifier.test(value)); return value; }
+  id(): string { const value = this.text(128, false); requireValid(isGuardIdentifier(value)); return value; }
   done(): void { requireValid(this.position === this.raw.length); }
 }
 

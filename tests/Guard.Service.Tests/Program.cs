@@ -42,6 +42,7 @@ namespace Guard.Service.Tests
                 ("keeps unobserved production readiness facts blocking", BootstrapAndIpcChecks.UsesOnlyObservedProductionReadinessFactsAsync),
                 ("retains exact relay outbox bytes across HTTP and CAS failures", RelayTransportChecks.PreservesDurableOutboxAsync),
                 ("validates bounded recipient-bound relay inbox pages", RelayTransportChecks.ValidatesBoundedInboxAsync),
+                ("preserves native key fingerprints and canonical IDs through HTTP", RelayTransportChecks.PreservesCanonicalIdentifiersAsync),
                 ("acknowledges only the locally committed inbox cursor", RelayTransportChecks.AcknowledgesOnlyCommittedCursorAsync),
                 ("rejects unsafe relay HTTP and cancels stalled bodies", RelayTransportChecks.RejectsUnsafeHttpAndCancelsBodyAsync)
             };

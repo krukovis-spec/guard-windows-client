@@ -4,12 +4,14 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Guard.Application.Relay;
 using Guard.Contracts.Relay;
+using Guard.Domain;
 using Guard.Domain.Relay;
 using Guard.Protocol.Relay;
 
@@ -160,8 +162,7 @@ namespace Guard.Service.Tests
                 "{\"frames\":[],\"nextCursor\":0,\"nextCursor\":0}",
                 "{\"frames\":[],\"nextCursor\":0,\"grant\":true}",
                 "{\"frames\":[],\"nextCursor\":9007199254740992}",
-                "{\"frames\":[\" " + Convert.ToBase64String(first) + "\"],\"nextCursor\":1}",
-                Inbox(1, Frame(RelayFrameKind.Approval, 1, frameId: "frame:test:000001"))
+                "{\"frames\":[\" " + Convert.ToBase64String(first) + "\"],\"nextCursor\":1}"
             };
             var oversizedPage = new byte[HttpRelayTransport.PageSize + 1][];
             Array.Fill(oversizedPage, first);
@@ -207,7 +208,12 @@ namespace Guard.Service.Tests
                 "https://relay.example.test/path", "https://relay.example.test/?token=hidden", "https://relay.example.test/#fragment",
                 "https://localhost/", "https://127.0.0.1/", "https://relay.example.test:8443/" })
                 Throws(() => { using var unused = new HttpRelayTransport(new Uri(uri), Mailbox, Recipient, Credential); });
-            Throws(() => { using var unused = new HttpRelayTransport(Origin, "mailbox:test:0001", Recipient, Credential); });
+            foreach (var id in new[] { new string('a', 15), new string('a', 129), "mailbox/test-0001", "mailbox%test-0001",
+                "mailbox?test-0001", "mailbox#test-0001", "mailbox&test-0001", "mailbox-test-0001\n", "mailbox-test-0001\0", "\uFEFFmailbox-test-0001", "mailbox-test-000é" })
+            {
+                Throws(() => { using var unused = new HttpRelayTransport(Origin, id, Recipient, Credential); });
+                Throws(() => { using var unused = new HttpRelayTransport(Origin, Mailbox, id, Credential); });
+            }
             Throws(() => { using var unused = new HttpRelayTransport(Origin, Mailbox, Recipient, Credential + "\r\n"); });
 
             var item = new RelayEncryptedOutboxItem("frame-test-000001", 1, RelayFrameKind.Request, Recipient, 1, Frame(RelayFrameKind.Request, 1));
@@ -251,6 +257,46 @@ namespace Guard.Service.Tests
                 return Json(Inbox(0));
             });
             await ThrowsCancellationAsync(() => canceledTransport.PollAsync(0, canceled.Token)).ConfigureAwait(false);
+        }
+
+        public static async Task PreservesCanonicalIdentifiersAsync()
+        {
+            using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var fingerprint = new ParentTrustAnchor(ParentKeyAlgorithm.EcdsaP256Sha256, key.ExportSubjectPublicKeyInfo()).KeyId;
+            foreach (var id in new[] { fingerprint, new string(':', 16), new string('.', 128), "_frame:alpha-0001" })
+            {
+                var calls = 0;
+                var incoming = Frame(RelayFrameKind.Approval, 1, id, id, id);
+                using var transport = new HttpRelayTransport(Origin, id, id, Credential, new Handler(async (request, ct) =>
+                {
+                    calls++;
+                    Assert(request.RequestUri!.GetLeftPart(UriPartial.Authority) == Origin.GetLeftPart(UriPartial.Authority) &&
+                        request.RequestUri.AbsolutePath.StartsWith("/v1/mailboxes/" + id + "/", StringComparison.Ordinal),
+                        "Canonical ID changed the pinned origin or mailbox path.");
+                    if (request.Method == HttpMethod.Get)
+                    {
+                        Assert(request.RequestUri.Query == "?recipient=" + id + "&after=0&limit=16", "Recipient ID was normalized.");
+                        return Json(Inbox(1, incoming));
+                    }
+                    var bytes = await request.Content!.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+                    if (request.RequestUri.AbsolutePath.EndsWith("/frames", StringComparison.Ordinal))
+                    {
+                        Assert(RelayCanonicalEncoding.DecodeRelayFrame(bytes).FrameId == id, "Published ID changed.");
+                        return Json(JsonSerializer.Serialize(new { frameId = id, duplicate = false }), HttpStatusCode.Created);
+                    }
+                    using var ack = JsonDocument.Parse(bytes);
+                    Assert(request.RequestUri.AbsolutePath.EndsWith("/ack", StringComparison.Ordinal) &&
+                        ack.RootElement.GetProperty("recipientKeyId").GetString() == id, "Ack recipient changed.");
+                    return Json("{\"cursor\":1,\"duplicate\":false}");
+                }), TimeSpan.FromSeconds(2));
+                await transport.PublishAsync(new RelayEncryptedOutboxItem(id, 1, RelayFrameKind.Request, id, 1,
+                    Frame(RelayFrameKind.Request, 1, id, id, id)), CancellationToken.None).ConfigureAwait(false);
+                var page = await transport.PollAsync(0, CancellationToken.None).ConfigureAwait(false);
+                Assert(page.Count == 1 && page[0].AsSpan().SequenceEqual(incoming), "Fingerprint inbox bytes changed.");
+                await transport.AcknowledgeCommittedInboxAsync(new RecordingStore(
+                    new RelayTransactionState("device-test-00001", 1, 1, 1, 1, 0, 0, 0)), CancellationToken.None).ConfigureAwait(false);
+                Assert(calls == 3, "The canonical identifier did not complete publish/poll/ack.");
+            }
         }
 
         private static RelayTransactionState EmptyState() => new RelayTransactionState("device-test-00001", 0, 1, 1, 0, 0, 0, 0);

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -20,8 +21,61 @@ internal static class NativeEnrollmentChecks
 {
     private static readonly CancellationToken None = CancellationToken.None;
     internal static void Run() => RunAsync().GetAwaiter().GetResult();
+    internal static string ExportExchange() => ExportExchangeAsync().GetAwaiter().GetResult();
+    private static async Task<string> ExportExchangeAsync()
+    {
+        using var lab = new Lab(); using var start = await lab.Begin();
+        var claim = lab.Claim(lab.PhoneOne); var hash = RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim);
+        await lab.Stage(lab.PhoneOne, start, claim);
+        var state = await lab.State(); var pending = state.Enrollment!;
+        var nonce = RandomNumberGenerator.GetBytes(32);
+        var query = EnrollmentExchange.Seal(EnrollmentExchange.Header(EnrollmentExchange.Query,
+            RelayCanonicalEncoding.ComputeEnrollmentOfferHash(lab.Offer), hash, nonce), Array.Empty<byte>(), lab.Offer.GetEncryptionKeyCopy());
+        var replyPending = await lab.Exchange.HandleAsync(query, None);
+        await lab.Coordinator.ConfirmPhoneKeyAsync(ClientRole.ParentRelay, hash, lab.DecryptProof(pending), None);
+        state = await lab.State();
+        Check(await lab.Coordinator.ConfirmLocalAsync(ClientRole.AdminSetup, state.Version, start.GetConfirmationSecretCopy(), hash, None) == SetupOperationStatus.Succeeded, "fixture commit");
+        var replyConfirmed = await lab.Exchange.HandleAsync(query, None);
+        return "# PUBLIC TEST-ONLY KEYS and synthetic attestation ceremony. Never use for real enrollment.\n" +
+            string.Join("\n", new[] {
+                "now=" + lab.Clock.Now.ToUnixTimeMilliseconds(),
+                "offer=" + Convert.ToHexString(RelayCanonicalEncoding.EncodeEnrollmentOffer(lab.Offer)),
+                "claim=" + Convert.ToHexString(RelayCanonicalEncoding.EncodeEnrollmentClaimForSignature(claim)),
+                "mac=" + Convert.ToHexString(pending.GetMacCopy()), "signature=" + Convert.ToHexString(pending.GetSignatureCopy()),
+                "nonce=" + Convert.ToHexString(nonce), "phone.private=" + Convert.ToHexString(lab.PhonePrivate),
+                "device.private=" + Convert.ToHexString(lab.DevicePrivate),
+                "reply.pending=" + Convert.ToHexString(replyPending), "reply.confirmed=" + Convert.ToHexString(replyConfirmed) }) + "\n";
+    }
+    internal static void VerifyAndroidExchange(string path)
+    {
+        var properties = File.ReadAllLines("protocol/test-vectors/enrollment-exchange-v1.properties")
+            .Where(line => line.Length > 0 && !line.StartsWith('#')).Select(line => line.Split('=', 2)).ToDictionary(pair => pair[0], pair => pair[1]);
+        byte[] Value(string key) => Convert.FromHexString(properties[key]);
+        var offer = RelayCanonicalEncoding.DecodeEnrollmentOffer(Value("offer"));
+        using var key = ECDiffieHellman.Create(new ECParameters { Curve = ECCurve.NamedCurves.nistP256, D = Value("device.private"),
+            Q = new ECPoint { X = offer.GetEncryptionKeyCopy()[1..33], Y = offer.GetEncryptionKeyCopy()[33..65] } });
+        var rows = File.ReadAllLines(path); Check(rows.Length == 3, "Android exchange count");
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var message = EnrollmentExchange.Decode(Convert.FromHexString(rows[i]));
+            Check(message.Kind == i + 1 && message.Nonce.AsSpan().SequenceEqual(Value("nonce")) &&
+                message.OfferHash.AsSpan().SequenceEqual(RelayCanonicalEncoding.ComputeEnrollmentOfferHash(offer)), "Android header");
+            var plain = EnrollmentExchange.Open(message, key);
+            if (i == 0)
+            {
+                var submission = EnrollmentExchange.DecodeSubmission(plain);
+                Check(RelayCanonicalEncoding.EncodeEnrollmentClaimForSignature(submission.Claim).AsSpan().SequenceEqual(Value("claim")) &&
+                    submission.Mac.AsSpan().SequenceEqual(Value("mac")) && submission.Signature.AsSpan().SequenceEqual(Value("signature")) &&
+                    submission.Chain.Length == 2 && submission.Chain.All(cert => cert.AsSpan().SequenceEqual(new byte[] {1, 2, 3})), "Android payload");
+                Check(message.ClaimHash.AsSpan().SequenceEqual(RelayCanonicalEncoding.ComputeEnrollmentClaimHash(submission.Claim)), "Android claim hash");
+            }
+            else Check(plain.AsSpan().SequenceEqual(i == 1 ? Enumerable.Repeat((byte)7, 32).ToArray() : Array.Empty<byte>()), "Android proof/query");
+        }
+        Console.WriteLine("PASS actual Kotlin HPKE claim/proof/query decrypted and bound by .NET; test-only certificate bytes, not hardware evidence.");
+    }
     private static async Task RunAsync()
     {
+        await EncryptedExchange();
         using (var lab = new Lab())
         {
             var forbidden = await lab.Coordinator.BeginAsync(ClientRole.Child, lab.Offer, None);
@@ -68,7 +122,7 @@ internal static class NativeEnrollmentChecks
             Check(await lab.Store.TryCommitAsync(owner.Version, owner.WithAcceptedCommand("command-test-0001", 1), None), "ordinary command lost enrollment");
             start.Dispose(); RejectSync<ObjectDisposedException>(() => start.GetConfirmationSecretCopy());
         }
-        foreach (var failure in new[] { "expired", "status-await", "before-publish", "revoked", "cancelled" })
+        foreach (var failure in new[] { "expired", "status-await", "during-crypto", "status-during-crypto", "before-publish", "revoked", "cancelled" })
         {
             using var lab = new Lab(); using var start = await lab.Begin();
             var claim = lab.Claim(lab.PhoneOne); var hash = RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim);
@@ -78,6 +132,14 @@ internal static class NativeEnrollmentChecks
             var before = await lab.State();
             if (failure == "expired") lab.Clock.Now = lab.Offer.ExpiresAtUtc;
             if (failure == "status-await") lab.Status = _ => { lab.Clock.Now = lab.Offer.ExpiresAtUtc; return Task.FromResult(lab.PhoneOne.Status); };
+            if (failure is "during-crypto" or "status-during-crypto") lab.Status = _ =>
+            {
+                var deadline = failure == "during-crypto" ? lab.Offer.ExpiresAtUtc : lab.Clock.Now.AddSeconds(1);
+                var status = AndroidAttestationRevocations.FromTrustedResponse("{\"entries\":{}}"u8.ToArray(), lab.Clock.Now.AddSeconds(-1), deadline);
+                var reads = 0;
+                lab.Clock.OnRead = () => { if (++reads == 4) lab.Clock.Now = deadline; };
+                return Task.FromResult(status);
+            };
             if (failure == "before-publish") lab.Protector.OnProtect = () => lab.Clock.Now = lab.Offer.ExpiresAtUtc;
             if (failure == "revoked") lab.Status = _ => Task.FromResult(AndroidAttestationRevocations.FromTrustedResponse(
                 "{\"entries\":{\"1\":{\"status\":\"REVOKED\"}}}"u8.ToArray(), lab.Clock.Now.AddSeconds(-1), lab.Clock.Now.AddMinutes(10)));
@@ -124,13 +186,79 @@ internal static class NativeEnrollmentChecks
         RejectSync<TargetInvocationException>(() => decode.Invoke(null, new object[] { bytes.Concat(new byte[] {0}).ToArray() }));
     }
 
+    private static async Task EncryptedExchange()
+    {
+        using var lab = new Lab(); using var start = await lab.Begin();
+        var claim = lab.Claim(lab.PhoneOne); var hash = RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim);
+        var secretText = start.QrText.Split("&secret=", StringSplitOptions.None)[1].Replace('-', '+').Replace('_', '/');
+        var proofKey = SHA256.HashData(Convert.FromBase64String(secretText + "="));
+        var submission = EnrollmentExchange.EncodeSubmission(claim,
+            lab.PhoneOne.Chain(AndroidAttestationChecks.Description(challenge: RelayCanonicalEncoding.ComputeEnrollmentOfferHash(lab.Offer))),
+            RelayCanonicalEncoding.ComputeEnrollmentClaimProof(proofKey, claim), lab.PhoneOne.Sign(hash));
+        byte[] Request(int kind, byte[] body, byte[] nonce, byte[]? claimHash = null) => EnrollmentExchange.Seal(
+            EnrollmentExchange.Header(kind, RelayCanonicalEncoding.ComputeEnrollmentOfferHash(lab.Offer), claimHash ?? hash, nonce), body, lab.Offer.GetEncryptionKeyCopy());
+        int Outcome(byte[] raw, byte[] nonce)
+        {
+            var message = EnrollmentExchange.Decode(raw);
+            Check(message.Kind == EnrollmentExchange.Reply && message.Nonce.AsSpan().SequenceEqual(nonce) && message.ClaimHash.AsSpan().SequenceEqual(hash), "reply correlation");
+            var plain = lab.OpenReply(message); var result = plain[..^64];
+            using var verifier = ECDsa.Create(); verifier.ImportSubjectPublicKeyInfo(lab.DeviceSigningSpki, out _);
+            Check(verifier.VerifyData(EnrollmentExchange.SignatureInput(message.Header, result), plain[^64..], HashAlgorithmName.SHA256,
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation), "reply is not device signed");
+            return BinaryPrimitives.ReadInt32BigEndian(result.AsSpan(8, 4));
+        }
+        var nonce = RandomNumberGenerator.GetBytes(32);
+        var request = Request(EnrollmentExchange.Claim, submission, nonce);
+        var damaged = (byte[])request.Clone(); damaged[^1] ^= 1;
+        await Reject<CryptographicException>(() => lab.Exchange.HandleAsync(damaged, None));
+        await Reject<InvalidDataException>(() => lab.Exchange.HandleAsync(Request(EnrollmentExchange.Claim, submission, nonce, new byte[32]), None));
+        Check((await lab.State()).Enrollment!.Candidate == null, "rejected encrypted claim staged owner");
+        var reply = await lab.Exchange.HandleAsync(request, None);
+        Check(Outcome(reply, nonce) == EnrollmentExchange.NeedsPhoneProof && !(await lab.State()).IsProvisioned, "encrypted claim became owner");
+        var stageVersion = (await lab.State()).Version;
+        lab.Reopen();
+        Check(Outcome(await lab.Exchange.HandleAsync(request, None), nonce) == EnrollmentExchange.NeedsPhoneProof && (await lab.State()).Version == stageVersion,
+            "lost stage response changed pending evidence");
+        var phoneProof = lab.DecryptProof((await lab.State()).Enrollment!);
+        nonce = RandomNumberGenerator.GetBytes(32);
+        Check(Outcome(await lab.Exchange.HandleAsync(Request(EnrollmentExchange.KeyProof, phoneProof, nonce), None), nonce) == EnrollmentExchange.NeedsLocalConfirmation &&
+            !(await lab.State()).IsProvisioned, "phone proof bypassed originating confirmation");
+        var query = Request(EnrollmentExchange.Query, Array.Empty<byte>(), nonce);
+        Check(Outcome(await lab.Exchange.HandleAsync(query, None), nonce) == EnrollmentExchange.NeedsLocalConfirmation, "query promoted pending");
+        var local = await lab.State();
+        Check(await lab.Coordinator.ConfirmLocalAsync(ClientRole.AdminSetup, local.Version, start.GetConfirmationSecretCopy(), hash, None) == SetupOperationStatus.Succeeded, "local confirmation");
+        lab.Reopen(); lab.Clock.Now = lab.Offer.ExpiresAtUtc.AddDays(1);
+        // Recover a lost final response after QR expiry; no fresh enrollment or replacement keys.
+        nonce = RandomNumberGenerator.GetBytes(32);
+        Check(Outcome(await lab.Exchange.HandleAsync(Request(EnrollmentExchange.Query, Array.Empty<byte>(), nonce), None), nonce) == EnrollmentExchange.Confirmed, "lost completion unrecoverable");
+        Check(Outcome(await lab.Exchange.HandleAsync(Request(EnrollmentExchange.Claim, submission, nonce), None), nonce) == EnrollmentExchange.Confirmed, "exact committed retry rejected");
+        var changed = (byte[])submission.Clone(); changed[^1] ^= 1;
+        await Reject<InvalidDataException>(() => lab.Exchange.HandleAsync(Request(EnrollmentExchange.Claim, changed, nonce), None));
+        using var canceled = new CancellationTokenSource(); canceled.Cancel();
+        await Reject<OperationCanceledException>(() => lab.Exchange.HandleAsync(query, canceled.Token));
+        var reads = 0;
+        lab.Clock.OnRead = () => { if (++reads == 2) lab.Clock.Now = lab.Clock.Now.AddMinutes(1); };
+        await Reject<InvalidDataException>(() => lab.Exchange.HandleAsync(query, None));
+        lab.Clock.OnRead = null; lab.Clock.Now = lab.Offer.CreatedAtUtc.AddMilliseconds(-1);
+        await Reject<InvalidDataException>(() => lab.Exchange.HandleAsync(query, None));
+
+        // Dedicated chain ceiling: over ordinary GRF1 but still bounded; never truncates certificates.
+        var large = EnrollmentExchange.EncodeSubmission(claim, Enumerable.Range(0, 4).Select(_ => new byte[16384]).ToArray(), new byte[32], new byte[64]);
+        Check(large.Length > 65536 && EnrollmentExchange.DecodeSubmission(large).Chain.Sum(c => c.Length) == 65536, "chain truncated to ordinary frame");
+        RejectSync<ArgumentException>(() => EnrollmentExchange.EncodeSubmission(claim, Enumerable.Range(0, 5).Select(_ => new byte[16384]).ToArray(), new byte[32], new byte[64]));
+        for (var i = 0; i < request.Length; i++) RejectSync<ArgumentException>(() => EnrollmentExchange.Decode(request[..i]));
+        RejectSync<ArgumentException>(() => EnrollmentExchange.Decode(request.Concat(new byte[] {0}).ToArray()));
+        RejectSync<ArgumentException>(() => EnrollmentExchange.Decode(new byte[EnrollmentExchange.MaximumBytes + 1]));
+        Console.WriteLine("PASS encrypted enrollment: real attestation/CAS, signed correlated reply, replay/restart/late completion, tamper, expiry and chain limits");
+    }
+
     private sealed class Lab : IDisposable
     {
         public string DirectoryPath { get; } = Path.Combine(Path.GetTempPath(), "guard-enrollment-tests-" + Guid.NewGuid().ToString("N"));
         public AndroidAttestationChecks.Fixture PhoneOne { get; } = new();
         public AndroidAttestationChecks.Fixture PhoneTwo { get; } = new();
         private readonly ECDsa _deviceSign = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        private readonly ECDsa _deviceEnc = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        private readonly ECDiffieHellman _deviceEnc = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         private readonly ECDiffieHellman _phoneEncryption = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         public TestProtector Protector { get; } = new();
         public Clock Clock { get; } = new();
@@ -138,6 +266,11 @@ internal static class NativeEnrollmentChecks
         public FileAuthoritativeStateStore Store { get; private set; } = null!;
         public NativeEnrollmentCoordinator Coordinator { get; private set; } = null!;
         public EnrollmentOffer Offer { get; }
+        public NativeEnrollmentExchange Exchange => new(Store, Coordinator, _deviceEnc, _deviceSign, Clock);
+        public byte[] DeviceSigningSpki => _deviceSign.ExportSubjectPublicKeyInfo();
+        public byte[] PhonePrivate => _phoneEncryption.ExportParameters(true).D!;
+        public byte[] DevicePrivate => _deviceEnc.ExportParameters(true).D!;
+        public byte[] OpenReply(EnrollmentExchange.Message message) => EnrollmentExchange.Open(message, _phoneEncryption);
         public Lab()
         {
             Directory.CreateDirectory(DirectoryPath);
@@ -190,7 +323,12 @@ internal static class NativeEnrollmentChecks
             Directory.Delete(full, recursive: true);
         }
     }
-    private sealed class Clock : TimeProvider { public DateTimeOffset Now = AndroidAttestationChecks.Now; public override DateTimeOffset GetUtcNow() => Now; }
+    private sealed class Clock : TimeProvider
+    {
+        public DateTimeOffset Now = AndroidAttestationChecks.Now;
+        public Action? OnRead;
+        public override DateTimeOffset GetUtcNow() { OnRead?.Invoke(); return Now; }
+    }
     private sealed class TestProtector : IStateDataProtector, IDisposable
     {
         private readonly byte[] _key = RandomNumberGenerator.GetBytes(32);

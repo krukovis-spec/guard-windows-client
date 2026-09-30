@@ -84,6 +84,20 @@ describe("same-origin parent transport", () => {
     await expect(new HttpParentTransport().listSnapshots()).rejects.toThrow();
   });
 
+  it("preserves canonical IDs and rejects normalization and delimiter lookalikes", async () => {
+    const validIds = ["p256:" + "Ab_-".repeat(10) + "abc", ":".repeat(16), ".".repeat(128), "_frame:alpha-0001"];
+    const invalidIds = ["a".repeat(15), "a".repeat(129), "frame-alpha-0001\n", "frame-alpha-0001\0", "\ufeffframe-alpha-0001",
+      "frame-alpha-0001/", "frame-alpha-0001%", "frame-alpha-0001?", "frame-alpha-0001#", "frame-alpha-0001&", "frame-alpha-0001é"];
+    for (const frameId of [...validIds, ...invalidIds]) {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([{
+        cursor: 1, frameId, frame: encodeBase64Url(new Uint8Array(8).buffer), receivedAt: "2026-07-24T20:00:00.000Z"
+      }]), { status: 200 })));
+      const result = new HttpParentTransport().listSnapshots();
+      if (validIds.includes(frameId)) await expect(result).resolves.toMatchObject([{ frameId }]);
+      else await expect(result).rejects.toThrow("frameId must be canonical");
+    }
+  });
+
   it("rejects leaked inner fields, duplicate ids, and oversized frames", async () => {
     const valid = {
       cursor: 1,

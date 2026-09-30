@@ -216,16 +216,9 @@ namespace Guard.Service
 
         private static void RequireIdentifier(string value)
         {
-            // Intersection of Guard canonical IDs and the Worker's path/frame grammar.
-            if (!GuardIdentifier.IsCanonicalToken(value) || !IsAlphaNumeric(value[0]))
+            if (!GuardIdentifier.IsCanonicalToken(value))
                 throw new ArgumentException("Invalid relay identifier.");
-            foreach (var character in value)
-                if (!IsAlphaNumeric(character) && character != '.' && character != '_' && character != '-')
-                    throw new ArgumentException("Invalid relay identifier.");
         }
-
-        private static bool IsAlphaNumeric(char value) =>
-            (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9');
 
         private static void RequireCursor(long cursor)
         {

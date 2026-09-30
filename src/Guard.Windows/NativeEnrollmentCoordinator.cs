@@ -153,7 +153,7 @@ public sealed class NativeEnrollmentCoordinator
     private bool Active(EnrollmentOffer offer) { var now = _clock.GetUtcNow(); return now >= offer.CreatedAtUtc && now < offer.ExpiresAtUtc; }
     private bool Verified(DeviceSecurityState current, DeviceEnrollmentState candidate, AndroidAttestationRevocations status) =>
         Pending(current) && candidate.Candidate != null && _verifier.VerifyEnrollmentCandidate(candidate.Offer, current.SetupChallenge!.GetSecretHashCopy(),
-            candidate.Candidate, candidate.GetMacCopy(), candidate.GetCertificatesCopy(), candidate.GetSignatureCopy(), status, _clock.GetUtcNow());
+            candidate.Candidate, candidate.GetMacCopy(), candidate.GetCertificatesCopy(), candidate.GetSignatureCopy(), status, _clock.GetUtcNow(), _clock);
     private static bool SameClaim(DeviceEnrollmentState state, EnrollmentKeyClaim claim) => state.Candidate != null &&
         RelayCanonicalEncoding.EncodeEnrollmentClaimForSignature(state.Candidate).AsSpan().SequenceEqual(RelayCanonicalEncoding.EncodeEnrollmentClaimForSignature(claim));
     public static byte[] KeyConfirmationInfo(byte[] claimHash) => Encoding.ASCII.GetBytes("guard-enrollment-decryption-hpke-v1").Concat(ExactHash(claimHash)).ToArray();

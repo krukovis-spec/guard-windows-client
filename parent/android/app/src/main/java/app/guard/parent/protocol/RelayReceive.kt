@@ -5,6 +5,7 @@ import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.security.AlgorithmParameters
 import java.security.KeyFactory
+import java.security.KeyPairGenerator
 import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
@@ -119,17 +120,29 @@ internal object HpkeP256 {
     private val suite = byteArrayOf(0x48,0x50,0x4b,0x45,0x00,0x10,0x00,0x01,0x00,0x02)
     private val version = "HPKE-v1".toByteArray(Charsets.US_ASCII)
     fun decrypt(key: RelayEncryptionKey, enc: ByteArray, ciphertext: ByteArray, aad: ByteArray, info: ByteArray): ByteArray {
-        val recipient = P256.publicKey(key.publicKeySec1()); val ephemeral = P256.publicKey(enc)
+        require(ciphertext.size in 16..(1024 * 1024 + 16) && aad.size <= 65536 && info.size <= 65536)
+        P256.publicKey(key.publicKeySec1()); val ephemeral = P256.publicKey(enc)
         val ka = KeyAgreement.getInstance("ECDH"); ka.init(key.privateKey()); ka.doPhase(ephemeral, true); val dh = ka.generateSecret()
+        return try { crypt(Cipher.DECRYPT_MODE, dh, enc + key.publicKeySec1(), ciphertext, aad, info) } finally { dh.fill(0) }
+    }
+    fun encrypt(publicKey: ByteArray, plaintext: ByteArray, aad: ByteArray, info: ByteArray): Pair<ByteArray, ByteArray> {
+        require(plaintext.size <= 1024 * 1024 && aad.size <= 65536 && info.size <= 65536)
+        val recipient = P256.publicKey(publicKey)
+        val ephemeral = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
+        val enc = ephemeral.public.encoded.takeLast(65).toByteArray().also { P256.publicKey(it) }
+        val ka = KeyAgreement.getInstance("ECDH"); ka.init(ephemeral.private); ka.doPhase(recipient, true); val dh = ka.generateSecret()
+        return try { enc to crypt(Cipher.ENCRYPT_MODE, dh, enc + publicKey, plaintext, aad, info) } finally { dh.fill(0) }
+    }
+    private fun crypt(mode: Int, dh: ByteArray, kemContext: ByteArray, input: ByteArray, aad: ByteArray, info: ByteArray): ByteArray {
+        val shared = extractExpand(dh, kemContext)
         try {
-            val shared = extractExpand(dh, enc + key.publicKeySec1())
+            val pskIdHash = labeledExtract(suite, ByteArray(0), "psk_id_hash", ByteArray(0)); val infoHash = labeledExtract(suite, ByteArray(0), "info_hash", info)
+            val context = byteArrayOf(0) + pskIdHash + infoHash; val secret = labeledExtract(suite, shared, "secret", ByteArray(0))
+            val aesKey = labeledExpand(suite, secret, "key", context, 32); val nonce = labeledExpand(suite, secret, "base_nonce", context, 12)
             try {
-                val pskIdHash = labeledExtract(suite, ByteArray(0), "psk_id_hash", ByteArray(0)); val infoHash = labeledExtract(suite, ByteArray(0), "info_hash", info)
-                val context = byteArrayOf(0) + pskIdHash + infoHash; val secret = labeledExtract(suite, shared, "secret", ByteArray(0))
-                val aesKey = labeledExpand(suite, secret, "key", context, 32); val nonce = labeledExpand(suite, secret, "base_nonce", context, 12)
-                val cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aesKey, "AES"), GCMParameterSpec(128, nonce)); cipher.updateAAD(aad); return cipher.doFinal(ciphertext)
-            } finally { shared.fill(0) }
-        } finally { dh.fill(0) }
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(mode, SecretKeySpec(aesKey, "AES"), GCMParameterSpec(128, nonce)); cipher.updateAAD(aad); return cipher.doFinal(input)
+            } finally { secret.fill(0); aesKey.fill(0); nonce.fill(0) }
+        } finally { shared.fill(0) }
     }
     private fun extractExpand(dh: ByteArray, context: ByteArray): ByteArray { val prk = labeledExtract(kemSuite, ByteArray(0), "eae_prk", dh); return labeledExpand(kemSuite, prk, "shared_secret", context, 32) }
     private fun labeledExtract(suiteId: ByteArray, salt: ByteArray, label: String, ikm: ByteArray): ByteArray = hkdfExtract(salt, version + suiteId + label.toByteArray(Charsets.US_ASCII) + ikm)

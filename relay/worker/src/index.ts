@@ -1,6 +1,7 @@
-import { FrameError, MAX_FRAME_BYTES, parseRelayFrame, type RelayFrame } from "./frame";
+import { FrameError, isGuardIdentifier as validId, MAX_FRAME_BYTES, parseRelayFrame, type RelayFrame } from "./frame";
 import { readBoundedBody, RequestBodyError } from "./bounded-body";
 import {
+  BFF_AUTH_OBJECT_NAME,
   forwardParentBff,
   forwardRegistrationTicket,
   handleParentBffRequest,
@@ -16,8 +17,12 @@ const headers = { "content-type": "application/json; charset=utf-8", "cache-cont
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers });
 const fail = (status: number, code: string): Response => json({ error: code }, status);
 const tokenFrom = (request: Request): string | null => { const value = request.headers.get("authorization"); return value?.startsWith("Bearer ") && value.length > 7 ? value.slice(7) : null; };
-const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
-const mailboxPath = (pathname: string): string | null => { const m = /^\/v1\/mailboxes\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})(?:\/|$)/.exec(pathname); return m?.[1] ?? null; };
+// The global authentication DO shares this namespace, but must never be a public mailbox.
+const validMailboxId = (value: unknown): value is string => validId(value) && value !== BFF_AUTH_OBJECT_NAME;
+const mailboxPath = (pathname: string): string | null => {
+  const id = /^\/v1\/mailboxes\/([^/]+)(?:\/|$)/u.exec(pathname)?.[1];
+  return validMailboxId(id) ? id : null;
+};
 
 async function forward(env: Env, mailboxId: string, request: Request, token: string | null, bootstrap = false): Promise<Response> {
   const id = env.DEVICE_MAILBOX.idFromName(mailboxId);
@@ -36,7 +41,7 @@ export default {
     if (url.pathname === "/v1/admin/bootstrap" && request.method === "POST") {
       const bootstrap = tokenFrom(request); if (!env.BOOTSTRAP_ADMIN_TOKEN || !bootstrap || !constantTimeEqual(await sha256(bootstrap), await sha256(env.BOOTSTRAP_ADMIN_TOKEN))) return fail(403, "bootstrap_forbidden");
       const body = await readJsonObject(request);
-      if (!validId(body.mailboxId) || !validToken(body.accessToken)) return fail(400, "invalid_bootstrap");
+      if (!validMailboxId(body.mailboxId) || !validToken(body.accessToken)) return fail(400, "invalid_bootstrap");
       return await forward(env, body.mailboxId, new Request(request.url, { method: "POST", headers: request.headers, body: JSON.stringify(body) }), bootstrap, true);
     }
     if (isParentBffPath(url.pathname)) return forwardParentBff(request, env);

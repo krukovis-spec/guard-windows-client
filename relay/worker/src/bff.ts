@@ -7,7 +7,7 @@ import {
   type AuthenticatorTransportFuture,
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
-import { MAX_FRAME_BYTES, parseRelayFrame } from "./frame";
+import { isGuardIdentifier as validId, MAX_FRAME_BYTES, parseRelayFrame } from "./frame";
 import { readBoundedBody, RequestBodyError } from "./bounded-body";
 
 export interface ParentBffEnv {
@@ -901,11 +901,6 @@ function validDisplayName(value: unknown): value is string {
     && value.length > 0
     && new TextEncoder().encode(value).byteLength <= 128;
 }
-
-function validId(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
-}
-
 function validRpId(value: string): boolean {
   return value.length <= 253
     && value === value.toLowerCase()

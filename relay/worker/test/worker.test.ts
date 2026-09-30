@@ -1,6 +1,7 @@
 import { env, runInDurableObject, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { DeviceMailbox } from "../src/index";
+import { BFF_AUTH_OBJECT_NAME } from "../src/bff";
 
 const adminToken = "a".repeat(32);
 const deviceToken = "d".repeat(32);
@@ -15,7 +16,21 @@ const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 const vectorHex = "475246310000000100000002000000126d61696c626f782d616c7068612d3030303100000012726563697069656e742d6b65792d30303031000000116672616d652d616c7068612d3030303031000000000000000b000000000000000a0000019f93ff31b80000019f93ff35a0000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40410000002065666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f8081828384";
 const vector = Uint8Array.from(vectorHex.match(/../g)!.map(x => Number.parseInt(x, 16)));
 function writeU64(bytes: Uint8Array, offset: number, value: number): void { let x = BigInt(value); for (let i = 7; i >= 0; i--) { bytes[offset + i] = Number(x & 255n); x >>= 8n; } }
-function frame(cursor: number, id: string, kind = 1, recipient = parentRecipient, mailboxId = mailbox): Uint8Array { const b = vector.slice(); b[11] = kind; const mailboxOffset = 16; b.set(new TextEncoder().encode(mailboxId), mailboxOffset); b.set(new TextEncoder().encode(recipient), 38); b.set(new TextEncoder().encode(id), 60); writeU64(b, 77, cursor); writeU64(b, 85, 0); writeU64(b, 93, Date.now()); writeU64(b, 101, Date.now() + 60000); return b; }
+function buildFrame(cursor: number, id: string, kind = 1, recipient = parentRecipient, mailboxId = mailbox): Uint8Array {
+  const identifiers = [mailboxId, recipient, id].flatMap(value => {
+    const bytes = new TextEncoder().encode(value);
+    const field = new Uint8Array(4 + bytes.length);
+    new DataView(field.buffer).setUint32(0, bytes.length);
+    field.set(bytes, 4);
+    return [...field];
+  });
+  const suffix = vector.slice(77);
+  writeU64(suffix, 0, cursor); writeU64(suffix, 8, 0);
+  writeU64(suffix, 16, Date.now()); writeU64(suffix, 24, Date.now() + 60000);
+  const bytes = new Uint8Array([...vector.slice(0, 12), ...identifiers, ...suffix]);
+  bytes[11] = kind;
+  return bytes;
+}
 
 describe("mailbox authorization and signing intent", () => {
   it("fails closed when bootstrap secret is absent", async () => {
@@ -31,10 +46,24 @@ describe("mailbox authorization and signing intent", () => {
     expect(result.status).toBe(403);
     await expect(result.json()).resolves.toEqual({ error: "origin_rejected" });
   });
+  it("rejects malformed mailbox IDs and keeps the global auth object private", async () => {
+    for (const mailboxId of [BFF_AUTH_OBJECT_NAME, "a".repeat(15), "a".repeat(129), "mailbox-invalid-01\n",
+      "mailbox-invalid-01/", "mailbox-invalid-01%", "mailbox-invalid-01é"]) {
+      const response = await request("/v1/admin/bootstrap", { method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" },
+        body: JSON.stringify({ mailboxId, accessToken: adminToken }) });
+      expect(response.status).toBe(400);
+      expect((await request(`/v1/mailboxes/${encodeURIComponent(mailboxId)}/poll`, { headers: bearer(adminToken) })).status).toBe(404);
+    }
+    expect((await request(`/v1/mailboxes/${BFF_AUTH_OBJECT_NAME}/tokens`, { method: "POST", headers: bearer(adminToken) })).status).toBe(404);
+    const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(BFF_AUTH_OBJECT_NAME));
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n).toBe(0);
+    });
+  });
   it("migrates old tables fail closed and preserves existing published cursor floors", async () => {
     const migrationMailbox = "mailbox-test-00002";
     const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(migrationMailbox));
-    const oldFrame = frame(21, "frame-alpha-00021", 1, parentRecipient, migrationMailbox);
+    const oldFrame = buildFrame(21, "frame-alpha-00021", 1, parentRecipient, migrationMailbox);
     await runInDurableObject(stub, async (_instance, state) => {
       // Only the disposable local test DO: recreate the previous schema.
       state.storage.sql.exec(`DROP TABLE tokens; DROP TABLE parent_locators; DROP TABLE tombstones; DROP TABLE publication_cursors;
@@ -60,7 +89,13 @@ describe("mailbox authorization and signing intent", () => {
       expect([...state.storage.sql.exec<{ cursor: number }>("SELECT cursor FROM publication_cursors WHERE recipient_key_id=?", parentRecipient)][0]?.cursor).toBe(21);
     });
   });
-  it("enforces persisted cursors, role boundaries, idempotency, and burned sequence hints", async () => {
+  it.each([false, true])("enforces cursors, roles, idempotency, and signing intents (fingerprint IDs: %s)", async fingerprintIds => {
+    const mailbox = fingerprintIds ? ":mailbox:native-001" : "mailbox-test-00001";
+    const deviceRecipient = fingerprintIds ? "p256:" + "D".repeat(43) : "recipient-dev-0001";
+    const parentRecipient = fingerprintIds ? "p256:" + "P".repeat(43) : "recipient-key-0001";
+    const approvalKey = fingerprintIds ? "p256:" + "S".repeat(43) : "parent-key-test-01";
+    const frame = (cursor: number, id: string, kind = 1, recipient = parentRecipient) =>
+      buildFrame(cursor, id, kind, recipient, mailbox);
     let response = await request("/v1/admin/bootstrap", { method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" }, body: JSON.stringify({ mailboxId: mailbox, accessToken: adminToken }) });
     expect(response.status).toBe(201);
     response = await request("/v1/admin/bootstrap", { method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" }, body: JSON.stringify({ mailboxId: mailbox, accessToken: adminToken }) });
@@ -69,11 +104,12 @@ describe("mailbox authorization and signing intent", () => {
       response = await request(`/v1/mailboxes/${mailbox}/tokens`, { method: "POST", headers: { ...bearer(adminToken), "content-type": "application/json" }, body: JSON.stringify({ accessToken, role, expiresAt: Date.now() + 600000,
         recipientKeyId: role === "device" ? deviceRecipient : parentRecipient,
         publishRecipientKeyIds: role === "device" ? [parentRecipient] : role === "approval" ? [deviceRecipient] : [],
-        ...(role === "approval" ? { approvalKeyId: "parent-key-test-01", authorityEpoch: 1, viewRecipientKeyIds: [parentRecipient] } : {}) }) }); expect(response.status).toBe(201);
+        ...(role === "approval" ? { approvalKeyId: approvalKey, authorityEpoch: 1, viewRecipientKeyIds: [parentRecipient] } : {}) }) }); expect(response.status).toBe(201);
     }
     const ten = frame(10, "frame-alpha-00010");
     const future = frame(10, "frame-alpha-00010");
-    writeU64(future, 93, Date.now() + 10 * 60000); writeU64(future, 101, Date.now() + 11 * 60000);
+    const suffixOffset = future.length - (vector.length - 77);
+    writeU64(future, suffixOffset + 16, Date.now() + 10 * 60000); writeU64(future, suffixOffset + 24, Date.now() + 11 * 60000);
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(deviceToken), body: future }); expect(response.status).toBe(400);
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(deviceToken), body: ten }); expect(response.status).toBe(201);
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(deviceToken), body: ten }); expect(response.status).toBe(200);
@@ -87,11 +123,12 @@ describe("mailbox authorization and signing intent", () => {
     response = await request(`/v1/mailboxes/${mailbox}/ack`, { method: "POST", headers: { ...bearer(approvalToken), "content-type": "application/json" }, body: JSON.stringify({ recipientKeyId: parentRecipient, cursor: 11 }) }); expect(response.status).toBe(409);
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(deviceToken), body: frame(11, "frame-alpha-00011") }); expect(response.status).toBe(201);
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(deviceToken), body: frame(10, "frame-alpha-00012") }); expect(response.status).toBe(409);
-    response = await request(`/v1/mailboxes/${mailbox}/poll?recipient=recipient-key-0001&after=10`, { headers: bearer(approvalToken) }); expect(response.status).toBe(200);
-    response = await request(`/v1/mailboxes/${mailbox}/poll?recipient=recipient-key-0001&after=10`, { headers: bearer(readerToken) }); expect(response.status).toBe(403);
-    response = await request(`/v1/mailboxes/${mailbox}/intents/reserve`, { method: "POST", headers: { ...bearer(approvalToken), "content-type": "application/json" }, body: JSON.stringify({ authorityEpoch: 1, keyId: "parent-key-test-01", intentId: "intent-alpha-0001" }) }); expect(await response.json()).toMatchObject({ sequence: 1 });
-    response = await request(`/v1/mailboxes/${mailbox}/intents/cancel`, { method: "POST", headers: { ...bearer(approvalToken), "content-type": "application/json" }, body: JSON.stringify({ authorityEpoch: 1, keyId: "parent-key-test-01", intentId: "intent-alpha-0001" }) }); expect(response.status).toBe(200);
-    response = await request(`/v1/mailboxes/${mailbox}/intents/reserve`, { method: "POST", headers: { ...bearer(approvalToken), "content-type": "application/json" }, body: JSON.stringify({ authorityEpoch: 1, keyId: "parent-key-test-01", intentId: "intent-alpha-0002" }) }); expect(await response.json()).toMatchObject({ sequence: 2 });
+    response = await request(`/v1/mailboxes/${mailbox}/poll?recipient=${parentRecipient}&after=10`, { headers: bearer(approvalToken) }); expect(response.status).toBe(200);
+    response = await request(`/v1/mailboxes/${mailbox}/poll?recipient=${parentRecipient}&after=10`, { headers: bearer(readerToken) }); expect(response.status).toBe(403);
+    response = await request(`/v1/mailboxes/${mailbox}/poll?recipient=${parentRecipient.toUpperCase()}&after=0`, { headers: bearer(approvalToken) }); expect(response.status).toBe(403);
+    response = await request(`/v1/mailboxes/${mailbox}/intents/reserve`, { method: "POST", headers: { ...bearer(approvalToken), "content-type": "application/json" }, body: JSON.stringify({ authorityEpoch: 1, keyId: approvalKey, intentId: "intent-alpha-0001" }) }); expect(await response.json()).toMatchObject({ sequence: 1 });
+    response = await request(`/v1/mailboxes/${mailbox}/intents/cancel`, { method: "POST", headers: { ...bearer(approvalToken), "content-type": "application/json" }, body: JSON.stringify({ authorityEpoch: 1, keyId: approvalKey, intentId: "intent-alpha-0001" }) }); expect(response.status).toBe(200);
+    response = await request(`/v1/mailboxes/${mailbox}/intents/reserve`, { method: "POST", headers: { ...bearer(approvalToken), "content-type": "application/json" }, body: JSON.stringify({ authorityEpoch: 1, keyId: approvalKey, intentId: "intent-alpha-0002" }) }); expect(await response.json()).toMatchObject({ sequence: 2 });
 
     for (const [token, recipient] of [[deviceToken, parentRecipient], [approvalToken, deviceRecipient]]) {
       response = await request(`/v1/mailboxes/${mailbox}/poll?recipient=${recipient}&after=0`, { headers: bearer(token!) });
@@ -108,7 +145,7 @@ describe("mailbox authorization and signing intent", () => {
     expect(await response.json()).toMatchObject({ nextCursor: 1 });
 
     for (const operation of ["reserve", "finalize", "cancel"]) {
-      for (const [keyId, authorityEpoch] of [["parent-key-other-1", 1], ["parent-key-test-01", 2]]) {
+      for (const [keyId, authorityEpoch] of [["parent-key-other-1", 1], [approvalKey, 2], [approvalKey.toUpperCase(), 1]]) {
         response = await request(`/v1/mailboxes/${mailbox}/intents/${operation}`, { method: "POST", headers: { ...bearer(approvalToken), "content-type": "application/json" }, body: JSON.stringify({ keyId, authorityEpoch, intentId: "intent-alpha-0002" }) });
         expect(response.status).toBe(403);
       }
@@ -119,7 +156,7 @@ describe("mailbox authorization and signing intent", () => {
       response = await request(`/v1/mailboxes/${mailbox}/poll?recipient=${parentRecipient}&after=${after}`, { headers: bearer(approvalToken) }); expect(response.status).toBe(400);
     }
 
-    const ownIntent = { keyId: "parent-key-test-01", authorityEpoch: 1, intentId: "intent-alpha-0002" };
+    const ownIntent = { keyId: approvalKey, authorityEpoch: 1, intentId: "intent-alpha-0002" };
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(adminToken), body: frame(1, "frame-alpha-00014", 3, "recipient-key-0002") }); expect(response.status).toBe(201);
     response = await request(`/v1/mailboxes/${mailbox}/intents/finalize`, { method: "POST", headers: { ...bearer(approvalToken), "content-type": "application/json" }, body: JSON.stringify({ ...ownIntent, receiptFrameId: "frame-alpha-00014" }) }); expect(response.status).toBe(409);
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(deviceToken), body: frame(12, "frame-alpha-00015", 3) }); expect(response.status).toBe(201);

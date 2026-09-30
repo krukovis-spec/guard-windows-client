@@ -13,8 +13,26 @@ namespace Guard.Windows.Crypto.Tests
         private const string AlternatePurpose =
             "guard-v2-authoritative-state-crypto-test";
 
-        private static int Main()
+        private static int Main(string[] args)
         {
+            if (args.Length == 1 && args[0] == "--export-enrollment-exchange")
+            {
+                Console.Write(NativeEnrollmentChecks.ExportExchange());
+                return 0;
+            }
+            if (args.Length == 2 && args[0] == "--verify-android-exchange")
+            {
+                NativeEnrollmentChecks.VerifyAndroidExchange(args[1]);
+                return 0;
+            }
+            if (args.Length == 1 && args[0] == "--check-google-source")
+            {
+                using var source = new GoogleAndroidAttestationSource();
+                _ = source.CreateVerifier(new byte[32], 1); // Validates bundled PUBLIC roots only; does not enroll a key.
+                _ = source.GetCurrentStatusAsync(default).GetAwaiter().GetResult();
+                Console.WriteLine("PASS live Google HTTPS status parsed with bounded freshness; pinned public roots loaded. No enrollment performed.");
+                return 0;
+            }
             var tests = new List<(string Name, Action Run)>
             {
                 ("P-256 canonical SPKI and P1363 signature verify", VerifiesCanonicalP256Signature),
@@ -22,6 +40,7 @@ namespace Guard.Windows.Crypto.Tests
                 ("malformed and out-of-range signatures fail closed", RejectsInvalidSignatures),
                 ("Android approval attestation requires trusted hardware, per-operation biometrics and claim proof", AndroidAttestationChecks.Run),
                 ("native enrollment persists and requires both phone and originating local confirmation", NativeEnrollmentChecks.Run),
+                ("Google attestation authority and freshness fail closed", GoogleAttestationSourceChecks.Run),
                 ("DPAPI CurrentUser round-trips without mutating input", RoundTripsDpapiCurrentUser),
                 ("DPAPI purpose mismatch and tampering fail closed", RejectsWrongPurposeAndTampering),
                 ("production protector requires LocalSystem", RequiresLocalSystemForProduction),

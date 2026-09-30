@@ -44,7 +44,7 @@ public sealed class AndroidApprovalAttestation
     /// </summary>
     public bool VerifyEnrollmentCandidate(EnrollmentOffer trustedOffer, byte[] setupSecretHash, EnrollmentKeyClaim claim,
         byte[] possessionMac, IReadOnlyList<byte[]> leafFirst, byte[] proofP1363,
-        AndroidAttestationRevocations revocations, DateTimeOffset now)
+        AndroidAttestationRevocations revocations, DateTimeOffset now, TimeProvider? clock = null)
     {
         try
         {
@@ -70,8 +70,10 @@ public sealed class AndroidApprovalAttestation
                     Q = new ECPoint { X = point[1..33], Y = point[33..65] } });
                 for (var j = 0; j < i; j++) Require(!point.AsSpan().SequenceEqual(points[j]));
             }
-            return Verify(approval, leafFirst, offerHash, RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim),
-                proofP1363, revocations, now);
+            if (!Verify(approval, leafFirst, offerHash, RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim),
+                proofP1363, revocations, now, clock)) return false;
+            var finishedAt = clock?.GetUtcNow() ?? now;
+            return finishedAt >= now && finishedAt >= trustedOffer.CreatedAtUtc && finishedAt < trustedOffer.ExpiresAtUtc;
         }
         catch (Exception error) when (error is ArgumentException or CryptographicException or InvalidOperationException or OverflowException or PlatformNotSupportedException)
         {
@@ -83,7 +85,7 @@ public sealed class AndroidApprovalAttestation
     /// <param name="claimHash">Domain-separated canonical claim hash binding all enrollment keys and the setup transcript.</param>
     /// <param name="proofP1363">Proof of possession signed by the attested key after fresh biometrics.</param>
     public bool Verify(ParentTrustAnchor key, IReadOnlyList<byte[]> leafFirst, byte[] expectedChallenge,
-        byte[] claimHash, byte[] proofP1363, AndroidAttestationRevocations revocations, DateTimeOffset now)
+        byte[] claimHash, byte[] proofP1363, AndroidAttestationRevocations revocations, DateTimeOffset now, TimeProvider? clock = null)
     {
         var certificates = new List<X509Certificate2>();
         var roots = new List<X509Certificate2>();
@@ -132,6 +134,12 @@ public sealed class AndroidApprovalAttestation
             var extension = leaf.Extensions[ExtensionOid];
             Require(extension != null && extension.RawData.Length <= 8192);
             ValidateDescription(extension.RawData, challenge);
+            // A chain checked at admission may expire during native crypto. Reuse the loaded
+            // certificates to recheck all time bounds before publishing verified ownership.
+            var finishedAt = clock?.GetUtcNow() ?? now;
+            Require(finishedAt >= now && revocations.IsCurrent(finishedAt));
+            foreach (var cert in certificates)
+                Require(finishedAt.UtcDateTime >= cert.NotBefore.ToUniversalTime() && finishedAt.UtcDateTime < cert.NotAfter.ToUniversalTime());
             return true;
         }
         catch (Exception error) when (error is ArgumentException or CryptographicException or AsnContentException
