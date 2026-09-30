@@ -162,6 +162,42 @@ class EnrollmentLifecycleTest {
         assertTrue(store.list().all { it.abandoned })
     }
 
+    @Test fun `screen preserves every comparison bit and never promotes signed upload to confirmed`() {
+        val state = ready()
+        assertEquals(EnrollmentStage.BIOMETRIC, enrollmentStage(state, null, start))
+        val displayed = enrollmentComparison(state)
+        assertEquals(8, displayed.lines().size)
+        assertTrue(displayed.lines().all { it.matches(Regex("[0-9a-f]{8}")) })
+        assertArrayEquals(EnrollmentWire.claimHash(state.claim!!), hex(displayed.replace("\n", "")))
+        store.saveCapability(state.offer, ByteArray(32) { 3 })
+        val completed = signed(store.load(state.offer)!!)
+        assertEquals(EnrollmentStage.WAITING, enrollmentStage(completed, null, start))
+        assertTrue(enrollmentStage(completed, null, start).canSynchronize)
+        val proof = EnrollmentResult(EnrollmentExchange.NEEDS_PHONE_PROOF, 1, start, start + 60000, byteArrayOf(), byteArrayOf())
+        assertEquals(EnrollmentStage.WAITING, enrollmentStage(completed, proof, start))
+        val compare = EnrollmentResult(EnrollmentExchange.NEEDS_LOCAL_CONFIRMATION, 2, start, start + 60000, byteArrayOf(), byteArrayOf())
+        assertEquals(EnrollmentStage.COMPARE, enrollmentStage(completed, compare, start))
+        val confirmed = EnrollmentResult(EnrollmentExchange.CONFIRMED, 3, start, start + 60000, byteArrayOf(), byteArrayOf())
+        assertEquals(EnrollmentStage.CONFIRMED, enrollmentStage(completed, confirmed, start + 2 * 86_400_000))
+        assertFalse(enrollmentStage(completed, confirmed, start).canSynchronize)
+        assertEquals(EnrollmentStage.RECOVERY, enrollmentStage(completed, confirmed, start - 1))
+    }
+
+    @Test fun `screen only reconciles expired or stopped signed attempt and requires missing QR`() {
+        val state = ready()
+        assertEquals(EnrollmentStage.EXPIRED, enrollmentStage(state, null, state.offer.expiryUnixMillis))
+        val completed = signed(state)
+        assertEquals(EnrollmentStage.RESCAN, enrollmentStage(completed, null, start))
+        assertEquals(EnrollmentStage.RECOVERY, enrollmentStage(completed, null, state.offer.expiryUnixMillis))
+        store.saveCapability(state.offer, ByteArray(32) { 3 })
+        store.abandon(state.offer)
+        val stopped = store.load(state.offer)!!
+        assertEquals(EnrollmentStage.QUERY_ONLY, enrollmentStage(stopped, null, start))
+        assertEquals(EnrollmentStage.QUERY_ONLY, enrollmentStage(stopped, null, state.offer.expiryUnixMillis + 86_399_999))
+        assertEquals(EnrollmentStage.RECOVERY, enrollmentStage(stopped, null, state.offer.expiryUnixMillis + 86_400_000))
+        assertTrue(stopped.isSigned)
+    }
+
     private class TestClock(var time: Long) : Clock() {
         var read: (() -> Long)? = null
         override fun millis() = read?.invoke() ?: time

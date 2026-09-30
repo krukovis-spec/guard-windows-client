@@ -83,9 +83,16 @@ class AndroidEnrollmentCeremony(context: Context) {
 
     /** Confirmed enrollment only, NOT current permission, recovery readiness or protection status. */
     fun confirmedEnrollment(offer: EnrollmentOffer): PendingEnrollment? {
-        val state = requireNotNull(store.load(offer)); checkKeys(state)
-        return if (store.lastResult(offer, AndroidRelayEncryptionKey.openExisting(state.encryptionAlias))?.outcome == EnrollmentExchange.CONFIRMED)
-            state else null
+        val (state, result) = inspect(offer)
+        return if (result?.outcome == EnrollmentExchange.CONFIRMED) state else null
+    }
+
+    /** UI reads only locally reverified evidence. A stored flag or an HTTP status is not confirmation. */
+    fun inspect(offer: EnrollmentOffer): Pair<PendingEnrollment, EnrollmentResult?> {
+        val state = requireNotNull(store.load(offer))
+        if (state.claim == null) return state to null
+        checkKeys(state)
+        return state to store.lastResult(offer, AndroidRelayEncryptionKey.openExisting(state.encryptionAlias))
     }
 
     fun abandon(offer: EnrollmentOffer) = store.abandon(offer)
