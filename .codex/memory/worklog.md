@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-09-30 — canonical native key IDs across relay, Windows HTTP and PWA
+
+- Reproduced native `p256:` rejection and short-ID acceptance in Worker parser before fixing. Reused Guard's existing canonical grammar (16..128 ASCII `A-Za-z0-9._:-`, exact case) in Worker frame/auth/BFF, Windows HTTP and PWA transport/crypto; no new dependency or wire version. No prefix replacement or fingerprint normalization. Worker decoder no longer silently strips a UTF-8 BOM from IDs.
+- Self-review preserved namespace isolation: `guard:bff:auth:v1` now matches the grammar but remains forbidden for external mailbox bootstrap/routing. Tests prove no admin token is written there. Existing persisted cursor/role/retry/ack/revoke/intent matrix now also runs with native-shaped fingerprints and a colon-leading mailbox; case substitution and other authority still refuse. WebAuthn registration/session/inbox/native-locator flow uses fingerprint IDs. Windows test derives an actual P-256 public-key fingerprint and verifies exact publish/poll/ack routing; malformed/boundary/BOM/delimiter cases refuse.
+- Worker 43 tests + typecheck; PWA 71 tests + production build; Windows service 27 checks PASS. Full safe Release solution +29 v2 harnesses/45 legacy checks EXIT0; UTF-8/known-secret-marker/diff checks PASS. No live Guard, VM, cloud deploy, real passkey/fingerprint or phone install. This closes a transport prerequisite, not enrollment completion or product acceptance.
+- PROJECT_ONLY: canonical M2 note and capsule updated; encrypted enrollment/chain transfer plus signed outcome reconciliation remain next. Ponytail reused current validators, integration scenario and harnesses, no new test framework. Codex-like visual pass remains queued in M7 after functionality.
+
 ## 2026-09-30 — Android pending enrollment survives restart without replacing keys
 
 - Added AndroidEnrollmentCeremony and bounded noBackup PendingEnrollmentStore: persist public offer before key creation, per-offer aliases, immutable claim/chain/QR MAC and exact P1363 signature before send. READY/SIGNED resume without raw QR secret; PREPARED requires rescanning it. Only the exact one-shot biometric Signature callback can finish; concurrent signers cannot replace the persisted winner. Missing/changed committed keys fail instead of regenerating. Local cancellation retains keys/record because Windows may already have committed; it is not remote revocation or confirmed ownership.

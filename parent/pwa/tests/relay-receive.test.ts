@@ -39,6 +39,15 @@ beforeAll(async () => {
 });
 
 describe("real .NET encrypted signed request", () => {
+  it("validates every trusted identifier with the same canonical grammar as HTTP", async () => {
+    for (const property of ["mailboxId", "recipientKeyId", "deviceId", "deviceKeyId"] as const) {
+      for (const id of ["p256:" + "A".repeat(43), ":".repeat(16), ".".repeat(128)])
+        await expect(createViewSnapshotVerifier({ ...trust, [property]: id })).resolves.toBeDefined();
+      for (const id of ["a".repeat(15), "a".repeat(129), "frame-alpha-0001\n", "\ufeffframe-alpha-0001", "frame-alpha-0001/", "frame-alpha-0001é"])
+        await expect(createViewSnapshotVerifier({ ...trust, [property]: id })).rejects.toThrow();
+    }
+  });
+
   it("decrypts and verifies the shared .NET/Kotlin fixture, not a server trust flag", async () => {
     expect(await verifier.decryptAndVerify(frame())).toEqual({ verified: true, snapshot: {
       requestId: "request-alpha-001", requestRevision: 3n, kind: "website", subject: "https://example.test/path",

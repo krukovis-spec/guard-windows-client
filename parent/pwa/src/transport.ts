@@ -1,10 +1,10 @@
 import { decodeBase64Url } from "./base64url";
+import { isGuardIdentifier } from "./relay-receive";
 import type { ApprovalIntent, ApprovalIntentLocator, EncryptedRelayFrame, ParentTransport, PasskeyCredentialDto, PasskeyOptions, ViewState } from "./types";
 
 const maximumInboxFrames = 20;
 const maximumTotalInboxFrames = 128;
 const maximumRelayFrameBytes = 64 * 1024;
-const canonicalIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u;
 
 export class RelayTransportError extends Error {
   constructor(readonly status: number) { super(`relay response ${status}`); }
@@ -55,7 +55,7 @@ function decodeInbox(value: unknown, after: number): readonly EncryptedRelayFram
       throw new Error(`inbox[${index}].cursor must advance`);
     }
     cursor = Number(frame.cursor);
-    if (typeof frame.frameId !== "string" || !canonicalIdentifier.test(frame.frameId)) {
+    if (!isGuardIdentifier(frame.frameId)) {
       throw new Error(`inbox[${index}].frameId must be canonical`);
     }
     if (frameIds.has(frame.frameId)) {
