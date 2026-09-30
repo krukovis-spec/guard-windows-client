@@ -39,7 +39,11 @@ namespace Guard.Service.Tests
                 ("composes explicit bootstrap and a functional production handler", BootstrapAndIpcChecks.ComposesExplicitBootstrapAndFunctionalHandlerAsync),
                 ("handles bounded status setup and child binding operations", BootstrapAndIpcChecks.HandlesBoundedSetupStatusAndBindingAsync),
                 ("returns an admin-only fail-closed readiness snapshot", BootstrapAndIpcChecks.ReturnsAdminOnlyReadinessSnapshotAsync),
-                ("keeps unobserved production readiness facts blocking", BootstrapAndIpcChecks.UsesOnlyObservedProductionReadinessFactsAsync)
+                ("keeps unobserved production readiness facts blocking", BootstrapAndIpcChecks.UsesOnlyObservedProductionReadinessFactsAsync),
+                ("retains exact relay outbox bytes across HTTP and CAS failures", RelayTransportChecks.PreservesDurableOutboxAsync),
+                ("validates bounded recipient-bound relay inbox pages", RelayTransportChecks.ValidatesBoundedInboxAsync),
+                ("acknowledges only the locally committed inbox cursor", RelayTransportChecks.AcknowledgesOnlyCommittedCursorAsync),
+                ("rejects unsafe relay HTTP and cancels stalled bodies", RelayTransportChecks.RejectsUnsafeHttpAndCancelsBodyAsync)
             };
             var failures = 0;
             foreach (var test in tests)
