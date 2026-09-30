@@ -60,7 +60,7 @@ export interface PasskeyCredentialDto {
 }
 
 export interface ParentTransport {
-  createRegistrationOptions(): Promise<PasskeyOptions>;
+  createRegistrationOptions(registrationTicket: string): Promise<PasskeyOptions>;
   completeRegistration(credential: PasskeyCredentialDto): Promise<void>;
   createLoginOptions(): Promise<PasskeyOptions>;
   completeLogin(credential: PasskeyCredentialDto): Promise<void>;

@@ -6,7 +6,6 @@ import worker, { type Env } from "../src/index";
 
 const rpId = "example.test";
 const origin = "https://example.test";
-const inviteSecret = "test-only-parent-invite-174c34797fbb42d9a3e57ce5a5bcf82e";
 const bootstrapToken = "test-only-bootstrap-token-8f3f0d4dd15ebd16c4f5ac14a1c9e617";
 const adminToken = "webauthn-admin-token-0000000000001";
 const deviceToken = "webauthn-device-token-000000000001";
@@ -86,12 +85,6 @@ describe.sequential("parent WebAuthn BFF", () => {
     });
     expect(response.status).toBe(403);
 
-    response = await request("/v1/admin/bootstrap", {
-      method: "POST",
-      headers: { authorization: `Bearer ${bootstrapToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ mailboxId, accessToken: adminToken }),
-    });
-    expect(response.status).toBe(201);
     response = await request(`/v1/mailboxes/${mailboxId}/tokens`, {
       method: "POST",
       headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
@@ -279,7 +272,7 @@ describe.sequential("parent WebAuthn BFF", () => {
     expect(response.status).toBe(410);
   });
 
-  it("rejects the wrong origin and the wrong high-entropy invite", async () => {
+  it("rejects the wrong origin and the obsolete global-invite registration contract", async () => {
     let response = await request("/v1/auth/login/options", {
       method: "POST",
       headers: { origin: "https://evil.example" },
@@ -296,8 +289,136 @@ describe.sequential("parent WebAuthn BFF", () => {
         inviteSecret: "x".repeat(32),
       }),
     });
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toEqual({ error: "registration_forbidden" });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "invalid_registration_request" });
+  });
+
+  it("issues view-registration tickets only through a mailbox admin, never through browser or approval credentials", async () => {
+    const path = `/v1/mailboxes/${mailboxId}/registration-tickets`;
+    const body = JSON.stringify({ recipientKeyId, username: "parent", displayName: "Guard Parent" });
+    const readerToken = "webauthn-reader-token-000000000001";
+    expect((await request(`/v1/mailboxes/${mailboxId}/tokens`, {
+      method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ accessToken: readerToken, role: "reader", recipientKeyId, publishRecipientKeyIds: [], expiresAt: Date.now() + 600_000 }),
+    })).status).toBe(201);
+    for (const token of [deviceToken, approvalToken, readerToken]) {
+      const response = await request(path, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body });
+      expect(response.status).toBe(403);
+    }
+    expect((await request(path, { method: "POST", headers: jsonOrigin, body })).status).toBe(401);
+    expect((await request("/internal/bff/registration-tickets", { method: "POST", headers: jsonOrigin, body })).status).toBe(404);
+    const authStub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(BFF_AUTH_OBJECT_NAME));
+    expect((await authStub.fetch("https://auth.internal/internal/bff/registration-tickets", {
+      method: "POST", headers: { ...jsonOrigin, "x-guard-bff-proof": "forged-proof" }, body,
+    })).status).toBe(404);
+    expect((await request(`/v1/mailboxes/other-mailbox/registration-tickets`, {
+      method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body,
+    })).status).toBe(401);
+  });
+
+  it("pins ticket bindings on the server and redeems atomically only once, including concurrent attempts", async () => {
+    const ticket = await registrationTicket("mailbox-ticket-race", "view-ticket-race");
+    const extra = await request("/v1/auth/register/options", {
+      method: "POST", headers: jsonOrigin,
+      body: JSON.stringify({ registrationTicket: ticket.registrationTicket, mailboxId: "other-mailbox" }),
+    });
+    expect(extra.status).toBe(400);
+    const wrongOrigin = await redeemTicket(ticket.registrationTicket, "https://evil.example");
+    expect(wrongOrigin.status).toBe(403);
+    const responses = await Promise.all([redeemTicket(ticket.registrationTicket), redeemTicket(ticket.registrationTicket)]);
+    expect(responses.map(response => response.status).sort()).toEqual([200, 410]);
+    expect((await redeemTicket(ticket.registrationTicket)).status).toBe(410);
+    const optionsResponse = responses.find(response => response.status === 200)!;
+    const ceremonyId = signedCookieValue(cookieFrom(optionsResponse, "__Host-guard_ceremony"));
+    const authStub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(BFF_AUTH_OBJECT_NAME));
+    await runInDurableObject(authStub, (_instance, state) => {
+      const row = state.storage.sql.exec<{ mailbox_id: string; recipient_key_id: string; expires_at: number }>(
+        "SELECT u.mailbox_id,u.recipient_key_id,c.expires_at FROM parent_users u JOIN webauthn_challenges c ON c.user_id=u.user_id WHERE c.ceremony_id=?", ceremonyId).one();
+      expect(row).toEqual({ mailbox_id: "mailbox-ticket-race", recipient_key_id: "view-ticket-race", expires_at: Date.parse(ticket.expiresAt) });
+      expect(state.storage.sql.exec("SELECT 1 FROM parent_registration_tickets WHERE mailbox_id=?", "mailbox-ticket-race").toArray()).toHaveLength(0);
+    });
+  });
+
+  it("rejects expired, revoked, replaced, unknown tickets and cannot change an existing view binding", async () => {
+    const first = await registrationTicket("mailbox-ticket-expiry", "view-ticket-expiry");
+    const second = await registrationTicket("mailbox-ticket-expiry", "view-ticket-expiry");
+    expect((await redeemTicket(first.registrationTicket)).status).toBe(410);
+    const revoke = await request("/v1/mailboxes/mailbox-ticket-expiry/registration-tickets", {
+      method: "DELETE", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ registrationTicket: second.registrationTicket }),
+    });
+    expect(revoke.status).toBe(204);
+    expect((await redeemTicket(second.registrationTicket)).status).toBe(410);
+    const expired = await registrationTicket("mailbox-ticket-expiry", "view-ticket-expiry");
+    const authStub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(BFF_AUTH_OBJECT_NAME));
+    await runInDurableObject(authStub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE parent_registration_tickets SET expires_at=0 WHERE mailbox_id=?", "mailbox-ticket-expiry");
+    });
+    expect((await redeemTicket(expired.registrationTicket)).status).toBe(410);
+    expect((await redeemTicket("x".repeat(43))).status).toBe(410);
+    const conflict = await registrationTicket(mailboxId, "different-view-recipient");
+    expect((await redeemTicket(conflict.registrationTicket)).status).toBe(409);
+  });
+
+  it("rejects legacy registration challenges and consumes them even on failure", async () => {
+    const options = await registrationOptions("mailbox-legacy-ceremony", "view-legacy-ceremony");
+    const cookie = cookieFrom(options, "__Host-guard_ceremony");
+    const id = signedCookieValue(cookie);
+    const authStub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(BFF_AUTH_OBJECT_NAME));
+    await runInDurableObject(authStub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE webauthn_challenges SET registration_ticket_hash=NULL WHERE ceremony_id=?", id);
+    });
+    const created = await registrationCredential((await options.json() as { publicKey: RegistrationPublicKey }).publicKey);
+    expect((await request("/v1/auth/register/complete", {
+      method: "POST", headers: { ...jsonOrigin, cookie }, body: JSON.stringify(created.credential),
+    })).status).toBe(409);
+    await runInDurableObject(authStub, (_instance, state) => {
+      expect(state.storage.sql.exec("SELECT 1 FROM webauthn_challenges WHERE ceremony_id=?", id).toArray()).toHaveLength(0);
+    });
+  });
+
+  it("cannot complete registration after the ticket deadline or reuse a malformed completion", async () => {
+    for (const expired of [false, true]) {
+      const options = await registrationOptions(`mailbox-completion-${expired}`, `view-completion-${expired}`);
+      const cookie = cookieFrom(options, "__Host-guard_ceremony");
+      const id = signedCookieValue(cookie);
+      const created = await registrationCredential((await options.json() as { publicKey: RegistrationPublicKey }).publicKey);
+      if (expired) {
+        const authStub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(BFF_AUTH_OBJECT_NAME));
+        await runInDurableObject(authStub, (_instance, state) => {
+          state.storage.sql.exec("UPDATE webauthn_challenges SET expires_at=0 WHERE ceremony_id=?", id);
+        });
+      }
+      const init = { method: "POST", headers: { ...jsonOrigin, cookie }, body: JSON.stringify(expired ? created.credential : {}) };
+      expect((await request("/v1/auth/register/complete", init)).status).toBe(expired ? 410 : 400);
+      expect((await request("/v1/auth/register/complete", { ...init, body: JSON.stringify(created.credential) })).status).toBe(409);
+    }
+  });
+
+  it("bounds outstanding hash-only tickets and reclaims expired capacity", async () => {
+    const authStub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(BFF_AUTH_OBJECT_NAME));
+    await runInDurableObject(authStub, (_instance, state) => {
+      const count = state.storage.sql.exec<{ count: number }>("SELECT count(*) count FROM parent_registration_tickets").one().count;
+      for (let i = count; i < 64; i++) {
+        state.storage.sql.exec("INSERT INTO parent_registration_tickets(ticket_hash,mailbox_id,recipient_key_id,username,display_name,expires_at) VALUES(?,?,?,?,?,?)",
+          new Uint8Array(32).fill(i), "mailbox-quota-fixture", "view-quota", `parent-${i}`, "Guard Parent", Date.now() + 60_000);
+      }
+    });
+    const init = { method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ recipientKeyId, username: "quota-parent", displayName: "Guard Parent" }) };
+    expect((await request(`/v1/mailboxes/${mailboxId}/registration-tickets`, init)).status).toBe(429);
+    await runInDurableObject(authStub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE parent_registration_tickets SET expires_at=0 WHERE mailbox_id=?", "mailbox-quota-fixture");
+    });
+    const response = await request(`/v1/mailboxes/${mailboxId}/registration-tickets`, init);
+    expect(response.status).toBe(201);
+    const ticket = await response.json() as { registrationTicket: string };
+    const expectedHash = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ticket.registrationTicket)));
+    await runInDurableObject(authStub, (_instance, state) => {
+      const stored = state.storage.sql.exec<{ ticket_hash: ArrayBuffer }>(
+        "SELECT ticket_hash FROM parent_registration_tickets WHERE mailbox_id=? AND username=?", mailboxId, "quota-parent").one();
+      expect(new Uint8Array(stored.ticket_hash)).toEqual(expectedHash);
+    });
   });
 
   it("binds the ceremony to RP ID and challenge, then burns failed attempts", async () => {
@@ -403,16 +524,33 @@ describe.sequential("parent WebAuthn BFF", () => {
 });
 
 async function registrationOptions(mailbox: string, recipient: string): Promise<Response> {
+  const ticket = await registrationTicket(mailbox, recipient);
+  return redeemTicket(ticket.registrationTicket);
+}
+
+async function registrationTicket(mailbox: string, recipient: string): Promise<{ registrationTicket: string; expiresAt: string }> {
+  const bootstrap = await request("/v1/admin/bootstrap", {
+    method: "POST", headers: { authorization: `Bearer ${bootstrapToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ mailboxId: mailbox, accessToken: adminToken }),
+  });
+  expect([201, 409]).toContain(bootstrap.status);
+  const response = await request(`/v1/mailboxes/${mailbox}/registration-tickets`, {
+    method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ recipientKeyId: recipient, username: "parent", displayName: "Guard Parent" }),
+  });
+  expect(response.status).toBe(201);
+  const result = await response.json() as { registrationTicket: string; expiresAt: string };
+  expect(result.registrationTicket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(Date.parse(result.expiresAt)).toBeGreaterThan(Date.now());
+  expect(Date.parse(result.expiresAt)).toBeLessThanOrEqual(Date.now() + 300_000);
+  return result;
+}
+
+async function redeemTicket(registrationTicket: string, requestOrigin = origin): Promise<Response> {
   return request("/v1/auth/register/options", {
     method: "POST",
-    headers: jsonOrigin,
-    body: JSON.stringify({
-      mailboxId: mailbox,
-      recipientKeyId: recipient,
-      inviteSecret,
-      username: "parent",
-      displayName: "Guard Parent",
-    }),
+    headers: { ...jsonOrigin, origin: requestOrigin },
+    body: JSON.stringify({ registrationTicket }),
   });
 }
 

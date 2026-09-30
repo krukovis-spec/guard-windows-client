@@ -32,6 +32,21 @@ describe("same-origin parent transport", () => {
     expect(() => sameOriginPath("//relay.example", "/v1")).toThrow();
   });
 
+  it("sends only the scoped registration ticket in the POST body, never a global invite", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ publicKey: {} }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new HttpParentTransport();
+    await expect(transport.createRegistrationOptions("")).rejects.toThrow("registration ticket required");
+    expect(fetchMock).not.toHaveBeenCalled();
+    const registrationTicket = "t".repeat(43);
+    await transport.createRegistrationOptions(registrationTicket);
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/v1/auth/register/options", {
+      method: "POST", credentials: "include",
+      headers: { "x-guard-csrf": "1", "content-type": "application/json" },
+      body: JSON.stringify({ registrationTicket })
+    });
+  });
+
   it("decodes bounded full GRF1 bytes without exposing an inner request id", async () => {
     const encodedFrame = new Uint8Array([0x47, 0x52, 0x46, 0x31, 0, 0, 0, 1]);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([{
