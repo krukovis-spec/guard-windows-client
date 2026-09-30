@@ -58,6 +58,8 @@ namespace Guard.Windows.Storage.Tests
                 paths.DeviceIdentityPendingFile == paths.DeviceIdentityFile + ".pending", "Device identity escaped the service boundary.");
             Assert(paths.DeviceRelayConfigurationFile == Path.Combine(expected, "device.relay") &&
                 paths.DeviceRelayConfigurationPendingFile == paths.DeviceRelayConfigurationFile + ".pending", "Connection profile escaped the service boundary.");
+            Assert(paths.DeviceRelayInstallFile == Path.Combine(expected, "device.relay.install") &&
+                paths.DeviceRelayInstallPendingFile == paths.DeviceRelayInstallFile + ".pending", "Installer handoff escaped the service boundary.");
             Assert(
                 string.Equals(
                     paths.StateBackupFile,

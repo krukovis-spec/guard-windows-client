@@ -9,7 +9,11 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Guard.Contracts;
+using Guard.Application;
+using Guard.Application.Readiness;
 using Guard.Domain;
+using Guard.Domain.Readiness;
+using Guard.Protocol;
 using Guard.Service;
 using Guard.Storage;
 using Guard.Windows.Cryptography;
@@ -56,15 +60,57 @@ internal static class EnrollmentConfigurationChecks
             var store = new DeviceRelayConfigurationStore(paths, protector, guard);
             await boundary.AcquireAsync(default); await boundary.InitializeNewAsync(default);
             var state = await boundary.LoadAsync(default); var identity = boundary.Identity;
+            var publicRequest = new GuardIpcRequest(GuardProtocol.CurrentVersion, Guid.NewGuid().ToString("D"),
+                GuardVerb.GetDeviceProvisioning, Array.Empty<byte>());
+            var publicHandler = Handler(boundary, trust);
+            var dispatcher = new SecureIpcRequestDispatcher(publicHandler);
+            var beforeExport = File.ReadAllBytes(paths.StateFile);
+            using (var frame = new MemoryStream(IpcFrameCodec.Encode(publicRequest)))
+            {
+                var decoded = await IpcFrameCodec.DecodeAsync(frame, TimeSpan.FromSeconds(5), default);
+                var response = await dispatcher.DispatchAsync(ClientRole.AdminSetup, decoded, default);
+                Check(response.Status == GuardIpcResponseStatus.Success && response.RequestId == publicRequest.RequestId &&
+                    response.PayloadLength <= 2048, "public provisioning IPC response");
+                using var document = JsonDocument.Parse(response.GetPayloadCopy());
+                var descriptor = document.RootElement;
+                var fields = descriptor.EnumerateObject().Select(p => p.Name).OrderBy(p => p).ToArray();
+                Check(fields.SequenceEqual(new[] { "version", "relayOrigin", "deviceId", "signingKeyId", "signingPublicKeySpki",
+                    "encryptionKeyId", "encryptionPublicKeySpki", "deviceEpoch", "authorityEpoch" }.OrderBy(p => p)),
+                    "public provisioning exposed unexpected fields");
+                Check(descriptor.GetProperty("version").GetInt32() == 1 && descriptor.GetProperty("relayOrigin").GetString() == Origin &&
+                    descriptor.GetProperty("deviceId").GetString() == identity.DeviceId &&
+                    descriptor.GetProperty("signingKeyId").GetString() == identity.SigningKeyId &&
+                    descriptor.GetProperty("encryptionKeyId").GetString() == identity.EncryptionKeyId &&
+                    descriptor.GetProperty("deviceEpoch").GetInt64() == 1 && descriptor.GetProperty("authorityEpoch").GetInt64() == 1,
+                    "public provisioning used unbound identifiers");
+                Check(Convert.FromBase64String(descriptor.GetProperty("signingPublicKeySpki").GetString()!).SequenceEqual(identity.Signing.ExportSubjectPublicKeyInfo()) &&
+                    Convert.FromBase64String(descriptor.GetProperty("encryptionPublicKeySpki").GetString()!).SequenceEqual(identity.Encryption.ExportSubjectPublicKeyInfo()),
+                    "public provisioning did not return the distinct persistent PUBLIC keys");
+            }
+            Check(beforeExport.SequenceEqual(File.ReadAllBytes(paths.StateFile)) && !File.Exists(paths.DeviceRelayConfigurationFile),
+                "public export changed state or installed a credential");
+            guard.Check = () => throw new InvalidOperationException("unexpected storage access");
+            foreach (var role in Enum.GetValues<ClientRole>().Where(r => r != ClientRole.AdminSetup))
+            {
+                var denied = await publicHandler.HandleAsync(role, publicRequest, default);
+                Check(!IpcSecurityPolicy.CanInvoke(role, GuardVerb.GetDeviceProvisioning) &&
+                    denied.Status == GuardIpcResponseStatus.Forbidden && denied.PayloadLength == 0, "non-admin public export");
+            }
+            var badRequest = new GuardIpcRequest(GuardProtocol.CurrentVersion, publicRequest.RequestId, publicRequest.Verb, new byte[] { 1 });
+            Check((await publicHandler.HandleAsync(ClientRole.AdminSetup, badRequest, default)).Status == GuardIpcResponseStatus.InvalidRequest,
+                "public export accepted caller-supplied identity");
+            guard.Check = () => { };
+            var noPins = await Handler(boundary, null).HandleAsync(ClientRole.AdminSetup, publicRequest, default);
+            Check(noPins.Status == GuardIpcResponseStatus.Unavailable && noPins.PayloadLength == 0, "default build invented release authority");
             await ThrowsAsync(() => ServiceNativeEnrollment.OpenAsync(boundary, store, default));
             Check(!File.Exists(paths.DeviceRelayConfigurationFile), "missing pins caused config creation");
             var profile = Profile(identity);
             var raw = JsonSerializer.SerializeToUtf8Bytes(profile); var original = (byte[])raw.Clone();
-            await store.InstallNewAsync(raw, trust, identity, state, Now, default);
+            await store.InstallNewAsync(raw, trust, boundary, Now, default);
             Check(raw.SequenceEqual(original), "import mutated caller buffer");
             var ciphertext = File.ReadAllBytes(paths.DeviceRelayConfigurationFile);
             Check(!Encoding.UTF8.GetString(ciphertext).Contains(Credential, StringComparison.Ordinal), "plaintext credential on disk");
-            await ThrowsAsync(() => store.InstallNewAsync(raw, trust, identity, state, Now, default));
+            await ThrowsAsync(() => store.InstallNewAsync(raw, trust, boundary, Now, default));
             Check(ciphertext.SequenceEqual(File.ReadAllBytes(paths.DeviceRelayConfigurationFile)), "repeat import overwrote config");
             var config = new DeviceRelayConfigurationStore(paths, protector, guard).Load(trust, identity, state, Now);
             using var transport = config.CreateTransport(trust, identity, state, Now);
@@ -75,8 +121,11 @@ internal static class EnrollmentConfigurationChecks
             var (result, start) = await runtime.Coordinator.BeginAsync(ClientRole.AdminSetup, offer, default);
             using (start) Check(result == Guard.Application.SetupOperationStatus.Succeeded && start != null, "real coordinator did not accept locally constructed offer");
             var pending = await boundary.LoadAsync(default);
+            var afterSetup = await dispatcher.DispatchAsync(ClientRole.AdminSetup, publicRequest, default);
+            Check(afterSetup.Status == GuardIpcResponseStatus.Conflict && afterSetup.PayloadLength == 0,
+                "setup exported a new provisioning request");
             _ = store.Load(trust, identity, pending, Now);
-            await ThrowsAsync(() => store.InstallNewAsync(raw, trust, identity, pending, Now, default));
+            await ThrowsAsync(() => store.InstallNewAsync(raw, trust, boundary, Now, default));
             Check(ciphertext.SequenceEqual(File.ReadAllBytes(paths.DeviceRelayConfigurationFile)), "setup import changed profile");
 
             var variants = new (string Field, object Value)[] {
@@ -109,12 +158,70 @@ internal static class EnrollmentConfigurationChecks
             File.Delete(paths.DeviceRelayConfigurationFile);
             Throws(() => store.Load(trust, identity, pending, Now));
             Check(!File.Exists(paths.DeviceRelayConfigurationFile), "load regenerated missing profile");
-            using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
-            await ThrowsAsync(() => store.InstallNewAsync(raw, trust, identity, state, Now, cancelled.Token));
-            guard.Check = () => { if (File.Exists(paths.DeviceRelayConfigurationPendingFile)) throw new UnauthorizedAccessException("synthetic ACL change"); };
-            await ThrowsAsync(() => store.InstallNewAsync(raw, trust, identity, state, Now, default));
-            Check(!File.Exists(paths.DeviceRelayConfigurationFile) && !File.Exists(paths.DeviceRelayConfigurationPendingFile), "failed guard published profile");
+            await ThrowsAsync(() => store.InstallNewAsync(raw, trust, boundary, Now, default));
+            Check(!File.Exists(paths.DeviceRelayConfigurationFile), "import ignored current pending setup");
+            var freshPaths = new GuardDataPaths(Path.Combine(root, "fresh"));
+            Directory.CreateDirectory(freshPaths.RootDirectory);
+            using var freshBoundary = new ServiceAuthoritativeStateBoundary(freshPaths,
+                new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true), guard,
+                new DeviceIdentityStore(freshPaths, new LocalSystemDpapiDataProtector(DeviceIdentityStore.Purpose, true), guard));
+            var freshStore = new DeviceRelayConfigurationStore(freshPaths, protector, guard);
+            // No held writer lease must fail before any protected record can be published.
+            await ThrowsAsync(() => freshStore.InstallNewAsync(original, trust, freshBoundary, Now, default));
+            await ThrowsAsync(() => freshBoundary.ExportDeviceProvisioningAsync(trust, default));
             CryptographicOperations.ZeroMemory(raw); CryptographicOperations.ZeroMemory(original);
+            await freshBoundary.AcquireAsync(default); await freshBoundary.InitializeNewAsync(default);
+            _ = await freshBoundary.LoadAsync(default);
+            var freshRaw = JsonSerializer.SerializeToUtf8Bytes(Profile(freshBoundary.Identity));
+            using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+            await ThrowsAsync(() => freshStore.InstallNewAsync(freshRaw, trust, freshBoundary, Now, cancelled.Token));
+            guard.Check = () => { if (File.Exists(freshPaths.DeviceRelayConfigurationPendingFile)) throw new UnauthorizedAccessException("synthetic ACL change"); };
+            await ThrowsAsync(() => freshStore.InstallNewAsync(freshRaw, trust, freshBoundary, Now, default));
+            Check(!File.Exists(freshPaths.DeviceRelayConfigurationFile) && !File.Exists(freshPaths.DeviceRelayConfigurationPendingFile), "failed guard published profile");
+            guard.Check = () => { };
+            var handoffProtector = new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.InstallPurpose, true);
+            // Actual encrypted installer handoff, never plaintext/token in args, using only owned temporary files.
+            async Task Import() => await freshStore.ImportStagedAsync(trust, freshBoundary, handoffProtector, Now, default);
+            await ThrowsAsync(Import); // no staged file
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, protector.Protect(freshRaw));
+            await ThrowsAsync(Import); // storage purpose is not the installer purpose
+            Check(File.Exists(freshPaths.DeviceRelayInstallFile) && !File.Exists(freshPaths.DeviceRelayConfigurationFile), "bad handoff was consumed");
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, new byte[8193]);
+            await ThrowsAsync(Import);
+            var staged = handoffProtector.Protect(freshRaw);
+            Check(!Encoding.UTF8.GetString(staged).Contains(Credential, StringComparison.Ordinal), "installer handoff contains plaintext credential");
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, staged);
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallPendingFile, Array.Empty<byte>());
+            await ThrowsAsync(Import);
+            File.Delete(freshPaths.DeviceRelayInstallPendingFile);
+            await ThrowsAsync(() => freshStore.ImportStagedAsync(trust, freshBoundary, handoffProtector, Now, cancelled.Token));
+            Check(staged.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayInstallFile)), "cancel consumed handoff");
+            guard.Check = () => { if (File.Exists(freshPaths.DeviceRelayConfigurationFile)) throw new UnauthorizedAccessException("synthetic interruption after commit"); };
+            await ThrowsAsync(Import);
+            var installed = File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile);
+            Check(staged.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayInstallFile)), "interruption lost installer handoff");
+            guard.Check = () => { };
+            var different = Profile(freshBoundary.Identity); different["accessToken"] = Credential + "-different";
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, handoffProtector.Protect(JsonSerializer.SerializeToUtf8Bytes(different)));
+            await ThrowsAsync(Import);
+            Check(installed.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile)), "retry rotated credential");
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, staged);
+            await Import(); // exact retry completes consumption only
+            Check(!File.Exists(freshPaths.DeviceRelayInstallFile) && installed.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile)),
+                "resume overwrote installed record or left handoff behind");
+            await ThrowsAsync(Import); // flag is one-shot; normal startup must not retain it
+            var freshState = await freshBoundary.LoadAsync(default);
+            var freshConfig = freshStore.Load(trust, freshBoundary.Identity, freshState, Now);
+            using var freshRuntime = ServiceNativeEnrollment.Create(freshBoundary.NativeEnrollmentStore, freshBoundary.Identity,
+                freshState, freshConfig, trust, new Clock());
+            var begun = await freshRuntime.Coordinator.BeginAsync(ClientRole.AdminSetup,
+                freshConfig.CreateOffer(trust, freshBoundary.Identity, freshState, "Lab", Now), default);
+            using (begun.Start) Check(begun.Status == Guard.Application.SetupOperationStatus.Succeeded, "imported profile did not reach actual enrollment");
+            File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, staged);
+            await ThrowsAsync(Import); // even identical import is forbidden once setup has begun
+            Check(File.Exists(freshPaths.DeviceRelayInstallFile) && installed.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile)),
+                "active setup accepted/replaced installer profile");
+            CryptographicOperations.ZeroMemory(freshRaw);
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -124,12 +231,26 @@ internal static class EnrollmentConfigurationChecks
         ["mailboxId"] = "mailbox-configuration-test", ["deviceEpoch"] = 1L, ["authorityEpoch"] = 1L,
         ["accessToken"] = Credential, ["issuedAt"] = Now.ToUnixTimeMilliseconds(), ["expiresAt"] = Now.AddDays(2).ToUnixTimeMilliseconds() };
     private sealed class TestGuard : IServiceDataBoundaryGuard { internal Action Check = () => { }; public void DemandReady() => Check(); }
+    private static GuardServiceIpcOperationHandler Handler(ServiceAuthoritativeStateBoundary boundary, EnrollmentDeploymentTrust? trust)
+    {
+        var unused = new UnusedSetupDependencies();
+        return new GuardServiceIpcOperationHandler(boundary,
+            new SetupCoordinator(boundary, new SetupCeremony(new CryptographicSetupSecretGenerator(), new Sha256SetupSecretHasher(), new EcdsaP256SignatureVerifier())),
+            new ChildAccountBindingCoordinator(boundary, unused), new GuardReadinessCoordinator(boundary, unused), unused, trust);
+    }
+    private sealed class UnusedSetupDependencies : IManagedChildAccountValidator, IDeviceReadinessFactsProvider, IServiceUtcClock
+    {
+        public DateTimeOffset UtcNow => Now;
+        public bool TryValidate(string sid, out WindowsAccountSid binding) => throw new InvalidOperationException("Export must not query accounts.");
+        public ReadinessProbeFacts Probe(DeviceSecurityState state, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Export must not probe/change platform readiness.");
+    }
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
     private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
     private static void Throws(Action action)
     { try { action(); } catch (Exception e) when (e is ArgumentException or InvalidDataException or InvalidOperationException or JsonException or CryptographicException or IOException) { return; }
         throw new InvalidOperationException("Expected configuration rejection"); }
     private static async Task ThrowsAsync(Func<Task> action)
-    { try { await action(); } catch (Exception e) when (e is InvalidDataException or InvalidOperationException or OperationCanceledException or UnauthorizedAccessException) { return; }
+    { try { await action(); } catch (Exception e) when (e is InvalidDataException or IOException or InvalidOperationException or OperationCanceledException or UnauthorizedAccessException or CryptographicException) { return; }
         throw new InvalidOperationException("Expected installation rejection"); }
 }

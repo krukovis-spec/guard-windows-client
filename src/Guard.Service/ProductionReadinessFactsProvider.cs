@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Threading;
 using Guard.Application.Readiness;
 using Guard.Domain;
@@ -10,30 +9,6 @@ using Guard.Windows.Services;
 
 namespace Guard.Service
 {
-    internal static class GuardServiceIdentity
-    {
-        public const string ServiceName = "Guard";
-
-        public static string ExpectedBinaryPath
-        {
-            get
-            {
-                var programFiles = Environment.GetFolderPath(
-                    Environment.SpecialFolder.ProgramFiles);
-                if (string.IsNullOrWhiteSpace(programFiles))
-                {
-                    throw new InvalidOperationException(
-                        "The protected Program Files root is unavailable.");
-                }
-
-                return Path.Combine(
-                    programFiles,
-                    "Guard",
-                    "Guard.Service.exe");
-            }
-        }
-    }
-
     /// <summary>
     /// Placeholder for the future read-only SCM adapter. Until SCM install
     /// facts are observed, the final service-boundary fact remains Unknown.

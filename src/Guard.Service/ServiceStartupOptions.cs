@@ -7,13 +7,16 @@ namespace Guard.Service
     {
         public const string InitializeAuthoritativeStateArgument =
             "--initialize-authoritative-state";
+        public const string ImportDeviceRelayProfileArgument = "--import-device-relay-profile";
 
-        private ServiceStartupOptions(bool initializeAuthoritativeState)
+        private ServiceStartupOptions(bool initializeAuthoritativeState, bool importDeviceRelayProfile = false)
         {
             InitializeAuthoritativeState = initializeAuthoritativeState;
+            ImportDeviceRelayProfile = importDeviceRelayProfile;
         }
 
         public bool InitializeAuthoritativeState { get; }
+        public bool ImportDeviceRelayProfile { get; }
 
         public static ServiceStartupOptions Normal { get; } =
             new ServiceStartupOptions(initializeAuthoritativeState: false);
@@ -23,11 +26,18 @@ namespace Guard.Service
             out string[] hostArgs)
         {
             var initialize = false;
+            var import = false;
             var remaining = new List<string>();
             var values = args ?? Array.Empty<string>();
             for (var index = 0; index < values.Length; index++)
             {
                 var value = values[index] ?? string.Empty;
+                if (string.Equals(value, ImportDeviceRelayProfileArgument, StringComparison.Ordinal))
+                {
+                    if (import) throw new ArgumentException("Duplicate device profile import argument.", nameof(args));
+                    import = true;
+                    continue;
+                }
                 if (string.Equals(
                     value,
                     InitializeAuthoritativeStateArgument,
@@ -47,9 +57,11 @@ namespace Guard.Service
                 remaining.Add(value);
             }
 
+            if (initialize && import)
+                throw new ArgumentException("Device profile import requires an already initialized identity.", nameof(args));
             hostArgs = remaining.ToArray();
-            return initialize
-                ? new ServiceStartupOptions(initializeAuthoritativeState: true)
+            return initialize || import
+                ? new ServiceStartupOptions(initialize, import)
                 : Normal;
         }
     }

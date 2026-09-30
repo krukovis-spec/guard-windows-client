@@ -137,6 +137,7 @@ namespace Guard.Windows.ScmQuery.Tests
             public int DisposeCount { get; private set; }
             public ScmServiceConfiguration ReadConfiguration() { ConfigurationReads++; return _configuration; }
             public uint ReadCurrentState() { StatusReads++; return _state; }
+            public ScmServiceProcessStatus ReadProcessStatus() => throw new NotSupportedException();
             public void Dispose() { DisposeCount++; }
         }
 
@@ -154,6 +155,7 @@ namespace Guard.Windows.ScmQuery.Tests
             public int DisposeCount { get; private set; }
             public ScmServiceConfiguration ReadConfiguration() { throw new InvalidOperationException("fake config failure"); }
             public uint ReadCurrentState() { throw new InvalidOperationException("not reached"); }
+            public ScmServiceProcessStatus ReadProcessStatus() => throw new NotSupportedException();
             public void Dispose() { DisposeCount++; }
         }
     }

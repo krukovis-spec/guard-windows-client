@@ -25,6 +25,7 @@ namespace Guard.Service
     internal interface IServiceAuthoritativeStateInitializer
     {
         Task InitializeNewAsync(CancellationToken cancellationToken);
+        Task ImportDeviceRelayProfileAsync(CancellationToken cancellationToken);
     }
 
     internal interface IServiceProxyIdentityProvider
@@ -106,6 +107,12 @@ namespace Guard.Service
                     await _stateInitializer
                         .InitializeNewAsync(cancellationToken)
                         .ConfigureAwait(false);
+                    _dataBoundaryGuard.DemandReady();
+                }
+
+                if (_startupOptions.ImportDeviceRelayProfile)
+                {
+                    await _stateInitializer.ImportDeviceRelayProfileAsync(cancellationToken).ConfigureAwait(false);
                     _dataBoundaryGuard.DemandReady();
                 }
 

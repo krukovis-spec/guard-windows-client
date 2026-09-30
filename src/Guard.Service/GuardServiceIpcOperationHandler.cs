@@ -67,13 +67,15 @@ namespace Guard.Service
         private readonly ChildAccountBindingCoordinator _bindingCoordinator;
         private readonly GuardReadinessCoordinator _readinessCoordinator;
         private readonly IServiceUtcClock _clock;
+        private readonly EnrollmentDeploymentTrust? _deploymentTrust;
 
         public GuardServiceIpcOperationHandler(
             IAuthoritativeStateStore stateStore,
             SetupCoordinator setupCoordinator,
             ChildAccountBindingCoordinator bindingCoordinator,
             GuardReadinessCoordinator readinessCoordinator,
-            IServiceUtcClock clock)
+            IServiceUtcClock clock,
+            EnrollmentDeploymentTrust? deploymentTrust = null)
         {
             _stateStore = stateStore ??
                 throw new ArgumentNullException(nameof(stateStore));
@@ -84,6 +86,8 @@ namespace Guard.Service
             _readinessCoordinator = readinessCoordinator ??
                 throw new ArgumentNullException(nameof(readinessCoordinator));
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+            // Production DI supplies no override: release pins come only from this service assembly.
+            _deploymentTrust = deploymentTrust;
         }
 
         public async Task<GuardIpcResponse> HandleAsync(
@@ -98,6 +102,9 @@ namespace Guard.Service
 
             switch (request.Verb)
             {
+                case GuardVerb.GetDeviceProvisioning:
+                    return await GetDeviceProvisioningAsync(authenticatedRole, request, cancellationToken).ConfigureAwait(false);
+
                 case GuardVerb.GetStatus:
                     return await GetStatusAsync(
                         request,
@@ -126,6 +133,23 @@ namespace Guard.Service
                         request,
                         GuardIpcResponseStatus.Unavailable);
             }
+        }
+
+        private async Task<GuardIpcResponse> GetDeviceProvisioningAsync(ClientRole role, GuardIpcRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (role != ClientRole.AdminSetup) return Response(request, GuardIpcResponseStatus.Forbidden);
+            if (request.PayloadLength != 0) return Response(request, GuardIpcResponseStatus.InvalidRequest);
+            if (_stateStore is not ServiceAuthoritativeStateBoundary service)
+                return Response(request, GuardIpcResponseStatus.Unavailable);
+            try
+            {
+                var trust = _deploymentTrust ?? EnrollmentDeploymentTrust.FromServiceAssembly();
+                return Response(request, GuardIpcResponseStatus.Success,
+                    await service.ExportDeviceProvisioningAsync(trust, cancellationToken).ConfigureAwait(false));
+            }
+            catch (InvalidDataException) { return Response(request, GuardIpcResponseStatus.Unavailable); }
+            catch (InvalidOperationException) { return Response(request, GuardIpcResponseStatus.Conflict); }
         }
 
         private async Task<GuardIpcResponse> GetReadinessAsync(

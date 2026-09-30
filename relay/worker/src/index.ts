@@ -107,6 +107,7 @@ export class DeviceMailbox implements DurableObject {
       const enrollmentResponse = await handleEnrollment(request, this.state, () => this.authenticate(request));
       if (enrollmentResponse) return enrollmentResponse;
       const auth = await this.authenticate(request); if (!auth) return fail(401, "authentication_required");
+      this.requireCurrentAuth(auth);
       const prefix = `/v1/mailboxes/${this.state.id.name}`;
       if (path === `${prefix}/registration-tickets` && (request.method === "POST" || request.method === "DELETE")) {
         if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden");
@@ -136,7 +137,7 @@ export class DeviceMailbox implements DurableObject {
     this.sql.exec("DELETE FROM parent_locators WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM parent_registration_tickets WHERE expires_at <= ?", now);
   }
-  private async bootstrap(request: Request): Promise<Response> { const body = await readJsonObject(request); if (!validToken(body.accessToken)) return fail(400, "invalid_bootstrap"); const exists = [...this.sql.exec("SELECT 1 FROM tokens LIMIT 1")].length > 0; if (exists) return fail(409, "already_bootstrapped"); const hash = await sha256(body.accessToken); this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,?,?)", hash.buffer, "admin", Date.now() + 365 * 86400000); return json({ role: "admin" }, 201); }
+  private async bootstrap(request: Request): Promise<Response> { const body = await readJsonObject(request); if (!validToken(body.accessToken)) return fail(400, "invalid_bootstrap"); const hash = await sha256(body.accessToken); const exists = [...this.sql.exec("SELECT 1 FROM tokens LIMIT 1")].length > 0; if (exists) return fail(409, "already_bootstrapped"); this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,?,?)", hash.buffer, "admin", Date.now() + 365 * 86400000); return json({ role: "admin" }, 201); }
   private async provisionToken(request: Request, auth: Auth): Promise<Response> {
     if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden");
     const body = await readJsonObject(request);
@@ -144,6 +145,8 @@ export class DeviceMailbox implements DurableObject {
     if (!validToken(body.accessToken) || !scope || typeof body.expiresAt !== "number" ||
       !Number.isSafeInteger(body.expiresAt) || body.expiresAt <= Date.now()) throw new RelayHttpError(400, "invalid_token_provisioning");
     const hash = await sha256(body.accessToken);
+    this.requireCurrentAuth(auth);
+    if (body.expiresAt <= Date.now()) throw new RelayHttpError(400, "invalid_token_provisioning");
     if ([...this.sql.exec("SELECT 1 FROM enrollments WHERE token_hash=?", hash.buffer)].length)
       throw new RelayHttpError(409, "enrollment_token_conflict");
     const existing = [...this.sql.exec("SELECT 1 FROM tokens WHERE hash=?", hash.buffer)][0];
@@ -157,7 +160,7 @@ export class DeviceMailbox implements DurableObject {
       scope.approvalKeyId, scope.authorityEpoch, JSON.stringify(scope.viewRecipientKeyIds));
     return json({ role: scope.role, expiresAt: body.expiresAt }, 201);
   }
-  private async revokeToken(request: Request, auth: Auth): Promise<Response> { if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden"); const b = await readJsonObject(request); if (!validToken(b.accessToken)) throw new RelayHttpError(400, "invalid_token_revocation"); const hash = await sha256(b.accessToken); this.sql.exec("DELETE FROM tokens WHERE hash=?", hash.buffer); return new Response(null, { status: 204, headers }); }
+  private async revokeToken(request: Request, auth: Auth): Promise<Response> { if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden"); const b = await readJsonObject(request); if (!validToken(b.accessToken)) throw new RelayHttpError(400, "invalid_token_revocation"); const hash = await sha256(b.accessToken); this.requireCurrentAuth(auth); this.sql.exec("DELETE FROM tokens WHERE hash=?", hash.buffer); return new Response(null, { status: 204, headers }); }
   private async redeemLocator(request: Request, auth: Auth): Promise<Response> {
     if (auth.role !== "approval") throw new RelayHttpError(403, "role_forbidden");
     if (request.headers.get("content-type") !== "application/json") throw new RelayHttpError(415, "json_content_type_required");
@@ -170,6 +173,7 @@ export class DeviceMailbox implements DurableObject {
     }
     const locatorHash = await sha256(body.locator);
     return this.state.storage.transaction(async () => {
+      this.requireCurrentAuth(auth);
       const row = [...this.sql.exec<{ request_id_hash: ArrayBuffer; view_recipient_key_id: string | null }>(
         "SELECT request_id_hash,view_recipient_key_id FROM parent_locators WHERE locator_hash=? AND expires_at>?",
         locatorHash.buffer,
@@ -186,16 +190,26 @@ export class DeviceMailbox implements DurableObject {
   private async authenticate(request: Request): Promise<Auth | null> {
     const token = request.headers.get("x-guard-token"); if (!token || !validToken(token)) return null;
     const hash = await sha256(token);
+    return this.findAuth(hash);
+  }
+  private findAuth(hash: Uint8Array): Auth | null {
     const row = [...this.sql.exec<{ role: string; recipient_key_id: string | null; publish_recipient_key_ids: string | null;
       approval_key_id: string | null; authority_epoch: number | null; view_recipient_key_ids: string | null }>(
       "SELECT role,recipient_key_id,publish_recipient_key_ids,approval_key_id,authority_epoch,view_recipient_key_ids FROM tokens WHERE hash=? AND expires_at>?",
       hash.buffer, Date.now())][0];
     if (!row) return null;
     try {
-      return tokenScope(row.role, { recipientKeyId: row.recipient_key_id,
+      const scope = tokenScope(row.role, { recipientKeyId: row.recipient_key_id,
         publishRecipientKeyIds: JSON.parse(row.publish_recipient_key_ids ?? "null"), approvalKeyId: row.approval_key_id,
         authorityEpoch: row.authority_epoch, viewRecipientKeyIds: JSON.parse(row.view_recipient_key_ids ?? "null") });
+      return scope ? { ...scope, tokenHash: hash } : null;
     } catch { return null; } // Legacy unscoped/corrupt non-admin credentials fail closed.
+  }
+  private requireCurrentAuth(auth: Auth): void {
+    const current = this.findAuth(auth.tokenHash);
+    if (!current) throw new RelayHttpError(401, "authentication_required");
+    // Both objects are created solely by findAuth with deterministic field order; no request properties enter them.
+    if (JSON.stringify(current) !== JSON.stringify(auth)) throw new RelayHttpError(403, "credential_scope_changed");
   }
   private async publish(request: Request, auth: Auth): Promise<Response> { const raw = await readBoundedBody(request, MAX_FRAME_BYTES); let frame: RelayFrame; try { frame = parseRelayFrame(raw); } catch (e) { throw new RelayHttpError(400, e instanceof FrameError ? "malformed_frame" : "invalid_frame"); }
     const mailbox = mailboxPath(new URL(request.url).pathname); if (frame.mailboxId !== mailbox) throw new RelayHttpError(400, "mailbox_mismatch");
@@ -209,6 +223,8 @@ export class DeviceMailbox implements DurableObject {
     if (frame.createdAt > BigInt(now + 5 * 60000)) throw new RelayHttpError(400, "frame_from_future");
     const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", raw));
     return this.state.storage.transactionSync(() => {
+      this.requireCurrentAuth(auth);
+      if (frame.expiresAt <= BigInt(Date.now())) throw new RelayHttpError(410, "frame_expired");
       const delivered = [...this.sql.exec<{ frame_hash: ArrayBuffer | null; recipient_key_id: string | null; cursor: number | null }>(
         "SELECT frame_hash,recipient_key_id,cursor FROM tombstones WHERE frame_id=?", frame.frameId)][0];
       if (delivered) {
@@ -238,8 +254,23 @@ export class DeviceMailbox implements DurableObject {
     });
   }
   private poll(request: Request, auth: Auth): Response { if (auth.role === "reader") throw new RelayHttpError(403, "role_forbidden"); const url = new URL(request.url); const recipient = url.searchParams.get("recipient"); const after = parseNatural(url.searchParams.get("after") ?? "0"); const limit = Math.min(parseNatural(url.searchParams.get("limit") ?? "20"), maxPoll); if (!validId(recipient) || after < 0 || limit < 1) throw new RelayHttpError(400, "invalid_poll"); requireRecipient(auth, recipient); const rows = [...this.sql.exec<{ bytes: ArrayBuffer; cursor: number }>("SELECT bytes,cursor FROM frames WHERE recipient_key_id=? AND cursor>? AND expires_at>? ORDER BY cursor ASC LIMIT ?", recipient, after, Date.now(), limit)]; return json({ frames: rows.map(x => bytesToBase64(new Uint8Array(x.bytes))), nextCursor: rows.length ? rows[rows.length - 1]!.cursor : after }); }
-  private async ack(request: Request, auth: Auth): Promise<Response> { if (auth.role === "reader") throw new RelayHttpError(403, "role_forbidden"); const b = await readJsonObject(request); if (!validId(b.recipientKeyId) || typeof b.cursor !== "number" || !Number.isSafeInteger(b.cursor) || b.cursor < 0) throw new RelayHttpError(400, "invalid_ack"); const recipient = b.recipientKeyId; const cursor = b.cursor; requireRecipient(auth, recipient); const current = [...this.sql.exec<{ cursor: number }>("SELECT cursor FROM acknowledgements WHERE recipient_key_id=?", recipient)][0]?.cursor ?? 0; if (cursor < current) return json({ cursor: current, duplicate: true }); const maximum = [...this.sql.exec<{ cursor: number }>("SELECT cursor FROM publication_cursors WHERE recipient_key_id=?", recipient)][0]?.cursor ?? current; if (cursor > maximum) throw new RelayHttpError(409, "ack_beyond_published"); this.sql.exec("INSERT INTO acknowledgements(recipient_key_id,cursor) VALUES(?,?) ON CONFLICT(recipient_key_id) DO UPDATE SET cursor=excluded.cursor", recipient, cursor); this.sql.exec("DELETE FROM frames WHERE recipient_key_id=? AND cursor<=?", recipient, cursor); return json({ cursor, duplicate: cursor === current }); }
-  private async intent(request: Request, auth: Auth, operation: "reserve" | "finalize" | "cancel"): Promise<Response> { if (auth.role !== "approval" && auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden"); const b = await readJsonObject(request) as unknown as IntentBody; if (!validId(b.keyId) || !Number.isSafeInteger(b.authorityEpoch) || b.authorityEpoch < 1 || !validId(b.intentId)) throw new RelayHttpError(400, "invalid_intent"); requireApprovalAuthority(auth, b.keyId, b.authorityEpoch); return this.state.storage.transaction(async () => { const now = Date.now(); const existing = [...this.sql.exec<{ sequence: number; status: string; intent_id: string; expires_at: number }>("SELECT sequence,status,intent_id,expires_at FROM intents WHERE authority_epoch=? AND key_id=?", b.authorityEpoch, b.keyId)][0]; if (operation === "reserve") { if (existing && (existing.status === "pending" || existing.status === "receipt_observed") && existing.expires_at > now) { if (existing.intent_id === b.intentId) return json({ sequence: existing.sequence, status: existing.status, duplicate: true, nonAuthoritative: true }); throw new RelayHttpError(409, "signing_intent_pending"); }
+  private async ack(request: Request, auth: Auth): Promise<Response> {
+    if (auth.role === "reader") throw new RelayHttpError(403, "role_forbidden");
+    const b = await readJsonObject(request);
+    this.requireCurrentAuth(auth);
+    if (!validId(b.recipientKeyId) || typeof b.cursor !== "number" || !Number.isSafeInteger(b.cursor) || b.cursor < 0)
+      throw new RelayHttpError(400, "invalid_ack");
+    const recipient = b.recipientKeyId, cursor = b.cursor;
+    requireRecipient(auth, recipient);
+    const current = [...this.sql.exec<{ cursor: number }>("SELECT cursor FROM acknowledgements WHERE recipient_key_id=?", recipient)][0]?.cursor ?? 0;
+    if (cursor < current) return json({ cursor: current, duplicate: true });
+    const maximum = [...this.sql.exec<{ cursor: number }>("SELECT cursor FROM publication_cursors WHERE recipient_key_id=?", recipient)][0]?.cursor ?? current;
+    if (cursor > maximum) throw new RelayHttpError(409, "ack_beyond_published");
+    this.sql.exec("INSERT INTO acknowledgements(recipient_key_id,cursor) VALUES(?,?) ON CONFLICT(recipient_key_id) DO UPDATE SET cursor=excluded.cursor", recipient, cursor);
+    this.sql.exec("DELETE FROM frames WHERE recipient_key_id=? AND cursor<=?", recipient, cursor);
+    return json({ cursor, duplicate: cursor === current });
+  }
+  private async intent(request: Request, auth: Auth, operation: "reserve" | "finalize" | "cancel"): Promise<Response> { if (auth.role !== "approval" && auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden"); const b = await readJsonObject(request) as unknown as IntentBody; if (!validId(b.keyId) || !Number.isSafeInteger(b.authorityEpoch) || b.authorityEpoch < 1 || !validId(b.intentId)) throw new RelayHttpError(400, "invalid_intent"); requireApprovalAuthority(auth, b.keyId, b.authorityEpoch); return this.state.storage.transaction(async () => { this.requireCurrentAuth(auth); const now = Date.now(); const existing = [...this.sql.exec<{ sequence: number; status: string; intent_id: string; expires_at: number }>("SELECT sequence,status,intent_id,expires_at FROM intents WHERE authority_epoch=? AND key_id=?", b.authorityEpoch, b.keyId)][0]; if (operation === "reserve") { if (existing && (existing.status === "pending" || existing.status === "receipt_observed") && existing.expires_at > now) { if (existing.intent_id === b.intentId) return json({ sequence: existing.sequence, status: existing.status, duplicate: true, nonAuthoritative: true }); throw new RelayHttpError(409, "signing_intent_pending"); }
       const floor = [...this.sql.exec<{ floor: number }>("SELECT floor FROM sequence_floors WHERE authority_epoch=? AND key_id=?", b.authorityEpoch, b.keyId)][0]?.floor ?? 0; const sequence = floor + 1; if (!Number.isSafeInteger(sequence)) throw new RelayHttpError(409, "sequence_exhausted"); this.sql.exec("INSERT INTO intents(authority_epoch,key_id,sequence,status,intent_id,expires_at) VALUES(?,?,?,?,?,?) ON CONFLICT(authority_epoch,key_id) DO UPDATE SET sequence=excluded.sequence,status=excluded.status,intent_id=excluded.intent_id,expires_at=excluded.expires_at", b.authorityEpoch,b.keyId,sequence,"pending",b.intentId,now+15*60000); return json({ sequence, status: "pending", duplicate: false, nonAuthoritative: true }, 201); }
     if (!existing || existing.intent_id !== b.intentId) throw new RelayHttpError(409, "unknown_signing_intent"); if (existing.status !== "pending" || existing.expires_at <= now) throw new RelayHttpError(409, "signing_intent_not_pending"); if (operation === "finalize") { if (!validId(b.receiptFrameId) || ![...this.sql.exec("SELECT 1 FROM frames WHERE frame_id=? AND kind=3 AND (? IS NULL OR recipient_key_id=?)", b.receiptFrameId, auth.role === "admin" ? null : auth.recipientKeyId, auth.role === "admin" ? null : auth.recipientKeyId)][0]) throw new RelayHttpError(409, "receipt_evidence_required"); this.sql.exec("INSERT INTO sequence_floors(authority_epoch,key_id,floor) VALUES(?,?,?) ON CONFLICT(authority_epoch,key_id) DO UPDATE SET floor=max(floor,excluded.floor)", b.authorityEpoch,b.keyId,existing.sequence); this.sql.exec("UPDATE intents SET status='receipt_observed' WHERE authority_epoch=? AND key_id=?", b.authorityEpoch,b.keyId); return json({ sequence: existing.sequence, status: "receipt_observed", nonAuthoritative: true }); }
     this.sql.exec("INSERT INTO sequence_floors(authority_epoch,key_id,floor) VALUES(?,?,?) ON CONFLICT(authority_epoch,key_id) DO UPDATE SET floor=max(floor,excluded.floor)", b.authorityEpoch,b.keyId,existing.sequence); this.sql.exec("UPDATE intents SET status='cancelled' WHERE authority_epoch=? AND key_id=?", b.authorityEpoch,b.keyId); return json({ sequence: existing.sequence, status: "cancelled", nonAuthoritative: true }); }); }
@@ -253,7 +284,7 @@ interface TokenScope {
   authorityEpoch: number | null;
   viewRecipientKeyIds: string[];
 }
-type Auth = TokenScope;
+type Auth = TokenScope & { tokenHash: Uint8Array };
 interface IntentBody { authorityEpoch: number; keyId: string; intentId: string; receiptFrameId?: string; }
 class RelayHttpError extends Error { constructor(readonly status: number, readonly code: string) { super(code); } }
 function tokenScope(role: unknown, input: Record<string, unknown>): TokenScope | null {
@@ -265,7 +296,9 @@ function tokenScope(role: unknown, input: Record<string, unknown>): TokenScope |
     return { role, recipientKeyId: null, publishRecipientKeyIds: [], approvalKeyId: null, authorityEpoch: null, viewRecipientKeyIds: [] };
   }
   if (!validId(input.recipientKeyId) || !validRecipients(input.publishRecipientKeyIds) ||
-    (role === "reader" ? input.publishRecipientKeyIds.length !== 0 : input.publishRecipientKeyIds.length === 0)) return null;
+    (role === "reader" && input.publishRecipientKeyIds.length !== 0) ||
+    (role === "approval" && input.publishRecipientKeyIds.length === 0)) return null;
+  // An explicit empty device list bootstraps GREX before any phone key exists; it never authorizes GRF1 publication.
   if (role === "approval") {
     if (!validId(input.approvalKeyId) || typeof input.authorityEpoch !== "number" || !Number.isSafeInteger(input.authorityEpoch) ||
       input.authorityEpoch < 1 || !validRecipients(input.viewRecipientKeyIds) || input.viewRecipientKeyIds.length === 0) return null;
