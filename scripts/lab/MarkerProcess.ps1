@@ -35,3 +35,11 @@ function Wait-MarkerDecision([string]$Path, [string]$Expected) {
     } while ($timer.Elapsed.TotalSeconds -lt 15)
     throw ('Expected marker decision ' + $Expected + ', observed ' + $decision)
 }
+
+function Get-MarkerPolicyEventCount([int]$Id, [datetime]$Start, [guid]$PolicyId) {
+    $events = @(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-CodeIntegrity/Operational';Id=$Id;StartTime=$Start} -MaxEvents 100 -ErrorAction SilentlyContinue | Where-Object {
+        $xml = $_.ToXml()
+        $xml -match 'GuardLab\\marker-v1\.exe' -and $xml -match [regex]::Escape($PolicyId.ToString())
+    })
+    $events.Count
+}

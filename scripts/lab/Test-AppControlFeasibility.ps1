@@ -27,13 +27,6 @@ function Invoke-LabCiTool([string]$Operation, [string]$Argument) {
 function Get-LabPolicy {
     @((Invoke-LabCiTool '--list-policies').Policies | Where-Object {[guid]$_.PolicyID -eq $policyId})
 }
-function Get-MarkerPolicyEventCount([int]$Id, [datetime]$Start) {
-    $events = @(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-CodeIntegrity/Operational';Id=$Id;StartTime=$Start} -MaxEvents 100 -ErrorAction SilentlyContinue | Where-Object {
-        $xml = $_.ToXml()
-        $xml -match 'GuardLab\\marker-v1\.exe' -and $xml -match [regex]::Escape($policyId.ToString())
-    })
-    $events.Count
-}
 $inventory = Invoke-LabCiTool '--list-policies'
 if (-not ($inventory.PSObject.Properties.Name -contains 'Policies')) { throw 'Unknown native inventory shape; experiment refused' }
 foreach ($policy in @($inventory.Policies)) {
@@ -67,7 +60,7 @@ try {
     $results.AuditLaunch = Wait-MarkerDecision $marker 'Allowed'
     $eventDeadline = [datetime]::UtcNow.AddSeconds(10)
     do {
-        $results.AuditEvents = Get-MarkerPolicyEventCount 3076 $auditStart
+        $results.AuditEvents = Get-MarkerPolicyEventCount 3076 $auditStart $policyId
         if ($results.AuditEvents -gt 0) { break }
         Start-Sleep -Milliseconds 200
     } while ([datetime]::UtcNow -lt $eventDeadline)
@@ -81,7 +74,7 @@ try {
     $results.EnforcedLaunch = Wait-MarkerDecision $marker 'Blocked'
     $eventDeadline = [datetime]::UtcNow.AddSeconds(10)
     do {
-        $results.BlockEvents = Get-MarkerPolicyEventCount 3077 $enforceStart
+        $results.BlockEvents = Get-MarkerPolicyEventCount 3077 $enforceStart $policyId
         if ($results.BlockEvents -gt 0) { break }
         Start-Sleep -Milliseconds 200
     } while ([datetime]::UtcNow -lt $eventDeadline)
