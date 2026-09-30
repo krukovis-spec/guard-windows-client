@@ -8,6 +8,7 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 import { MAX_FRAME_BYTES, parseRelayFrame } from "./frame";
+import { readBoundedBody, RequestBodyError } from "./bounded-body";
 
 export interface ParentBffEnv {
   DEVICE_MAILBOX: DurableObjectNamespace;
@@ -132,7 +133,7 @@ export async function forwardParentBff(request: Request, env: ParentBffEnv): Pro
     headers.set(internalHeaderName, await internalProof(config, `auth:${BFF_AUTH_OBJECT_NAME}`));
     const body = request.method === "GET" || request.method === "HEAD"
       ? undefined
-      : await request.arrayBuffer();
+      : await readBoundedBody(request, maxJsonBytes);
     const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(BFF_AUTH_OBJECT_NAME));
     return await stub.fetch(new Request(`https://auth.internal${new URL(request.url).pathname}${new URL(request.url).search}`, {
       method: request.method,
@@ -531,7 +532,7 @@ async function forwardApprovalIntent(
     session.mailbox_id,
     new URL("https://mailbox.internal/internal/bff/approval-intents"),
     "POST",
-    JSON.stringify({ requestId: input.requestId }),
+    JSON.stringify({ requestId: input.requestId, viewRecipientKeyId: session.recipient_key_id }),
   );
 }
 
@@ -600,8 +601,8 @@ function mailboxInbox(context: ParentBffContext, request: Request): Response {
 
 async function mailboxApprovalIntent(context: ParentBffContext, request: Request): Promise<Response> {
   requireMethod(request, "POST");
-  const input = await readJsonObject<{ requestId?: unknown }>(request);
-  if (!validId(input.requestId)) throw new ParentBffHttpError(400, "invalid_approval_intent");
+  const input = await readJsonObject<{ requestId?: unknown; viewRecipientKeyId?: unknown }>(request);
+  if (!validId(input.requestId) || !validId(input.viewRecipientKeyId)) throw new ParentBffHttpError(400, "invalid_approval_intent");
   const count = first(context.sql.exec<{ count: number }>(
     "SELECT count(*) count FROM parent_locators WHERE expires_at>?",
     Date.now(),
@@ -613,11 +614,12 @@ async function mailboxApprovalIntent(context: ParentBffContext, request: Request
   const requestIdHash = await sha256(input.requestId);
   const expiresAt = Date.now() + locatorLifetimeMs;
   context.sql.exec(
-    "INSERT INTO parent_locators(locator_hash,request_id_hash,expires_at,created_at) VALUES(?,?,?,?)",
+    "INSERT INTO parent_locators(locator_hash,request_id_hash,expires_at,created_at,view_recipient_key_id) VALUES(?,?,?,?,?)",
     locatorHash,
     requestIdHash,
     expiresAt,
     Date.now(),
+    input.viewRecipientKeyId,
   );
   return jsonResponse({
     locator,
@@ -823,14 +825,8 @@ async function readJsonObject<T>(request: Request): Promise<T> {
   if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/.test(contentType)) {
     throw new ParentBffHttpError(415, "json_content_type_required");
   }
-  const declared = request.headers.get("content-length");
-  if (declared && (!/^[0-9]+$/.test(declared) || Number(declared) > maxJsonBytes)) {
-    throw new ParentBffHttpError(413, "request_too_large");
-  }
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength === 0 || bytes.byteLength > maxJsonBytes) {
-    throw new ParentBffHttpError(bytes.byteLength === 0 ? 400 : 413, bytes.byteLength === 0 ? "invalid_json" : "request_too_large");
-  }
+  const bytes = await readBoundedBody(request, maxJsonBytes);
+  if (bytes.byteLength === 0) throw new ParentBffHttpError(400, "invalid_json");
   let parsed: unknown;
   try {
     parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
@@ -1057,6 +1053,6 @@ function jsonResponse(
 }
 
 function bffFailure(error: unknown): Response {
-  if (error instanceof ParentBffHttpError) return jsonResponse({ error: error.code }, error.status);
+  if (error instanceof ParentBffHttpError || error instanceof RequestBodyError) return jsonResponse({ error: error.code }, error.status);
   return jsonResponse({ error: "webauthn_bff_unavailable" }, 503);
 }

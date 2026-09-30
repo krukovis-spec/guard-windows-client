@@ -39,9 +39,10 @@ export function parseRelayFrame(input: ArrayBuffer | Uint8Array): RelayFrame {
   const kind = r.u32(); if (kind < 1 || kind > 4) throw new FrameError("unknown frame kind");
   const mailboxId = r.text(128); const recipientKeyId = r.text(128); const frameId = r.text(128);
   const cursor = r.i64(); const ackCursor = r.i64();
-  if (cursor < 0n || ackCursor < 0n || ackCursor > cursor) throw new FrameError("invalid cursors");
+  if (cursor < 0n || ackCursor < 0n || ackCursor > cursor || cursor > BigInt(Number.MAX_SAFE_INTEGER)) throw new FrameError("invalid cursors");
   const createdAt = r.i64(); const expiresAt = r.i64();
-  if (expiresAt <= createdAt || expiresAt - createdAt > 7n * 24n * 60n * 60n * 1000n) throw new FrameError("invalid lifetime");
+  if (expiresAt <= createdAt || expiresAt - createdAt > 7n * 24n * 60n * 60n * 1000n ||
+    !Number.isSafeInteger(Number(createdAt)) || !Number.isSafeInteger(Number(expiresAt))) throw new FrameError("invalid lifetime");
   if (r.u32() !== 65) throw new FrameError("invalid HPKE encapsulated key length");
   r.bytesOf(65);
   const ciphertextLength = r.u32();

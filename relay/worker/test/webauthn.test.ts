@@ -13,6 +13,7 @@ const deviceToken = "webauthn-device-token-000000000001";
 const approvalToken = "webauthn-approval-token-00000000001";
 const mailboxId = "mailbox-webauthn-main";
 const recipientKeyId = "recipient-parent-main";
+const deviceRecipientKeyId = "recipient-device-main";
 const authOrigin = { origin };
 const jsonOrigin = { origin, "content-type": "application/json" };
 const request = (path: string, init: RequestInit = {}) => SELF.fetch(`${origin}${path}`, init);
@@ -94,13 +95,16 @@ describe.sequential("parent WebAuthn BFF", () => {
     response = await request(`/v1/mailboxes/${mailboxId}/tokens`, {
       method: "POST",
       headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ accessToken: deviceToken, role: "device", expiresAt: Date.now() + 600_000 }),
+      body: JSON.stringify({ accessToken: deviceToken, role: "device", expiresAt: Date.now() + 600_000,
+        recipientKeyId: deviceRecipientKeyId, publishRecipientKeyIds: [recipientKeyId] }),
     });
     expect(response.status).toBe(201);
     response = await request(`/v1/mailboxes/${mailboxId}/tokens`, {
       method: "POST",
       headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ accessToken: approvalToken, role: "approval", expiresAt: Date.now() + 600_000 }),
+      body: JSON.stringify({ accessToken: approvalToken, role: "approval", expiresAt: Date.now() + 600_000,
+        recipientKeyId, publishRecipientKeyIds: [deviceRecipientKeyId], approvalKeyId: "approval-parent-main", authorityEpoch: 1,
+        viewRecipientKeyIds: [recipientKeyId] }),
     });
     expect(response.status).toBe(201);
     const createdAt = Date.now();
@@ -219,6 +223,19 @@ describe.sequential("parent WebAuthn BFF", () => {
       body: redeemBody,
     });
     expect(response.status).toBe(403);
+    const otherApprovalToken = "other-native-approval-token-000001";
+    response = await request(`/v1/mailboxes/${mailboxId}/tokens`, {
+      method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ accessToken: otherApprovalToken, role: "approval", expiresAt: Date.now() + 600_000,
+        recipientKeyId: "recipient-other-parent", publishRecipientKeyIds: [deviceRecipientKeyId],
+        approvalKeyId: "approval-other-parent", authorityEpoch: 1, viewRecipientKeyIds: ["view-other-parent-01"] }),
+    });
+    expect(response.status).toBe(201);
+    response = await request(redeemPath, {
+      method: "POST", headers: { authorization: `Bearer ${otherApprovalToken}`, "content-type": "application/json" },
+      body: redeemBody,
+    });
+    expect(response.status).toBe(410); // Wrong view link must not consume another parent's locator.
     response = await request(redeemPath, {
       method: "POST",
       headers: { authorization: `Bearer ${approvalToken}`, "content-type": "application/json" },
@@ -247,6 +264,19 @@ describe.sequential("parent WebAuthn BFF", () => {
       body: "x".repeat(513),
     });
     expect(response.status).toBe(413);
+
+    response = await request("/v1/parent/approval-intents", {
+      method: "POST", headers: { ...jsonOrigin, cookie: sessionCookie, "x-guard-csrf": "1" },
+      body: JSON.stringify(intent),
+    });
+    expect(response.status).toBe(201);
+    const expiredLocator = await response.json() as { locator: string };
+    await runInDurableObject(mailboxStub, (_instance, state) => { state.storage.sql.exec("UPDATE parent_locators SET expires_at=0"); });
+    response = await request(redeemPath, {
+      method: "POST", headers: { authorization: `Bearer ${approvalToken}`, "content-type": "application/json" },
+      body: JSON.stringify(expiredLocator),
+    });
+    expect(response.status).toBe(410);
   });
 
   it("rejects the wrong origin and the wrong high-entropy invite", async () => {

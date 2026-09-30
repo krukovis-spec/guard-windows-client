@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-09-30 — bounded HTTPS/outbox adapter and focused VM gate
+
+- Added a ciphertext-only .NET HTTPS adapter to the existing Service project, reusing GRF1 codecs and relay CAS aggregate. Exact bytes survive network/CAS failure; bounded poll validates mailbox/recipient/kind/ordering/base64/JSON/cursors. Ack loads only committed state; response hints cannot advance authority. Whole-request deadline also cancels slow bodies; no redirect/proxy/cookie/decompression or new package. Not yet wired into startup/enrollment or real Worker/phone exchange; no Applied claim.
+- Existing Service harness now has 26 checks, including grouped HTTP/fault/CAS/recipient/oversize/cancellation scenarios and a full eight-item outbox pass. Release solution + all 29 v2 harnesses/45 legacy checks PASS; final focused Service rerun PASS after the full-capacity regression. Self-review corrected the full-pass completion result and added explicit no-HTTP assertion for mismatched durable metadata. Memory PROJECT_ONLY; source/config/service-connection secrets unchanged. Ponytail reused stdlib and existing test infrastructure.
+- Prepared `-SignedGrantsOnly` with evidence/Build/UBR preconditions, retaining enforced boot/tamper/authorized recovery/snapshot. PS7 lab safety/signature self-check PASS, but attempted UAC was canceled by Windows and NO focused VM test ran. Do not interpret outer shell's exit 0 as a result; use Start-Process `-ErrorAction Stop`. Await Ivan's “можно показать UAC” for the next prompt, while safe M2 development continues. Last signed grant report remains FAIL; expiry/revoke still NOT RUN. No host Guard/system/account/EFI changes.
+
 ## 2026-09-30 — signed dynamic grant prototype, issuance gate remains failing
 
 - Reused the existing runner/ConfigCI and host-only ephemeral signer. Added v3 base update containing one native SHA-256 hash for marker v1, no SHA-1/page/path/publisher grants; v2 stays a separate identity. Native merge must preserve policy IDs and link the rule to UMCI. Prepared signed v4 revoke/v5 recovery before any deployment; recovery remains off guest until cleanup. Added a clearly native-only external-deadline observation after reboot; no fake Guard timer, installed service or product crash-test claim.

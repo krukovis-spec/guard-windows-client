@@ -18,4 +18,11 @@ describe("RelayFrame v1 parser", () => {
     for (let i = 0; i < 8; i++) expired[101 + i] = fixture[93 + i]!;
     expect(() => parseRelayFrame(expired)).toThrow(FrameError);
   });
+  it("rejects cursors that cannot round-trip through SQLite/JSON numbers", () => {
+    const overflow = fixture.slice();
+    new DataView(overflow.buffer).setBigInt64(77, BigInt(Number.MAX_SAFE_INTEGER) + 1n);
+    expect(() => parseRelayFrame(overflow)).toThrow(FrameError);
+    new DataView(overflow.buffer).setBigInt64(77, BigInt(Number.MAX_SAFE_INTEGER));
+    expect(parseRelayFrame(overflow).cursor).toBe(BigInt(Number.MAX_SAFE_INTEGER));
+  });
 });

@@ -139,6 +139,10 @@ Dynamic grant-прототип 2026-09-30 — **gate FAIL на выдаче, exp
 
 **Приёмка:** реальный .NET sender → HTTPS Worker → Kotlin receiver и обратная подписанная квитанция на синтетических данных; рестарт каждого процесса не теряет/не повторяет эффект. PWA входит через WebAuthn и не получает approval signing capability. Тесты: T02–T04, T12–T14, T16. Применение системной policy в этой проверке ещё не подменяется успехом доставки.
 
+Проверяемая часть M2, 2026-09-30: `Guard.Service/HttpRelayTransport` использует стандартный .NET HTTPS, существующие GRF1 codecs и `IRelayTransactionStore`. Нет автоматических redirects/proxy/cookies/decompression; общий deadline включает чтение body, responses/JSON/pages ограничены. Outbox отправляет те же durable bytes и сохраняет delivery cursor только через CAS после соответствующего ответа; потерянный ответ/проигранный CAS оставляют безопасный повтор. Inbox принимает только ordered Approval frames своего mailbox/recipient, 16 на страницу, JS-safe cursors и точный nextCursor; ack берётся только из загруженного committed state, server hints не меняют replay floor/policy. Общая Release-сборка, 29 v2 harnesses + 45 legacy checks PASS; service harness теперь содержит 26 проверок. Это fault-handler проверки, не реальный HTTPS Worker↔телефон exchange. Adapter пока не включён в production startup: нужны доверенное enrollment/config, согласование файловых aggregates, inbox crypto/coordinator, retry/backoff loop и recipient-scoped серверные credentials. `Applied` не создаётся из HTTP success; M2 остаётся открытым.
+
+M1 проверка пока ожидает UAC: подготовлен `Invoke-AppLockerLab.ps1 -SignedAppControl -SignedGrantsOnly`, который пропускает только уже доказанный audit этап при сохранённом signed-base/recovery evidence и неизменных Build/UBR; enforced boot, tamper и recovery сохраняются. Последняя попытка повышения прав отменена Windows, новый focused run НЕ ЗАПУСКАЛСЯ. Для следующего показа запроса Ивану предложено написать «можно показать UAC»; основной ПК не меняется. Исправленные hash diagnostics/post-boot grant ещё требуют фактической VM проверки.
+
 ### M3. Закончить первичную привязку и Android-подтверждение
 
 **Результат:** родитель способен безопасно связать чистую VM и телефон без ручного копирования технических токенов.
@@ -299,8 +303,8 @@ Dynamic grant-прототип 2026-09-30 — **gate FAIL на выдаче, exp
 | Этап | Статус | Условие перехода |
 |---|---|---|
 | M0 | Частично: safe baseline, guest baseline, PowerShell Direct и snapshot restore/boot PASS; recovery-media, официальный ISO hash и финальный Pro gate открыты | Проверенный disposable guest с полным recovery |
-| M1 | Частично: реальный AppLocker prototype PASS; admin clear и продолжение процесса после revoke подтверждены как ограничения; signed App Control/TTL gate открыт | Принятая матрица системной защиты и совместимый dynamic approval path |
-| M2 | Дополнены одноразовый locator redemption и bounded PWA paging; интеграция открыта | Реальный encrypted exchange, BFF registration/view enrollment и durable receipts |
+| M1 | Signed base audit/enforce/admin-remove/recovery experiment PASS; dynamic grant FAIL, TTL/revoke NOT RUN; следующий focused run ждёт UAC | Принятая матрица системной защиты и совместимый dynamic approval path |
+| M2 | Locator/PWA paging и bounded .NET HTTPS/outbox/committed-ack adapter проверены; production wiring и реальный exchange открыты | Реальный encrypted exchange, BFF registration/view enrollment и durable receipts |
 | M3 | Foundations есть; сценарий открыт | Доверенная привязка и реальная аппаратная подпись |
 | M4–M8 | Не приняты | Соответствующие T/E и наблюдаемый пользовательский результат |
 | M9 | Не начат | Все обязательные группы прошли, комплект пригоден для совместного теста |
