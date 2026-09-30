@@ -12,6 +12,7 @@ const text = {
     registrationHelp: "Билет выдаётся при доверенной настройке родительского доступа и действует 5 минут. После отмены или ошибки нужен новый билет. Это не пароль Cloudflare или Bitwarden.",
     expired: "Срок запроса истёк", resolved: "Этот запрос уже решён", error: "Не удалось получить защищённые данные.",
     pending: "Ожидает решения", device: "Устройство", evidence: "Основание запроса", requested: "Запрошено",
+    childReason: "Комментарий ребёнка", noReason: "не указан", expires: "Решение ожидается до",
     allowAlways: "Разрешить всегда", allowTemporary: "Разрешить на время", allowQuota: "Дневной лимит", deny: "Запретить",
     minutes: "Минуты", continuePhone: "Подтвердить на Android", copy: "Копировать ссылку", copied: "Ссылка скопирована", signIn: "Войти с ключом доступа", register: "Создать ключ доступа",
     open: "Открыть", noRequests: "Новых проверенных запросов нет.", language: "Английский", verified: "Список запросов получен"
@@ -27,6 +28,7 @@ const text = {
     registrationHelp: "Issued during trusted parent setup; valid for 5 minutes. Cancellation or failure requires a new ticket. This is not your Cloudflare or Bitwarden password.",
     expired: "This request has expired", resolved: "This request has already been resolved", error: "Protected data could not be loaded.",
     pending: "Waiting for a decision", device: "Device", evidence: "Request evidence", requested: "Requested",
+    childReason: "Child's comment", noReason: "not provided", expires: "Decision requested before",
     allowAlways: "Allow always", allowTemporary: "Allow temporarily", allowQuota: "Daily allowance", deny: "Deny",
     minutes: "Minutes", continuePhone: "Confirm on Android", copy: "Copy link", copied: "Link copied", signIn: "Sign in with passkey", register: "Create passkey",
     open: "Open", noRequests: "No verified pending requests.", language: "Русский", verified: "Request list received"

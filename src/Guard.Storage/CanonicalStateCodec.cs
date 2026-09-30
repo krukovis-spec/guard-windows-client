@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Security.Cryptography;
 using Guard.Contracts;
 using Guard.Domain;
+using Guard.Protocol.Relay;
 
 namespace Guard.Storage
 {
@@ -12,7 +14,7 @@ namespace Guard.Storage
         private static readonly byte[] Magic = { 0x47, 0x52, 0x44, 0x53, 0x54, 0x41, 0x54, 0x45 };
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
-        private const int SchemaVersion = 1;
+        private const int SchemaVersion = 2;
         private const int MaximumEncodedStringBytes = 1024;
         public const int MaximumPayloadBytes = 128 * 1024;
 
@@ -70,6 +72,9 @@ namespace Guard.Storage
                     stream.Write(publicKey, 0, publicKey.Length);
                 }
 
+                stream.WriteByte(state.Enrollment == null ? (byte)0 : (byte)1);
+                if (state.Enrollment != null) WriteBlock(stream, EncodeEnrollment(state.Enrollment));
+
                 if (stream.Length > MaximumPayloadBytes)
                 {
                     throw new ArgumentException("The authoritative state payload is oversized.", nameof(state));
@@ -91,7 +96,8 @@ namespace Guard.Storage
                 using (var stream = new MemoryStream(payload, writable: false))
                 {
                     RequireMagic(stream);
-                    if (ReadInt32(stream) != SchemaVersion)
+                    var schema = ReadInt32(stream);
+                    if (schema != 1 && schema != SchemaVersion)
                     {
                         throw new StateStoreCorruptionException("The authoritative state schema version is unsupported.");
                     }
@@ -159,6 +165,9 @@ namespace Guard.Storage
                             ReadExact(stream, keyLength)));
                     }
 
+                    DeviceEnrollmentState? enrollment = null;
+                    if (schema >= 2 && ReadBoolean(stream, "native enrollment presence"))
+                        enrollment = DecodeEnrollment(ReadBlock(stream, 80 * 1024));
                     if (stream.Position != stream.Length)
                     {
                         throw new StateStoreCorruptionException("Trailing bytes are not allowed in authoritative state.");
@@ -172,7 +181,8 @@ namespace Guard.Storage
                         recentCommandIds,
                         setupChallenge,
                         trustedParentKeys,
-                        childAccountSid);
+                        childAccountSid,
+                        enrollment);
                 }
             }
             catch (StateStoreCorruptionException)
@@ -190,6 +200,56 @@ namespace Guard.Storage
                     exception);
             }
         }
+
+        internal static byte[] EncodeEnrollment(DeviceEnrollmentState enrollment)
+        {
+            using var stream = new MemoryStream();
+            WriteBlock(stream, RelayCanonicalEncoding.EncodeEnrollmentOffer(enrollment.Offer));
+            stream.WriteByte(enrollment.Confirmed ? (byte)1 : (byte)0);
+            stream.WriteByte(enrollment.PhoneKeyConfirmed ? (byte)1 : (byte)0);
+            WriteBlock(stream, enrollment.GetConfirmationHashCopy());
+            stream.WriteByte(enrollment.Candidate == null ? (byte)0 : (byte)1);
+            if (enrollment.Candidate != null)
+            {
+                if (!CryptographicOperations.FixedTimeEquals(enrollment.Candidate.GetOfferHashCopy(),
+                    RelayCanonicalEncoding.ComputeEnrollmentOfferHash(enrollment.Offer)))
+                    throw new ArgumentException("Enrollment candidate belongs to a different offer.");
+                WriteBlock(stream, RelayCanonicalEncoding.EncodeEnrollmentClaimForSignature(enrollment.Candidate));
+                WriteBlock(stream, enrollment.GetSignatureCopy()); WriteBlock(stream, enrollment.GetMacCopy());
+                WriteBlock(stream, enrollment.GetEncapsulatedKeyCopy()); WriteBlock(stream, enrollment.GetEncryptedChallengeCopy());
+                WriteBlock(stream, enrollment.GetExpectedKeyProofCopy());
+                var certificates = enrollment.GetCertificatesCopy(); WriteInt32(stream, certificates.Count);
+                foreach (var certificate in certificates) WriteBlock(stream, certificate);
+            }
+            return stream.ToArray();
+        }
+
+        private static DeviceEnrollmentState DecodeEnrollment(byte[] bytes)
+        {
+            using var stream = new MemoryStream(bytes, writable: false);
+            var offer = RelayCanonicalEncoding.DecodeEnrollmentOffer(ReadBlock(stream, 1536));
+            var confirmed = ReadBoolean(stream, "enrollment confirmed");
+            var phoneConfirmed = ReadBoolean(stream, "phone key confirmed");
+            var confirmationHash = ReadBlock(stream, 32);
+            DeviceEnrollmentState enrollment;
+            if (ReadBoolean(stream, "enrollment candidate"))
+            {
+                var claim = RelayCanonicalEncoding.DecodeEnrollmentClaimForSignature(ReadBlock(stream, 460));
+                var signature = ReadBlock(stream, 64); var mac = ReadBlock(stream, 32);
+                var enc = ReadBlock(stream, 65); var cipher = ReadBlock(stream, 48); var keyProof = ReadBlock(stream, 32);
+                var certificates = new byte[ReadBoundedCount(stream, 8, "attestation certificate")][];
+                for (var i = 0; i < certificates.Length; i++) certificates[i] = ReadBlock(stream, 16384);
+                enrollment = new DeviceEnrollmentState(offer, confirmationHash, claim, certificates, signature, mac,
+                    enc, cipher, keyProof, phoneConfirmed, confirmed);
+            }
+            else enrollment = new DeviceEnrollmentState(offer, confirmationHash, phoneKeyConfirmed: phoneConfirmed, confirmed: confirmed);
+            if (stream.Position != stream.Length) throw new StateStoreCorruptionException("Trailing enrollment data.");
+            EncodeEnrollment(enrollment); // cross-field binding and canonical validation also applies on load
+            return enrollment;
+        }
+
+        private static void WriteBlock(Stream stream, byte[] bytes) { WriteInt32(stream, bytes.Length); stream.Write(bytes); }
+        private static byte[] ReadBlock(Stream stream, int maximum) => ReadExact(stream, ReadBoundedCount(stream, maximum, "enrollment bytes"));
 
         private static void RequireMagic(Stream stream)
         {

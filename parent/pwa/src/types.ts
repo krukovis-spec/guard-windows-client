@@ -4,12 +4,15 @@ export type DecisionKind = "AllowAlways" | "AllowTemporary" | "AllowDailyQuota" 
 
 export interface RequestSnapshot {
   readonly requestId: string;
+  readonly requestRevision: bigint;
   readonly childLabel: string;
   readonly deviceLabel: string;
   readonly kind: "application" | "website";
   readonly subject: string;
   readonly evidence: string;
+  readonly childReason: string;
   readonly requestedAt: string;
+  readonly expiresAt: string;
   readonly status: "pending" | "resolved" | "expired";
 }
 

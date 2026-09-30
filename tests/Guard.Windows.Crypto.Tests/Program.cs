@@ -20,6 +20,7 @@ namespace Guard.Windows.Crypto.Tests
                 ("P-256 canonical SPKI and P1363 signature verify", VerifiesCanonicalP256Signature),
                 ("non-P256 and noncanonical SPKI fail closed", RejectsInvalidPublicKeys),
                 ("malformed and out-of-range signatures fail closed", RejectsInvalidSignatures),
+                ("Android approval attestation requires trusted hardware, per-operation biometrics and claim proof", AndroidAttestationChecks.Run),
                 ("DPAPI CurrentUser round-trips without mutating input", RoundTripsDpapiCurrentUser),
                 ("DPAPI purpose mismatch and tampering fail closed", RejectsWrongPurposeAndTampering),
                 ("production protector requires LocalSystem", RequiresLocalSystemForProduction),

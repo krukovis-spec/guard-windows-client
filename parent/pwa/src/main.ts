@@ -3,6 +3,7 @@ import { requestApprovalLocator } from "./approval-intent";
 import { androidIntentLink } from "./domain";
 import { copyFor } from "./i18n";
 import { decodeAuthenticationOptions, decodeRegistrationOptions, passkeyDto } from "./passkey";
+import { createViewSnapshotVerifier, type ViewEnrollment } from "./relay-receive";
 import { verifiedSnapshots } from "./security";
 import { HttpParentTransport, stateForRelayError } from "./transport";
 import type { DecisionKind, Language, ParentTransport, RequestSnapshot, SnapshotVerifier, ViewState } from "./types";
@@ -19,11 +20,12 @@ const transport = new HttpParentTransport();
 let language: Language = "ru";
 let state: ViewState = navigator.onLine ? "loading" : "offline";
 let snapshots: readonly RequestSnapshot[] = [];
+let verifier: SnapshotVerifier | undefined;
 
 declare global {
   interface Window {
-    /** Installed only by the audited verification adapter; absent means fail closed. */
-    guardParentSnapshotVerifier?: SnapshotVerifier;
+    /** Trusted local enrollment only, never supplied by BFF/login/relay metadata. */
+    guardParentViewEnrollment?: ViewEnrollment;
   }
 }
 
@@ -93,7 +95,7 @@ function accountView(t: ReturnType<typeof copyFor>): HTMLElement {
     void passkey("register", transport, value);
   });
   form.append(label, help, register);
-  if (!window.guardParentSnapshotVerifier) {
+  if (!verifier) {
     login.disabled = true; register.disabled = true;
     ticket.disabled = true;
     const explanation = element("p"); explanation.textContent = t.accountUnavailable; section.append(explanation);
@@ -115,13 +117,15 @@ function requestView(snapshot: RequestSnapshot, t: ReturnType<typeof copyFor>): 
   const h3 = element("h3"); h3.textContent = snapshot.subject;
   const evidenceLabel = element("h4"); evidenceLabel.textContent = t.evidence;
   const evidence = element("p", "evidence"); evidence.textContent = snapshot.evidence;
+  const reason = element("p"); reason.textContent = `${t.childReason}: ${snapshot.childReason || t.noReason}`;
   const time = element("p", "time"); time.textContent = `${t.requested}: ${new Date(snapshot.requestedAt).toLocaleString(language)}`;
+  const expiry = element("p", "time"); expiry.textContent = `${t.expires}: ${new Date(snapshot.expiresAt).toLocaleString(language)}`;
   const form = element("form", "decisions"); form.addEventListener("submit", (event) => { event.preventDefault(); const data = new FormData(form); const kind = data.get("decision") as DecisionKind; const minutes = Number(data.get("minutes")); void beginIntent(snapshot.requestId, kind, minutes); });
   const choices: readonly [DecisionKind, string][] = [["AllowAlways", t.allowAlways], ["AllowTemporary", t.allowTemporary], ["AllowDailyQuota", t.allowQuota], ["Deny", t.deny]];
   for (const [value, label] of choices) { const radio = element("label", "decision"); const input = element("input"); input.type = "radio"; input.name = "decision"; input.value = value; input.required = true; radio.append(input, document.createTextNode(label)); form.append(radio); }
   const minutes = element("input"); minutes.type = "number"; minutes.name = "minutes"; minutes.min = "5"; minutes.max = "480"; minutes.value = "30"; minutes.setAttribute("aria-label", t.minutes);
   const submit = element("button", "primary"); submit.type = "submit"; submit.textContent = t.continuePhone;
-  form.append(minutes, submit); article.append(meta, h3, evidenceLabel, evidence, time, form); return article;
+  form.append(minutes, submit); article.append(meta, h3, evidenceLabel, evidence, reason, time, expiry, form); return article;
 }
 
 async function beginIntent(requestId: string, kind: DecisionKind, minutes: number): Promise<void> {
@@ -147,8 +151,8 @@ async function passkey(mode: "login" | "register", api: ParentTransport, registr
 }
 
 async function refresh(): Promise<void> {
-  const verifier = window.guardParentSnapshotVerifier;
   if (!verifier) { state = "not-configured"; render(); return; }
+  snapshots = [];
   state = "loading"; render();
   try {
     snapshots = await verifiedSnapshots(await transport.listSnapshots(), verifier);
@@ -160,5 +164,11 @@ async function refresh(): Promise<void> {
 window.addEventListener("online", () => void refresh());
 window.addEventListener("offline", () => { state = "offline"; render(); });
 if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
-if (navigator.onLine) void refresh();
-else render();
+async function start(): Promise<void> {
+  try {
+    const enrollment = window.guardParentViewEnrollment;
+    if (enrollment) verifier = await createViewSnapshotVerifier(enrollment);
+    if (navigator.onLine) await refresh(); else render();
+  } catch { state = "error"; render(); }
+}
+void start();

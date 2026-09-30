@@ -18,6 +18,7 @@ Push-Location parent/android
 Pop-Location
 dotnet run --project tests/Guard.Windows.RelayCrypto.Tests -c Release --no-launch-profile
 dotnet run --project tests/Guard.Windows.RelayCrypto.Tests -c Release --no-launch-profile -- --verify-android parent/android/app/build/test-interop/android-approval.hex
+dotnet run --project tests/Guard.Windows.RelayCrypto.Tests -c Release --no-launch-profile -- --verify-android-enrollment parent/android/app/build/test-interop/android-enrollment.txt
 ```
 
 Debug APK создаётся в `app/build/outputs/apk/debug/app-debug.apk`. Это не готовый клиент управления защитой; он не устанавливался на телефон. Аппаратная подпись через `BIOMETRIC_STRONG`, подключение сети и регистрация доверия должны быть проверены в связанном сценарии.

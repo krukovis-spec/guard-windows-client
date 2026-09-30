@@ -166,11 +166,18 @@ namespace Guard.Storage
             }
         }
 
-        public async Task<bool> TryCommitAsync(
+        public Task<bool> TryCommitAsync(
             long expectedVersion,
             DeviceSecurityState nextState,
             CancellationToken cancellationToken)
+            => TryCommitGuardedAsync(expectedVersion, nextState, () => true, cancellationToken);
+
+        // Trusted in-process guard only. Runs under the CAS lock and immediately before
+        // publication, after durable temp-file writes; never supplies an alternate state.
+        public async Task<bool> TryCommitGuardedAsync(long expectedVersion, DeviceSecurityState nextState,
+            Func<bool> canPublish, CancellationToken cancellationToken)
         {
+            if (canPublish == null) throw new ArgumentNullException(nameof(canPublish));
             if (expectedVersion < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(expectedVersion));
@@ -194,7 +201,7 @@ namespace Guard.Storage
             {
                 ThrowIfDisposed();
                 var current = await LoadCoreAsync(cancellationToken).ConfigureAwait(false);
-                if (current.State.Version != expectedVersion)
+                if (current.State.Version != expectedVersion || !canPublish())
                 {
                     return false;
                 }
@@ -222,8 +229,13 @@ namespace Guard.Storage
                         nameof(nextState));
                 }
 
+                if (current.State.Enrollment?.Confirmed == true &&
+                    (nextState.Enrollment?.Confirmed != true || !CryptographicOperations.FixedTimeEquals(
+                        CanonicalStateCodec.EncodeEnrollment(current.State.Enrollment), CanonicalStateCodec.EncodeEnrollment(nextState.Enrollment))))
+                    throw new ArgumentException("A normal state commit cannot remove or replace verified ownership.", nameof(nextState));
+
                 var envelope = CreateEnvelope(nextState, current.StateCommitment);
-                await ReplaceStateFileAsync(envelope, cancellationToken).ConfigureAwait(false);
+                if (!await ReplaceStateFileAsync(envelope, canPublish, cancellationToken).ConfigureAwait(false)) return false;
                 var persisted = await VerifyPublishedStateAsync(
                     nextState,
                     current.StateCommitment).ConfigureAwait(false);
@@ -604,8 +616,9 @@ namespace Guard.Storage
             }
         }
 
-        private async Task ReplaceStateFileAsync(
+        private async Task<bool> ReplaceStateFileAsync(
             byte[] envelope,
+            Func<bool> canPublish,
             CancellationToken cancellationToken)
         {
             var temporaryPath = CreateTemporaryPath();
@@ -613,7 +626,9 @@ namespace Guard.Storage
             {
                 await WriteTemporaryFileAsync(temporaryPath, envelope, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!canPublish()) return false;
                 File.Replace(temporaryPath, _stateFilePath, _backupFilePath, ignoreMetadataErrors: false);
+                return true;
             }
             finally
             {
