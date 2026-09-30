@@ -76,6 +76,13 @@ object EnrollmentWire {
             .doFinal("guard-enrollment-possession-v1".toByteArray(Charsets.US_ASCII) + claimHash(claim))
     }
 
+    /** Scoped transport credential only, disjoint from the possession MAC and approval authority. */
+    fun relayCapability(proofKey: ByteArray, offer: EnrollmentOffer): ByteArray {
+        require(proofKey.size == 32)
+        return Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(proofKey, "HmacSHA256")) }
+            .doFinal("guard-enrollment-relay-capability-v1".toByteArray(Charsets.US_ASCII) + offerHash(offer))
+    }
+
     /** Key possession only: this response never authorizes ownership or any app/site permission. */
     fun answerKeyConfirmation(claim: EnrollmentKeyClaim, key: RelayEncryptionKey, encapsulatedKey: ByteArray, ciphertext: ByteArray): ByteArray {
         require(key.publicKeySec1().contentEquals(claim.encryptionKey())) { "different enrollment key" }

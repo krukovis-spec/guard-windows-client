@@ -107,6 +107,14 @@ namespace Guard.Protocol.Relay
                 return mac.ComputeHash(Encoding.ASCII.GetBytes("guard-enrollment-possession-v1").Concat(ComputeEnrollmentClaimHash(claim)).ToArray());
         }
 
+        // Scoped queue access only; disjoint from the possession MAC and all approval/signing keys.
+        public static byte[] ComputeEnrollmentRelayCapability(byte[] proofKey, EnrollmentOffer offer)
+        {
+            if (proofKey == null || proofKey.Length != 32) throw new ArgumentException("Setup proof key required.");
+            using (var mac = new HMACSHA256(proofKey))
+                return mac.ComputeHash(Encoding.ASCII.GetBytes("guard-enrollment-relay-capability-v1").Concat(ComputeEnrollmentOfferHash(offer)).ToArray());
+        }
+
         public static void RequireEnrollmentRelay(string endpoint)
         {
             if (endpoint == null || endpoint.Length > 256 || !Regex.IsMatch(endpoint,

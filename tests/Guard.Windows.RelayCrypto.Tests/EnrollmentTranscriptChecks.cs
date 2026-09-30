@@ -53,6 +53,11 @@ internal static class EnrollmentTranscriptChecks
         RelayCanonicalEncoding.EncodeEnrollmentOffer(Offer(label: "ПК 💻"));
         var hash = RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim);
         var proof = RelayCanonicalEncoding.ComputeEnrollmentClaimProof(SHA256.HashData(Secret), claim);
+        var capability = RelayCanonicalEncoding.ComputeEnrollmentRelayCapability(SHA256.HashData(Secret), offer);
+        Require(capability.Length == 32 && !capability.SequenceEqual(proof) && !capability.SequenceEqual(SHA256.HashData(Secret)) && !capability.SequenceEqual(Secret));
+        Require(!capability.SequenceEqual(RelayCanonicalEncoding.ComputeEnrollmentRelayCapability(SHA256.HashData(Secret), Offer(epoch: 3))));
+        Require(!capability.SequenceEqual(RelayCanonicalEncoding.ComputeEnrollmentRelayCapability(new byte[32], offer)));
+        Reject(() => RelayCanonicalEncoding.ComputeEnrollmentRelayCapability(new byte[31], offer));
         Require(!proof.SequenceEqual(RelayCanonicalEncoding.ComputeEnrollmentClaimProof(new byte[32], claim)));
         Require(!hash.SequenceEqual(RelayCanonicalEncoding.ComputeEnrollmentOfferHash(offer)));
         Reject(() => RelayCanonicalEncoding.ComputeEnrollmentClaimProof(new byte[31], claim));
@@ -78,7 +83,7 @@ internal static class EnrollmentTranscriptChecks
     internal static void VerifyAndroid(string path)
     {
         var lines = File.ReadAllLines(path);
-        Require(lines.Length == 5);
+        Require(lines.Length == 6);
         var offer = Offer(); var claim = Claim(offer);
         Equal(Convert.FromHexString(lines[0]), RelayCanonicalEncoding.EncodeEnrollmentOffer(offer));
         Equal(Convert.FromHexString(lines[1]), RelayCanonicalEncoding.EncodeEnrollmentClaimForSignature(claim));
@@ -88,7 +93,8 @@ internal static class EnrollmentTranscriptChecks
             Q = new ECPoint { X = point[1..33], Y = point[33..65] } });
         Require(key.VerifyHash(RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim), Convert.FromHexString(lines[3]), DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
         Require(lines[4] == RelayCanonicalEncoding.EncodeEnrollmentQr(offer, Secret));
-        Console.WriteLine("PASS Android enrollment exact offer/claim/MAC and real signature verified by .NET (public test keys, not hardware evidence).");
+        Equal(Convert.FromHexString(lines[5]), RelayCanonicalEncoding.ComputeEnrollmentRelayCapability(SHA256.HashData(Secret), offer));
+        Console.WriteLine("PASS Android enrollment exact offer/claim/MAC/scoped relay capability and real signature verified by .NET (public test keys, not hardware evidence).");
     }
     internal static void ExportKeyConfirmation()
     {

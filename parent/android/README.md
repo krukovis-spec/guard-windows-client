@@ -16,7 +16,9 @@
 
 Keystore повторяет генерацию в TEE только при `StrongBoxUnavailableException` и отсутствии частично созданного ключа. Остальные ошибки не маскируются. Проверяются hardware/profile обоих ключей; для подписания требуется per-operation strong biometric без PIN. По [Android KeyInfo](https://developer.android.com/reference/android/security/keystore/KeyInfo#getUserAuthenticationValidityDurationSeconds()) этот режим читается как `-1`, хотя задаётся builder-значением `0`. Проверка Google chain, challenge и APK identity выполняется отдельно на Windows.
 
-Локальные проверки: 30 JVM-тестов, debug APK; `lintDebug` и `assembleDebugAndroidTest`. Физический `RealDeviceSecurityTest.hardwareProfilesAndRestartKeepSameKeys` больше не пустой: создаёт два уникальных тестовых alias, проверяет неизменность ключей и отказ подписи без биометрии, затем удаляет только их. Он **ещё не запускался на телефоне** и не заменяет успешный интерактивный отпечаток, его отмену/смену и проверку chain вне телефона. Подключение этой ceremony к экрану, scanner, relay и подписанному итоговому подтверждению ещё впереди.
+Локальные проверки: 34 JVM-теста, debug APK; `lintDebug` и `assembleDebugAndroidTest`. Физический `RealDeviceSecurityTest.hardwareProfilesAndRestartKeepSameKeys` больше не пустой: создаёт два уникальных тестовых alias, проверяет неизменность ключей и отказ подписи без биометрии, затем удаляет только их. Он **ещё не запускался на телефоне** и не заменяет успешный интерактивный отпечаток, его отмену/смену и проверку chain вне телефона. Подключение этой ceremony к экрану, scanner и relay ещё впереди.
+
+`EnrollmentExchange` уже шифрует полный claim/chain, proof и запрос состояния для Windows. Ответ Windows зашифрован и подписан; проверяются offer/claim, отдельный случайный номер текущего запроса, срок и точное состояние. «Ожидается подтверждение на компьютере» не превращается в «привязка завершена». После истечения QR разрешён запрос о ранее сохранённом результате, без смены ключей. Межъязыковые проверки реального HPKE/подписей проходят в обе стороны. Сетевой слой ещё должен атомарно сохранять ожидаемый nonce до отправки и результат перед активацией владельца; сейчас проверенный ответ сам по себе не создаёт active-owner запись и не снимает лимит восьми попыток. Это необходимый следующий шаг, не готовая привязка через интернет.
 
 Безопасная проверка из корня репозитория (JDK 17 и Android SDK должны быть установлены):
 
@@ -29,6 +31,7 @@ Pop-Location
 dotnet run --project tests/Guard.Windows.RelayCrypto.Tests -c Release --no-launch-profile
 dotnet run --project tests/Guard.Windows.RelayCrypto.Tests -c Release --no-launch-profile -- --verify-android parent/android/app/build/test-interop/android-approval.hex
 dotnet run --project tests/Guard.Windows.RelayCrypto.Tests -c Release --no-launch-profile -- --verify-android-enrollment parent/android/app/build/test-interop/android-enrollment.txt
+dotnet run --project tests/Guard.Windows.Crypto.Tests -c Release --no-launch-profile -- --verify-android-exchange parent/android/app/build/test-interop/android-enrollment-exchange.txt
 ```
 
 Debug APK создаётся в `app/build/outputs/apk/debug/app-debug.apk`. Это не готовый клиент управления защитой; он не устанавливался на телефон. Аппаратная подпись через `BIOMETRIC_STRONG`, подключение сети и регистрация доверия должны быть проверены в связанном сценарии.

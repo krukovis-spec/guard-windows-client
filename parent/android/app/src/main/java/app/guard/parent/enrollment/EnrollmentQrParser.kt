@@ -18,6 +18,11 @@ class EnrollmentTranscript internal constructor(val offer: EnrollmentOffer, secr
         val proofKey = GuardWire.sha256(setupSecret)
         return try { EnrollmentWire.claimProof(proofKey, claim) } finally { proofKey.fill(0) }
     }
+    @Synchronized fun relayCapability(): ByteArray {
+        check(!closed) { "closed enrollment" }
+        val proofKey = GuardWire.sha256(setupSecret)
+        return try { EnrollmentWire.relayCapability(proofKey, offer) } finally { proofKey.fill(0) }
+    }
     @Synchronized override fun close() { setupSecret.fill(0); closed = true }
     // No data-class toString/copy that could disclose the secret.
 }
