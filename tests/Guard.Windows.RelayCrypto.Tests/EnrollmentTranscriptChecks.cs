@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using Guard.Contracts.Relay;
 using Guard.Domain;
 using Guard.Protocol.Relay;
+using Guard.Windows.Cryptography;
 
 namespace Guard.Windows.RelayCrypto.Tests;
 
@@ -34,6 +35,7 @@ internal static class EnrollmentTranscriptChecks
 
     internal static void Run()
     {
+        VerifyKeyConfirmationFixture();
         var offer = Offer(); var claim = Claim(offer);
         var raw = RelayCanonicalEncoding.EncodeEnrollmentOffer(offer);
         var input = RelayCanonicalEncoding.EncodeEnrollmentClaimForSignature(claim);
@@ -87,6 +89,33 @@ internal static class EnrollmentTranscriptChecks
         Require(key.VerifyHash(RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim), Convert.FromHexString(lines[3]), DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
         Require(lines[4] == RelayCanonicalEncoding.EncodeEnrollmentQr(offer, Secret));
         Console.WriteLine("PASS Android enrollment exact offer/claim/MAC and real signature verified by .NET (public test keys, not hardware evidence).");
+    }
+    internal static void ExportKeyConfirmation()
+    {
+        // PUBLIC TEST MATERIAL: recipient private key is already in relay-exchange-v1.properties.
+        var spki = Convert.FromHexString("3059301306072a8648ce3d020106082a8648ce3d030107034200").Concat(GeneratorPoint).ToArray();
+        var anchor = new ParentTrustAnchor(ParentKeyAlgorithm.EcdsaP256Sha256, spki);
+        var claim = new EnrollmentKeyClaim(RelayCanonicalEncoding.ComputeEnrollmentOfferHash(Offer()), anchor.KeyId,
+            spki, "parent-encrypt-01", Vector("recipient.public"));
+        var hash = RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim);
+        var witness = SHA256.HashData("public enrollment key confirmation test witness"u8);
+        var cipher = RelayCryptography.Encrypt(claim.GetEncryptionKeyCopy(), witness, hash,
+            NativeEnrollmentCoordinator.KeyConfirmationInfo(hash), out var enc);
+        Console.WriteLine("claim=" + Convert.ToHexString(RelayCanonicalEncoding.EncodeEnrollmentClaimForSignature(claim)));
+        Console.WriteLine("enc=" + Convert.ToHexString(enc));
+        Console.WriteLine("cipher=" + Convert.ToHexString(cipher));
+        Console.WriteLine("proof=" + Convert.ToHexString(NativeEnrollmentCoordinator.ComputePhoneKeyProof(witness, hash)));
+    }
+    private static void VerifyKeyConfirmationFixture()
+    {
+        byte[] Field(string name) => Convert.FromHexString(File.ReadLines(Path.Combine(AppContext.BaseDirectory, "enrollment-key-confirmation-v1.properties"))
+            .Single(line => line.StartsWith(name + "=", StringComparison.Ordinal)).Split('=', 2)[1]);
+        var claim = RelayCanonicalEncoding.DecodeEnrollmentClaimForSignature(Field("claim"));
+        var hash = RelayCanonicalEncoding.ComputeEnrollmentClaimHash(claim);
+        var witness = RelayCryptography.Decrypt(Vector("recipient.private"), claim.GetEncryptionKeyCopy(), Field("enc"), Field("cipher"),
+            hash, NativeEnrollmentCoordinator.KeyConfirmationInfo(hash));
+        Equal(SHA256.HashData("public enrollment key confirmation test witness"u8), witness);
+        Equal(Field("proof"), NativeEnrollmentCoordinator.ComputePhoneKeyProof(witness, hash));
     }
     private static void CheckWire(byte[] raw, Func<byte[], byte[]> decodeHash)
     {

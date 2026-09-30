@@ -76,6 +76,20 @@ object EnrollmentWire {
             .doFinal("guard-enrollment-possession-v1".toByteArray(Charsets.US_ASCII) + claimHash(claim))
     }
 
+    /** Key possession only: this response never authorizes ownership or any app/site permission. */
+    fun answerKeyConfirmation(claim: EnrollmentKeyClaim, key: RelayEncryptionKey, encapsulatedKey: ByteArray, ciphertext: ByteArray): ByteArray {
+        require(key.publicKeySec1().contentEquals(claim.encryptionKey())) { "different enrollment key" }
+        require(encapsulatedKey.size == 65 && ciphertext.size == 48) { "key challenge size" }
+        val hash = claimHash(claim)
+        val witness = HpkeP256.decrypt(key, encapsulatedKey.copyOf(), ciphertext.copyOf(), hash,
+            "guard-enrollment-decryption-hpke-v1".toByteArray(Charsets.US_ASCII) + hash)
+        try {
+            require(witness.size == 32)
+            return Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(witness, "HmacSHA256")) }
+                .doFinal("guard-enrollment-decryption-proof-v1".toByteArray(Charsets.US_ASCII) + hash)
+        } finally { witness.fill(0) }
+    }
+
     fun requireRelay(endpoint: String) {
         require(endpoint.length <= 256 && endpoint.matches(Regex(
             "https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?(?:/[a-z0-9_-]+)*"))) { "canonical HTTPS relay" }

@@ -257,6 +257,7 @@ namespace Guard.Application
         private static bool HasSameTrustBoundary(DeviceSecurityState accepted, DeviceSecurityState desired)
         {
             if (!ReferenceEquals(accepted.SetupChallenge, desired.SetupChallenge) ||
+                !ReferenceEquals(accepted.Enrollment, desired.Enrollment) ||
                 !Equals(accepted.ChildAccountSid, desired.ChildAccountSid) ||
                 accepted.TrustedParentKeys.Count != desired.TrustedParentKeys.Count ||
                 accepted.RecentCommandIds.Count != desired.RecentCommandIds.Count)

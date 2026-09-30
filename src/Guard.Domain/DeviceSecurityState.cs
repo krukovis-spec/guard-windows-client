@@ -20,7 +20,8 @@ namespace Guard.Domain
             IEnumerable<string>? recentCommandIds = null,
             SetupChallengeState? setupChallenge = null,
             IEnumerable<ParentTrustAnchor>? trustedParentKeys = null,
-            WindowsAccountSid? childAccountSid = null)
+            WindowsAccountSid? childAccountSid = null,
+            DeviceEnrollmentState? enrollment = null)
         {
             if (!GuardIdentifier.IsCanonicalToken(deviceId))
             {
@@ -50,6 +51,21 @@ namespace Guard.Domain
             ChildAccountSid = childAccountSid;
             _recentCommandIds = CopyRecentIds(recentCommandIds);
             _trustedParentKeys = CopyTrustAnchors(trustedParentKeys);
+            Enrollment = enrollment;
+            if (enrollment != null)
+            {
+                if (enrollment.Offer.DeviceId != DeviceId) throw new ArgumentException("Enrollment belongs to another device.");
+                if (enrollment.Confirmed)
+                {
+                    var key = new ParentTrustAnchor(ParentKeyAlgorithm.EcdsaP256Sha256, enrollment.Candidate!.GetApprovalKeyCopy());
+                    if (SetupChallenge != null || _trustedParentKeys.Length != 1 || !_trustedParentKeys[0].Equals(key)
+                        || key.KeyId != enrollment.Candidate.ApprovalKeyId)
+                        throw new ArgumentException("Confirmed enrollment and owner must be one atomic state.");
+                }
+                else if (IsProvisioned || SetupChallenge == null || SetupChallenge.Consumed ||
+                    SetupChallenge.ChallengeId != enrollment.Offer.EnrollmentId || SetupChallenge.ExpiresAtUtc != enrollment.Offer.ExpiresAtUtc)
+                    throw new ArgumentException("Pending enrollment must match the active setup challenge.");
+            }
         }
 
         public string DeviceId { get; }
@@ -63,6 +79,8 @@ namespace Guard.Domain
         public SetupChallengeState? SetupChallenge { get; }
 
         public WindowsAccountSid? ChildAccountSid { get; }
+
+        public DeviceEnrollmentState? Enrollment { get; }
 
         public IReadOnlyList<string> RecentCommandIds => Array.AsReadOnly((string[])_recentCommandIds.Clone());
 
@@ -120,6 +138,7 @@ namespace Guard.Domain
 
         public DeviceSecurityState WithSetupChallenge(SetupChallengeState? challenge)
         {
+            if (Enrollment != null) throw new InvalidOperationException("Native enrollment cannot use legacy setup mutation.");
             return new DeviceSecurityState(
                 DeviceId,
                 checked(Version + 1),
@@ -131,42 +150,14 @@ namespace Guard.Domain
                 ChildAccountSid);
         }
 
-        public DeviceSecurityState WithCompletedSetup(SetupChallengeState consumedChallenge, ParentTrustAnchor parentKey)
+        public DeviceSecurityState WithEnrollment(SetupChallengeState? challenge, DeviceEnrollmentState? enrollment)
         {
-            if (consumedChallenge == null)
-            {
-                throw new ArgumentNullException(nameof(consumedChallenge));
-            }
-
-            if (!consumedChallenge.Consumed || SetupChallenge == null ||
-                !string.Equals(SetupChallenge.ChallengeId, consumedChallenge.ChallengeId, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException("Setup completion must consume the active challenge.");
-            }
-
-            if (parentKey == null)
-            {
-                throw new ArgumentNullException(nameof(parentKey));
-            }
-
-            if (_trustedParentKeys.Length >= MaximumTrustedParentKeys)
-            {
-                throw new InvalidOperationException("The trusted parent key limit has been reached.");
-            }
-
-            var nextKeys = new ParentTrustAnchor[_trustedParentKeys.Length + 1];
-            Array.Copy(_trustedParentKeys, nextKeys, _trustedParentKeys.Length);
-            nextKeys[nextKeys.Length - 1] = parentKey;
-
-            return new DeviceSecurityState(
-                DeviceId,
-                checked(Version + 1),
-                HighestAcceptedSequence,
-                DesiredPolicyRevision,
-                _recentCommandIds,
-                setupChallenge: null,
-                trustedParentKeys: nextKeys,
-                childAccountSid: ChildAccountSid);
+            if (IsProvisioned) throw new InvalidOperationException("An existing owner cannot be replaced by setup.");
+            var keys = enrollment?.Confirmed == true
+                ? new[] { new ParentTrustAnchor(ParentKeyAlgorithm.EcdsaP256Sha256, enrollment.Candidate!.GetApprovalKeyCopy()) }
+                : Array.Empty<ParentTrustAnchor>();
+            return new DeviceSecurityState(DeviceId, checked(Version + 1), HighestAcceptedSequence,
+                DesiredPolicyRevision, _recentCommandIds, challenge, keys, ChildAccountSid, enrollment);
         }
 
         public DeviceSecurityState WithBoundChildAccount(
@@ -199,7 +190,8 @@ namespace Guard.Domain
                 _recentCommandIds,
                 SetupChallenge,
                 _trustedParentKeys,
-                childAccountSid);
+                childAccountSid,
+                Enrollment);
         }
 
         public DeviceSecurityState WithAcceptedCommand(string commandId, long sequence)
@@ -231,7 +223,8 @@ namespace Guard.Domain
                 nextIds,
                 SetupChallenge,
                 _trustedParentKeys,
-                ChildAccountSid);
+                ChildAccountSid,
+                Enrollment);
         }
 
         private static string[] CopyRecentIds(IEnumerable<string>? values)

@@ -14,10 +14,10 @@ namespace Guard.Windows.Crypto.Tests;
 
 internal static class AndroidAttestationChecks
 {
-    private static readonly DateTimeOffset Now = new(2026, 9, 30, 12, 0, 0, TimeSpan.Zero);
+    internal static readonly DateTimeOffset Now = new(2026, 9, 30, 12, 0, 0, TimeSpan.Zero);
     private static readonly byte[] Challenge = SHA256.HashData("test setup transcript"u8);
     private static readonly byte[] ClaimHash = SHA256.HashData("test domain-separated enrollment claim"u8);
-    private static readonly byte[] ApkSigner = SHA256.HashData("public synthetic APK signer"u8);
+    internal static readonly byte[] ApkSigner = SHA256.HashData("public synthetic APK signer"u8);
 
     internal static void Run()
     {
@@ -146,7 +146,7 @@ internal static class AndroidAttestationChecks
         Console.WriteLine("PASS canonical enrollment candidate: real attestation + signature + QR MAC, binding/expiry/key-role rejection");
     }
 
-    private static byte[] Description(int level = 1, int version = 100, int keyVersion = 100, int? keyLevel = null, byte[]? challenge = null,
+    internal static byte[] Description(int level = 1, int version = 100, int keyVersion = 100, int? keyLevel = null, byte[]? challenge = null,
         long authType = 2, bool softwareAuth = false, int purpose = 2, int origin = 0, int osVersion = 120000,
         bool locked = true, int bootState = 0, string packageName = "app.guard.parent", byte[]? signer = null, int appVersion = 1,
         bool sharedUid = false, (int Tag, byte[] Value)? extraHardware = null, (int Tag, byte[] Value)? extraSoftware = null, bool replaceHardware = false)
@@ -196,13 +196,14 @@ internal static class AndroidAttestationChecks
         throw new InvalidOperationException("Invalid revocation response accepted.");
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         private readonly ECDsa _rootKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         private readonly ECDsa _issuerKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         private readonly ECDsa _leafKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         private readonly X509Certificate2 _root;
         public AndroidApprovalAttestation Verifier { get; }
+        public byte[] RootCertificate => _root.RawData;
         public ParentTrustAnchor Anchor { get; }
         public byte[] Proof { get; }
         public AndroidAttestationRevocations Status { get; } = AndroidAttestationChecks.Status();

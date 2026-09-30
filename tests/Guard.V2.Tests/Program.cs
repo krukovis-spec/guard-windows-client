@@ -23,8 +23,8 @@ namespace Guard.V2.Tests
                 ("keeps contract byte arrays defensive", KeepsContractArraysDefensive),
                 ("allows setup only from an admin session", AllowsSetupOnlyFromAdmin),
                 ("fails setup closed when the secret hash contract is broken", RejectsInvalidSetupHash),
-                ("consumes setup secrets once and registers a parent key", ConsumesSetupOnce),
-                ("commits setup consumption and parent key atomically", CommitsSetupAtomically),
+                ("raw QR secret cannot register an owner through old completion", ConsumesSetupOnce),
+                ("concurrent old completion calls cannot register either owner", CommitsSetupAtomically),
                 ("rejects expired setup completion", RejectsExpiredSetup),
                 ("accepts only canonical Windows account SIDs", AcceptsOnlyCanonicalWindowsAccountSids),
                 ("binds the child SID once through admin setup", BindsChildSidOnce),
@@ -212,7 +212,7 @@ namespace Guard.V2.Tests
                 wrong,
                 firstParentKey,
                 now.AddMinutes(1));
-            AssertEqual(SetupOperationStatus.Rejected, wrongAttempt.Status, "Wrong setup secret was accepted.");
+            AssertEqual(SetupOperationStatus.Forbidden, wrongAttempt.Status, "Old completion was not quarantined.");
 
             var completed = ceremony.Complete(
                 ClientRole.ParentRelay,
@@ -221,12 +221,9 @@ namespace Guard.V2.Tests
                 secret,
                 firstParentKey,
                 now.AddMinutes(1));
-            AssertEqual(SetupOperationStatus.Succeeded, completed.Status, "Valid setup was rejected.");
-            Assert(completed.State.IsProvisioned, "Parent key was not registered.");
-            Assert(GuardIdentifier.IsCanonicalToken(firstParentKey.KeyId), "Derived parent key id is not canonical.");
-            Assert(completed.State.TrustsParentKey(firstParentKey.KeyId), "Registered key is not trusted.");
-            Assert(completed.State.TrustedParentKeys[0].Equals(firstParentKey), "Registered public key material changed.");
-            Assert(completed.State.SetupChallenge == null, "Consumed setup challenge remained active.");
+            AssertEqual(SetupOperationStatus.Forbidden, completed.Status, "QR possession alone registered an owner.");
+            Assert(!completed.State.IsProvisioned, "Old completion registered a parent key.");
+            Assert(ReferenceEquals(begin.State, completed.State), "Old completion changed state.");
 
             var replay = ceremony.Complete(
                 ClientRole.ParentRelay,
@@ -271,16 +268,16 @@ namespace Guard.V2.Tests
                 {
                     succeeded++;
                 }
-                else if (result.Status == SetupOperationStatus.StateConflict)
+                else if (result.Status == SetupOperationStatus.Forbidden)
                 {
                     conflicted++;
                 }
             }
 
-            AssertEqual(1, succeeded, "Concurrent setup completed more or less than once.");
-            AssertEqual(1, conflicted, "The losing setup did not report a state conflict.");
-            AssertEqual(1, store.State.TrustedParentKeys.Count, "More than one parent key was committed.");
-            Assert(store.State.SetupChallenge == null, "Committed setup left its challenge active.");
+            AssertEqual(0, succeeded, "Old setup completed without attestation/local confirmation.");
+            AssertEqual(2, conflicted, "Old setup bypass was not rejected.");
+            AssertEqual(0, store.State.TrustedParentKeys.Count, "An unverified key was committed.");
+            Assert(ReferenceEquals(begin.State, store.State), "Rejected setup changed state.");
         }
 
         private static void RejectsInvalidSetupHash()
@@ -312,7 +309,7 @@ namespace Guard.V2.Tests
                 ticket.GetSecretCopy(),
                 CreateParentKey(1),
                 now.AddMinutes(1));
-            AssertEqual(SetupOperationStatus.Rejected, completed.Status, "Expired setup ticket was accepted.");
+            AssertEqual(SetupOperationStatus.Forbidden, completed.Status, "Expired setup ticket was accepted.");
         }
 
         private static void AcceptsOnlyCanonicalWindowsAccountSids()

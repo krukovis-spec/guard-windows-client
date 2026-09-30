@@ -21,6 +21,7 @@ namespace Guard.Windows.Crypto.Tests
                 ("non-P256 and noncanonical SPKI fail closed", RejectsInvalidPublicKeys),
                 ("malformed and out-of-range signatures fail closed", RejectsInvalidSignatures),
                 ("Android approval attestation requires trusted hardware, per-operation biometrics and claim proof", AndroidAttestationChecks.Run),
+                ("native enrollment persists and requires both phone and originating local confirmation", NativeEnrollmentChecks.Run),
                 ("DPAPI CurrentUser round-trips without mutating input", RoundTripsDpapiCurrentUser),
                 ("DPAPI purpose mismatch and tampering fail closed", RejectsWrongPurposeAndTampering),
                 ("production protector requires LocalSystem", RequiresLocalSystemForProduction),

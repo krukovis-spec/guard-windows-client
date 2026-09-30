@@ -114,7 +114,7 @@ object RelayReceive {
 }
 
 /** RFC 9180 base mode: DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-256-GCM. */
-private object HpkeP256 {
+internal object HpkeP256 {
     private val kemSuite = byteArrayOf(0x4b,0x45,0x4d,0x00,0x10)
     private val suite = byteArrayOf(0x48,0x50,0x4b,0x45,0x00,0x10,0x00,0x01,0x00,0x02)
     private val version = "HPKE-v1".toByteArray(Charsets.US_ASCII)

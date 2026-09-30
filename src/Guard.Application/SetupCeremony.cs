@@ -1,5 +1,4 @@
 using System;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Guard.Contracts;
@@ -123,7 +122,6 @@ namespace Guard.Application
 
         private readonly ISetupSecretGenerator _generator;
         private readonly ISetupSecretHasher _hasher;
-        private readonly IParentTrustAnchorValidator _trustAnchorValidator;
 
         public SetupCeremony(
             ISetupSecretGenerator generator,
@@ -132,7 +130,7 @@ namespace Guard.Application
         {
             _generator = generator ?? throw new ArgumentNullException(nameof(generator));
             _hasher = hasher ?? throw new ArgumentNullException(nameof(hasher));
-            _trustAnchorValidator = trustAnchorValidator ?? throw new ArgumentNullException(nameof(trustAnchorValidator));
+            if (trustAnchorValidator == null) throw new ArgumentNullException(nameof(trustAnchorValidator));
         }
 
         internal SetupBeginResult Begin(
@@ -151,7 +149,7 @@ namespace Guard.Application
                 return SetupBeginResult.Fail(SetupOperationStatus.Forbidden, state);
             }
 
-            if (state.IsProvisioned)
+            if (state.IsProvisioned || state.Enrollment != null)
             {
                 return SetupBeginResult.Fail(SetupOperationStatus.AlreadyProvisioned, state);
             }
@@ -199,53 +197,9 @@ namespace Guard.Application
                 throw new ArgumentNullException(nameof(state));
             }
 
-            if (role != ClientRole.ParentRelay || state.IsProvisioned)
-            {
-                return SetupCompleteResult.Fail(SetupOperationStatus.Forbidden, state);
-            }
-
-            var challenge = state.SetupChallenge;
-            if (challenge == null ||
-                !string.Equals(challenge.ChallengeId, challengeId, StringComparison.Ordinal) ||
-                parentKey == null || !IsValidTrustAnchor(parentKey) ||
-                presentedSecret == null || presentedSecret.Length != SetupSecretBytes)
-            {
-                return SetupCompleteResult.Fail(SetupOperationStatus.Rejected, state);
-            }
-
-            var candidateHash = _hasher.ComputeHash(presentedSecret);
-            if (candidateHash == null || candidateHash.Length != SetupChallengeState.SecretHashBytes)
-            {
-                return SetupCompleteResult.Fail(SetupOperationStatus.Rejected, state);
-            }
-
-            SetupChallengeState consumed;
-            if (!challenge.TryConsume(candidateHash, nowUtc, out consumed))
-            {
-                return SetupCompleteResult.Fail(SetupOperationStatus.Rejected, state);
-            }
-
-            return SetupCompleteResult.Success(state.WithCompletedSetup(consumed, parentKey));
-        }
-
-        private bool IsValidTrustAnchor(ParentTrustAnchor trustAnchor)
-        {
-            try
-            {
-                return _trustAnchorValidator.IsValid(trustAnchor);
-            }
-            catch (ArgumentException)
-            {
-                return false;
-            }
-            catch (InvalidOperationException)
-            {
-                return false;
-            }
-            catch (CryptographicException)
-            {
-                return false;
-            }
+            // Quarantined old entry point: a raw QR secret plus a shaped SPKI never
+            // establishes ownership. NativeEnrollmentCoordinator owns the verified two-party CAS.
+            return SetupCompleteResult.Fail(SetupOperationStatus.Forbidden, state);
         }
     }
 
