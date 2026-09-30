@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-09-30 — clean evaluation Windows and VM checkpoint restore
+
+- Clean-installed Windows 11 Enterprise Evaluation from the Microsoft-hosted ISO onto the sole 80 GiB `GuardV2-Lab-20260930` virtual disk, replacing the failed offline BCD attempt. Local `GuardLabAdmin` reached the desktop; no real account credentials were recorded in project files. ISO filename says 26H2, but its `setup.exe` and the guest watermark show build 26100; exact release identity remains unverified.
+- Verified exact VM/disk/ISO, Generation 2, Secure Boot, vTPM and ProductionOnly mode; created `clean-windows-20260930`, restored it after a graceful guest shutdown, restarted the VM and observed the `GuardLabAdmin` login. The first snapshot command failed before creating anything because `Get-VMTPM` is not a cmdlet; corrected to `Get-VMSecurity` and verified the snapshot and restore succeeded.
+- No Guard, installer, Cleaner, AppLocker, WFP, firewall, hosts, registry, accounts or other protection was run on the host. M0 still lacks guest recovery-media/test accounts and Windows 11 Pro acceptance; M1 VM enforcement and phone biometrics remain NOT RUN. No code change or rebuild in this increment.
+
 ## 2026-09-30 — isolated VM boot diagnosis and safe detach
 
 - Ivan approved the VM-only elevated diagnostics. `bcdboot` returned exit 183 / `c0000035` on the guest EFI partition. Retrying with `/c`, then after a verified backup renaming the guest BCD and trying `/c /offline`, returned the same collision. `bcdedit /store` confirmed the newly written BCD is invalid. The original BCD is preserved at `D:\GuardV2Lab\guest-bcd-original.bak` and on the guest EFI partition as `BCD.pre-repair`; the VM is disposable and has no user data.
