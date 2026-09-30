@@ -15,7 +15,6 @@ export interface ParentBffEnv {
   RP_ID?: string;
   RP_ORIGIN?: string;
   SESSION_SECRET?: string;
-  PARENT_INVITE_SECRET?: string;
 }
 
 export interface ParentBffContext {
@@ -60,7 +59,6 @@ interface ParentBffConfig {
   readonly rpId: string;
   readonly rpOrigin: string;
   readonly sessionSecret: string;
-  readonly inviteSecret: string;
 }
 
 interface ChallengeRow extends Record<string, SqlStorageValue> {
@@ -68,6 +66,7 @@ interface ChallengeRow extends Record<string, SqlStorageValue> {
   user_id: ArrayBuffer | null;
   challenge: string;
   expires_at: number;
+  registration_ticket_hash: ArrayBuffer | null;
 }
 
 interface ParentUserRow extends Record<string, SqlStorageValue> {
@@ -100,11 +99,15 @@ interface NewSession {
 }
 
 interface RegistrationOptionsInput {
-  mailboxId?: unknown;
-  recipientKeyId?: unknown;
-  inviteSecret?: unknown;
-  username?: unknown;
-  displayName?: unknown;
+  registrationTicket?: unknown;
+}
+
+interface RegistrationTicketRow extends Record<string, SqlStorageValue> {
+  mailbox_id: string;
+  recipient_key_id: string;
+  username: string;
+  display_name: string;
+  expires_at: number;
 }
 
 interface ApprovalIntentInput {
@@ -145,9 +148,24 @@ export async function forwardParentBff(request: Request, env: ParentBffEnv): Pro
   }
 }
 
+/** Called only after mailbox-admin authentication, never from a browser/session route. */
+export async function forwardRegistrationTicket(request: Request, env: ParentBffEnv, mailboxId: string): Promise<Response> {
+  try {
+    const config = requireConfig(env);
+    const input = await readJsonObject<Record<string, unknown>>(request);
+    const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(BFF_AUTH_OBJECT_NAME));
+    return await stub.fetch(new Request("https://auth.internal/internal/bff/registration-tickets", {
+      method: request.method,
+      headers: { "content-type": "application/json", [internalHeaderName]: await internalProof(config, `auth:${BFF_AUTH_OBJECT_NAME}`) },
+      body: JSON.stringify({ ...input, mailboxId }),
+    }));
+  } catch (error) { return bffFailure(error); }
+}
+
 export async function handleParentBffRequest(context: ParentBffContext, request: Request): Promise<Response | null> {
   const pathname = new URL(request.url).pathname;
-  const isAuthObjectRoute = isParentBffPath(pathname);
+  const isTicketRoute = pathname === "/internal/bff/registration-tickets";
+  const isAuthObjectRoute = isParentBffPath(pathname) || isTicketRoute;
   const isMailboxInternalRoute = pathname === "/internal/bff/inbox" || pathname === "/internal/bff/approval-intents";
   if (!isAuthObjectRoute && !isMailboxInternalRoute) return null;
 
@@ -156,6 +174,7 @@ export async function handleParentBffRequest(context: ParentBffContext, request:
     if (isAuthObjectRoute) {
       if (context.state.id.name !== BFF_AUTH_OBJECT_NAME) throw new ParentBffHttpError(404, "not_found");
       await requireInternalProof(request, config, `auth:${BFF_AUTH_OBJECT_NAME}`);
+      if (isTicketRoute) return await registrationTicket(context, request);
       return await handleAuthObjectRoute(context, request, config);
     }
 
@@ -174,15 +193,12 @@ function requireConfig(env: ParentBffEnv): ParentBffConfig {
   const rpId = env.RP_ID;
   const rpOrigin = env.RP_ORIGIN;
   const sessionSecret = env.SESSION_SECRET;
-  const inviteSecret = env.PARENT_INVITE_SECRET;
   if (
     typeof rpId !== "string"
     || !validRpId(rpId)
     || typeof rpOrigin !== "string"
     || typeof sessionSecret !== "string"
     || !validSecret(sessionSecret)
-    || typeof inviteSecret !== "string"
-    || !validSecret(inviteSecret)
   ) {
     throw new ParentBffHttpError(503, "webauthn_bff_not_configured");
   }
@@ -203,7 +219,35 @@ function requireConfig(env: ParentBffEnv): ParentBffConfig {
   ) {
     throw new ParentBffHttpError(503, "webauthn_bff_not_configured");
   }
-  return { rpId, rpOrigin, sessionSecret, inviteSecret };
+  return { rpId, rpOrigin, sessionSecret };
+}
+
+async function registrationTicket(context: ParentBffContext, request: Request): Promise<Response> {
+  const input = await readJsonObject<Record<string, unknown>>(request);
+  if (!validId(input.mailboxId)) throw new ParentBffHttpError(400, "invalid_registration_request");
+  if (request.method === "DELETE") {
+    if (!validTicket(input.registrationTicket)) throw new ParentBffHttpError(400, "invalid_registration_request");
+    const hash = await sha256(input.registrationTicket);
+    context.sql.exec("DELETE FROM parent_registration_tickets WHERE ticket_hash=? AND mailbox_id=?", hash, input.mailboxId);
+    return new Response(null, { status: 204, headers: jsonHeaders });
+  }
+  requireMethod(request, "POST");
+  if (Object.keys(input).some(key => !["mailboxId", "recipientKeyId", "username", "displayName"].includes(key))
+    || !validId(input.recipientKeyId) || !validUsername(input.username) || !validDisplayName(input.displayName)) {
+    throw new ParentBffHttpError(400, "invalid_registration_request");
+  }
+  const ticket = randomBase64Url(32);
+  const hash = await sha256(ticket);
+  const expiresAt = Date.now() + challengeLifetimeMs;
+  context.state.storage.transactionSync(() => {
+    context.sql.exec("DELETE FROM parent_registration_tickets WHERE expires_at<=? OR (mailbox_id=? AND username=?)",
+      Date.now(), input.mailboxId as string, input.username as string);
+    const count = first(context.sql.exec<{ count: number }>("SELECT count(*) count FROM parent_registration_tickets"))?.count ?? 0;
+    if (count >= maximumActiveChallenges) throw new ParentBffHttpError(429, "registration_ticket_limit_reached");
+    context.sql.exec("INSERT INTO parent_registration_tickets(ticket_hash,mailbox_id,recipient_key_id,username,display_name,expires_at) VALUES(?,?,?,?,?,?)",
+      hash, input.mailboxId as string, input.recipientKeyId as string, input.username as string, input.displayName as string, expiresAt);
+  });
+  return jsonResponse({ registrationTicket: ticket, expiresAt: new Date(expiresAt).toISOString() }, 201);
 }
 
 async function handleAuthObjectRoute(
@@ -247,54 +291,32 @@ async function registrationOptions(
   config: ParentBffConfig,
 ): Promise<Response> {
   const input = await readJsonObject<RegistrationOptionsInput>(request);
-  if (
-    !validId(input.mailboxId)
-    || !validId(input.recipientKeyId)
-    || typeof input.inviteSecret !== "string"
-    || !validSecret(input.inviteSecret)
-  ) {
+  if (Object.keys(input).length !== 1 || !validTicket(input.registrationTicket)) {
     throw new ParentBffHttpError(400, "invalid_registration_request");
   }
-  if (!constantTimeEqual(await sha256(input.inviteSecret), await sha256(config.inviteSecret))) {
-    throw new ParentBffHttpError(403, "registration_forbidden");
-  }
-  const username = input.username === undefined ? "parent" : input.username;
-  const displayName = input.displayName === undefined ? "Guard Parent" : input.displayName;
-  if (!validUsername(username) || !validDisplayName(displayName)) {
-    throw new ParentBffHttpError(400, "invalid_registration_request");
-  }
-
-  cleanupExpiredChallenges(context.sql, null);
-  let user = selectUser(context.sql, input.mailboxId, username);
-  if (user && user.recipient_key_id !== input.recipientKeyId) {
-    throw new ParentBffHttpError(409, "registration_binding_conflict");
-  }
-  if (!user) {
-    const userCount = first(context.sql.exec<{ count: number }>("SELECT count(*) count FROM parent_users"))?.count ?? 0;
-    if (userCount >= maximumUsers) throw new ParentBffHttpError(429, "parent_user_limit_reached");
-    const userId = randomBytes(32);
-    context.sql.exec(
-      "INSERT INTO parent_users(user_id,mailbox_id,recipient_key_id,username,display_name,created_at) VALUES(?,?,?,?,?,?)",
-      userId,
-      input.mailboxId,
-      input.recipientKeyId,
-      username,
-      displayName,
-      Date.now(),
-    );
-    user = selectUser(context.sql, input.mailboxId, username);
-    if (!user) throw new ParentBffHttpError(503, "webauthn_bff_unavailable");
-  }
-
-  const credentials = [...context.sql.exec<{ credential_id: string; transports: string }>(
-    "SELECT credential_id,transports FROM parent_passkeys WHERE user_id=? ORDER BY created_at ASC",
-    user.user_id,
-  )];
-  if (credentials.length >= maximumPasskeysPerUser) {
-    throw new ParentBffHttpError(429, "passkey_limit_reached");
-  }
-
-  const ceremony = await createChallenge(context, "register", user.user_id);
+  const hash = await sha256(input.registrationTicket);
+  const { user, credentials, ceremony } = context.state.storage.transactionSync(() => {
+    const ticket = first(context.sql.exec<RegistrationTicketRow>(
+      "SELECT mailbox_id,recipient_key_id,username,display_name,expires_at FROM parent_registration_tickets WHERE ticket_hash=? AND expires_at>?", hash, Date.now()));
+    if (!ticket) throw new ParentBffHttpError(410, "registration_ticket_unavailable");
+    cleanupExpiredChallenges(context.sql, null);
+    let user = selectUser(context.sql, ticket.mailbox_id, ticket.username);
+    if (user && user.recipient_key_id !== ticket.recipient_key_id) throw new ParentBffHttpError(409, "registration_binding_conflict");
+    if (!user) {
+      const userCount = first(context.sql.exec<{ count: number }>("SELECT count(*) count FROM parent_users"))?.count ?? 0;
+      if (userCount >= maximumUsers) throw new ParentBffHttpError(429, "parent_user_limit_reached");
+      context.sql.exec("INSERT INTO parent_users(user_id,mailbox_id,recipient_key_id,username,display_name,created_at) VALUES(?,?,?,?,?,?)",
+        randomBytes(32), ticket.mailbox_id, ticket.recipient_key_id, ticket.username, ticket.display_name, Date.now());
+      user = selectUser(context.sql, ticket.mailbox_id, ticket.username);
+      if (!user) throw new ParentBffHttpError(503, "webauthn_bff_unavailable");
+    }
+    const credentials = [...context.sql.exec<{ credential_id: string; transports: string }>(
+      "SELECT credential_id,transports FROM parent_passkeys WHERE user_id=? ORDER BY created_at ASC", user.user_id)];
+    if (credentials.length >= maximumPasskeysPerUser) throw new ParentBffHttpError(429, "passkey_limit_reached");
+    const ceremony = createChallenge(context, "register", user.user_id, { hash, expiresAt: ticket.expires_at });
+    context.sql.exec("DELETE FROM parent_registration_tickets WHERE ticket_hash=?", hash);
+    return { user, credentials, ceremony };
+  });
   const options = await generateRegistrationOptions({
     rpName: "Guard Parent",
     rpID: config.rpId,
@@ -326,14 +348,15 @@ async function registrationComplete(
   request: Request,
   config: ParentBffConfig,
 ): Promise<Response> {
-  const credential = parseRegistrationCredential(await readJsonObject<unknown>(request));
   const challenge = await takeChallenge(context, request, "register", config);
   if (!challenge.user_id) throw new ParentBffHttpError(409, "ceremony_not_pending");
   const user = selectUserById(context.sql, challenge.user_id);
   if (!user) throw new ParentBffHttpError(409, "ceremony_not_pending");
 
   let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
+  let credential: RegistrationResponseJSON;
   try {
+    credential = parseRegistrationCredential(await readJsonObject<unknown>(request));
     verification = await verifyRegistrationResponse({
       response: credential,
       expectedChallenge: challenge.challenge,
@@ -358,14 +381,13 @@ async function registrationComplete(
     cleanupUnregisteredUser(context.sql, challenge.user_id);
     throw new ParentBffHttpError(409, "credential_already_registered");
   }
-  const passkeyCount = first(context.sql.exec<{ count: number }>(
-    "SELECT count(*) count FROM parent_passkeys WHERE user_id=?",
-    user.user_id,
-  ))?.count ?? 0;
-  if (passkeyCount >= maximumPasskeysPerUser) throw new ParentBffHttpError(429, "passkey_limit_reached");
-
   const session = await newSession();
-  await context.state.storage.transaction(async () => {
+  context.state.storage.transactionSync(() => {
+    if (challenge.expires_at <= Date.now()) throw new ParentBffHttpError(410, "ceremony_expired");
+    if (!selectUserById(context.sql, user.user_id)) throw new ParentBffHttpError(409, "ceremony_not_pending");
+    const passkeyCount = first(context.sql.exec<{ count: number }>(
+      "SELECT count(*) count FROM parent_passkeys WHERE user_id=?", user.user_id))?.count ?? 0;
+    if (passkeyCount >= maximumPasskeysPerUser) throw new ParentBffHttpError(429, "passkey_limit_reached");
     context.sql.exec(
       "INSERT INTO parent_passkeys(credential_id,user_id,public_key,counter,transports,device_type,backed_up,created_at) VALUES(?,?,?,?,?,?,?,?)",
       registration.credential.id,
@@ -629,11 +651,12 @@ async function mailboxApprovalIntent(context: ParentBffContext, request: Request
   }, 201);
 }
 
-async function createChallenge(
+function createChallenge(
   context: ParentBffContext,
   purpose: "register" | "login",
   userId: ArrayBuffer | null,
-): Promise<{ id: string; challenge: string }> {
+  registration?: { hash: Uint8Array; expiresAt: number },
+): { id: string; challenge: string } {
   cleanupExpiredChallenges(context.sql, userId);
   const active = first(context.sql.exec<{ count: number }>(
     "SELECT count(*) count FROM webauthn_challenges WHERE expires_at>?",
@@ -643,13 +666,14 @@ async function createChallenge(
   const id = randomBase64Url(32);
   const challenge = randomBase64Url(32);
   context.sql.exec(
-    "INSERT INTO webauthn_challenges(ceremony_id,purpose,user_id,challenge,expires_at,created_at) VALUES(?,?,?,?,?,?)",
+    "INSERT INTO webauthn_challenges(ceremony_id,purpose,user_id,challenge,expires_at,created_at,registration_ticket_hash) VALUES(?,?,?,?,?,?,?)",
     id,
     purpose,
     userId,
     challenge,
-    Date.now() + challengeLifetimeMs,
+    registration?.expiresAt ?? Date.now() + challengeLifetimeMs,
     Date.now(),
+    registration?.hash ?? null,
   );
   return { id, challenge };
 }
@@ -665,23 +689,25 @@ async function takeChallenge(
   if (!parsed || !await validSignedValue("ceremony", parsed.value, parsed.mac, config)) {
     throw new ParentBffHttpError(409, "ceremony_not_pending");
   }
-  return context.state.storage.transaction(async () => {
+  const challenge = context.state.storage.transactionSync(() => {
     const challenge = first(context.sql.exec<ChallengeRow>(
-      "SELECT purpose,user_id,challenge,expires_at FROM webauthn_challenges WHERE ceremony_id=?",
+      "SELECT purpose,user_id,challenge,expires_at,registration_ticket_hash FROM webauthn_challenges WHERE ceremony_id=?",
       parsed.value,
     ));
-    if (!challenge) throw new ParentBffHttpError(409, "ceremony_not_pending");
     context.sql.exec("DELETE FROM webauthn_challenges WHERE ceremony_id=?", parsed.value);
-    if (challenge.expires_at <= Date.now()) {
-      cleanupUnregisteredUser(context.sql, challenge.user_id);
-      throw new ParentBffHttpError(410, "ceremony_expired");
-    }
-    if (challenge.purpose !== expectedPurpose) {
-      cleanupUnregisteredUser(context.sql, challenge.user_id);
-      throw new ParentBffHttpError(409, "ceremony_not_pending");
-    }
     return challenge;
   });
+  // Throw only after committing consumption: transaction rollback must not resurrect a failed ceremony.
+  if (!challenge) throw new ParentBffHttpError(409, "ceremony_not_pending");
+  if (challenge.expires_at <= Date.now()) {
+    cleanupUnregisteredUser(context.sql, challenge.user_id);
+    throw new ParentBffHttpError(410, "ceremony_expired");
+  }
+  if (challenge.purpose !== expectedPurpose || (expectedPurpose === "register" && !challenge.registration_ticket_hash)) {
+    cleanupUnregisteredUser(context.sql, challenge.user_id);
+    throw new ParentBffHttpError(409, "ceremony_not_pending");
+  }
+  return challenge;
 }
 
 function selectUser(sql: SqlStorage, mailboxId: string, username: string): ParentUserRow | undefined {
@@ -888,6 +914,10 @@ function validRpId(value: string): boolean {
 
 function validSecret(value: string): boolean {
   return value.length >= 32 && value.length <= 512;
+}
+
+function validTicket(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
 }
 
 function validBase64Url(value: unknown, minimumBytes: number, maximumBytes: number): value is string {

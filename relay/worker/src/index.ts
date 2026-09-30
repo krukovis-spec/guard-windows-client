@@ -2,6 +2,7 @@ import { FrameError, MAX_FRAME_BYTES, parseRelayFrame, type RelayFrame } from ".
 import { readBoundedBody, RequestBodyError } from "./bounded-body";
 import {
   forwardParentBff,
+  forwardRegistrationTicket,
   handleParentBffRequest,
   isParentBffPath,
   type ParentBffEnv,
@@ -76,6 +77,7 @@ export class DeviceMailbox implements DurableObject {
       CREATE INDEX IF NOT EXISTS parent_locators_expiry ON parent_locators(expires_at);`);
     const addedColumns = {
       tokens: { recipient_key_id: "TEXT", publish_recipient_key_ids: "TEXT", approval_key_id: "TEXT", authority_epoch: "INTEGER", view_recipient_key_ids: "TEXT" },
+      webauthn_challenges: { registration_ticket_hash: "BLOB" },
       parent_locators: { view_recipient_key_id: "TEXT" },
       tombstones: { recipient_key_id: "TEXT", cursor: "INTEGER", frame_hash: "BLOB" },
     };
@@ -84,7 +86,8 @@ export class DeviceMailbox implements DurableObject {
       for (const [column, type] of Object.entries(columns))
         if (!existing.has(column)) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     }
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS publication_cursors(recipient_key_id TEXT PRIMARY KEY,cursor INTEGER NOT NULL);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS parent_registration_tickets(ticket_hash BLOB PRIMARY KEY,mailbox_id TEXT NOT NULL,recipient_key_id TEXT NOT NULL,username TEXT NOT NULL,display_name TEXT NOT NULL,expires_at INTEGER NOT NULL,UNIQUE(mailbox_id,username));
+      CREATE TABLE IF NOT EXISTS publication_cursors(recipient_key_id TEXT PRIMARY KEY,cursor INTEGER NOT NULL);
       INSERT INTO publication_cursors(recipient_key_id,cursor)
       SELECT recipient_key_id,max(cursor) FROM (SELECT recipient_key_id,cursor FROM frames UNION ALL SELECT recipient_key_id,cursor FROM acknowledgements) GROUP BY recipient_key_id
       ON CONFLICT(recipient_key_id) DO UPDATE SET cursor=max(cursor,excluded.cursor);`);
@@ -96,6 +99,10 @@ export class DeviceMailbox implements DurableObject {
       if (request.headers.get("x-guard-bootstrap") === "1" && path === "/v1/admin/bootstrap") return await this.bootstrap(request);
       const auth = await this.authenticate(request); if (!auth) return fail(401, "authentication_required");
       const prefix = `/v1/mailboxes/${this.state.id.name}`;
+      if (path === `${prefix}/registration-tickets` && (request.method === "POST" || request.method === "DELETE")) {
+        if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden");
+        return await forwardRegistrationTicket(request, this.env, this.state.id.name!);
+      }
       if (path === `${prefix}/frames` && request.method === "POST") return await this.publish(request, auth);
       if (path === `${prefix}/poll` && request.method === "GET") return this.poll(request, auth);
       if (path === `${prefix}/ack` && request.method === "POST") return await this.ack(request, auth);
@@ -118,6 +125,7 @@ export class DeviceMailbox implements DurableObject {
     this.sql.exec("DELETE FROM intents WHERE expires_at <= ? AND status != 'pending'", now);
     this.sql.exec("DELETE FROM parent_sessions WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM parent_locators WHERE expires_at <= ?", now);
+    this.sql.exec("DELETE FROM parent_registration_tickets WHERE expires_at <= ?", now);
   }
   private async bootstrap(request: Request): Promise<Response> { const body = await readJsonObject(request); if (!validToken(body.accessToken)) return fail(400, "invalid_bootstrap"); const exists = [...this.sql.exec("SELECT 1 FROM tokens LIMIT 1")].length > 0; if (exists) return fail(409, "already_bootstrapped"); const hash = await sha256(body.accessToken); this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,?,?)", hash.buffer, "admin", Date.now() + 365 * 86400000); return json({ role: "admin" }, 201); }
   private async provisionToken(request: Request, auth: Auth): Promise<Response> {

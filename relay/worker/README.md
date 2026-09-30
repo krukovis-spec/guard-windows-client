@@ -33,26 +33,29 @@ Signing-intent state is an availability hint only, never authority. Approval ope
 
 ## Parent WebAuthn BFF
 
-The parent BFF uses exact-pinned `@simplewebauthn/server` `13.3.3`. It fails closed with `503 webauthn_bff_not_configured` unless all four deployment values are present and valid:
+The parent BFF uses exact-pinned `@simplewebauthn/server` `13.3.3`. It fails closed with `503 webauthn_bff_not_configured` unless these deployment values are present and valid:
 
 - `RP_ID`: WebAuthn relying-party DNS name, with no scheme.
 - `RP_ORIGIN`: one exact HTTPS origin whose host is the RP ID or its subdomain.
 - `SESSION_SECRET`: independently generated high-entropy secret (minimum 32 characters).
-- `PARENT_INVITE_SECRET`: independently generated high-entropy registration/bootstrap secret (minimum 32 characters).
 
-`SESSION_SECRET`, `PARENT_INVITE_SECRET`, and `BOOTSTRAP_ADMIN_TOKEN` are deployment secrets; they must not be placed in `wrangler.jsonc`, Git, browser storage, URLs, or logs. The invite is accepted only over the exact configured origin. Rotate it after the intended bootstrap ceremonies.
+`SESSION_SECRET` and `BOOTSTRAP_ADMIN_TOKEN` are deployment secrets; they must not be placed in `wrangler.jsonc`, Git, browser storage, URLs, or logs. The old global `PARENT_INVITE_SECRET` contract is removed: it is neither required nor accepted by registration. Existing passkeys/sessions are retained; pending legacy registration challenges without a ticket binding fail closed.
 
-Registration options are requested with:
+After trusted enrollment, the off-device provisioning operator uses its **mailbox admin** credential to `POST /v1/mailboxes/{mailboxId}/registration-tickets` with:
 
 ```json
 {
-  "mailboxId": "canonical-mailbox-id",
   "recipientKeyId": "canonical-parent-recipient-key-id",
-  "inviteSecret": "<deployment bootstrap secret>",
   "username": "parent",
   "displayName": "Guard Parent"
 }
 ```
+
+The mailbox comes from the authenticated route, not browser input. Response: `{ "registrationTicket": "<256-bit random base64url value>", "expiresAt": "<UTC>" }`. Only its SHA-256 hash and exact mailbox/view-recipient/username/display-name binding are stored. Maximum 64 outstanding tickets; one per mailbox/username, reissuing replaces the unused ticket. `DELETE` on the same admin route with `{ "registrationTicket": "..." }` revokes an unused ticket in that mailbox. Device/approval/reader credentials and browser sessions cannot issue tickets.
+
+The browser sends only `{ "registrationTicket": "..." }` to `POST /v1/auth/register/options` at the exact configured origin. Unknown fields/global invite/binding overrides are rejected. Redemption, user binding and ceremony creation commit in one SQLite transaction; concurrent redemption has one winner. The ticket and ceremony share the original five-minute deadline, checked again before storing the passkey. Missing/expired/revoked/replayed tickets return 410; a different existing recipient binding returns 409. A lost response, cancellation or failed ceremony requires a newly issued ticket. The PWA keeps the pasted ticket only in the current form/request, clears the field on submission, and does not put it in a URL or persistent browser storage.
+
+This ticket authorizes one **view passkey registration**, not device ownership, decryption-key trust or Android approval capability. A consumed ticket cannot be revoked through the unused-ticket endpoint; full view-device/passkey/session revocation remains an enrollment/lifecycle gate. Trusted enrollment/attestation, provisioning UI, PWA snapshot verifier and real-phone integration are still not wired; the PWA remains disabled without its verifier. Do not distribute admin credentials to the child PC or browser to work around those missing integrations.
 
 Both registration and login options return `{ "publicKey": ... }`. Registration requires a platform resident credential, ES256, and user verification. Login uses a discoverable credential and also requires user verification. Challenges are single-use and consumed before verification, so a failed or replayed response cannot retry the same ceremony.
 

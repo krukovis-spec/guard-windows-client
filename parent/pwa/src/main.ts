@@ -81,12 +81,24 @@ function accountView(t: ReturnType<typeof copyFor>): HTMLElement {
   const section = element("section", "account"); const h2 = element("h2"); h2.textContent = t.account;
   section.append(h2);
   const login = element("button", "primary"); login.textContent = t.signIn; login.addEventListener("click", () => void passkey("login", transport));
-  const register = element("button", "secondary"); register.textContent = t.register; register.addEventListener("click", () => void passkey("register", transport));
+  const form = element("form");
+  const label = element("label"); label.textContent = t.registrationTicket;
+  const ticket = element("input"); ticket.type = "password"; ticket.autocomplete = "off"; ticket.required = true;
+  ticket.minLength = 43; ticket.maxLength = 43; ticket.pattern = "[A-Za-z0-9_\\x2D]{43}";
+  label.append(ticket);
+  const help = element("p"); help.textContent = t.registrationHelp; help.id = "registration-help"; ticket.setAttribute("aria-describedby", help.id);
+  const register = element("button", "secondary"); register.type = "submit"; register.textContent = t.register;
+  form.addEventListener("submit", (event) => {
+    event.preventDefault(); const value = ticket.value; ticket.value = ""; register.disabled = true;
+    void passkey("register", transport, value);
+  });
+  form.append(label, help, register);
   if (!window.guardParentSnapshotVerifier) {
     login.disabled = true; register.disabled = true;
+    ticket.disabled = true;
     const explanation = element("p"); explanation.textContent = t.accountUnavailable; section.append(explanation);
   }
-  section.append(login, register); return section;
+  section.append(login, form); return section;
 }
 
 function inboxView(t: ReturnType<typeof copyFor>): HTMLElement {
@@ -122,9 +134,9 @@ async function beginIntent(requestId: string, kind: DecisionKind, minutes: numbe
   }
 }
 
-async function passkey(mode: "login" | "register", api: ParentTransport): Promise<void> {
+async function passkey(mode: "login" | "register", api: ParentTransport, registrationTicket = ""): Promise<void> {
   try {
-    const options = mode === "login" ? await api.createLoginOptions() : await api.createRegistrationOptions();
+    const options = mode === "login" ? await api.createLoginOptions() : await api.createRegistrationOptions(registrationTicket);
     const credential = mode === "login"
       ? await navigator.credentials.get({ publicKey: decodeAuthenticationOptions(options) })
       : await navigator.credentials.create({ publicKey: decodeRegistrationOptions(options) });

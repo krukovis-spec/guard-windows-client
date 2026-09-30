@@ -86,7 +86,10 @@ function decodeInbox(value: unknown, after: number): readonly EncryptedRelayFram
 export class HttpParentTransport implements ParentTransport {
   private readonly base: string;
   constructor(basePath = "/") { this.base = basePath; }
-  createRegistrationOptions(): Promise<PasskeyOptions> { return post(sameOriginPath(this.base, "/v1/auth/register/options")); }
+  async createRegistrationOptions(registrationTicket: string): Promise<PasskeyOptions> {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(registrationTicket)) throw new Error("registration ticket required");
+    return post(sameOriginPath(this.base, "/v1/auth/register/options"), { registrationTicket });
+  }
   async completeRegistration(credential: PasskeyCredentialDto): Promise<void> { await post(sameOriginPath(this.base, "/v1/auth/register/complete"), credential); }
   createLoginOptions(): Promise<PasskeyOptions> { return post(sameOriginPath(this.base, "/v1/auth/login/options")); }
   async completeLogin(credential: PasskeyCredentialDto): Promise<void> { await post(sameOriginPath(this.base, "/v1/auth/login/complete"), credential); }
