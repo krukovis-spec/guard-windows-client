@@ -46,8 +46,8 @@ function Restart-LabVM {
     Start-VM -VM (Get-VM -Id $vmId)
     Connect-LabVM
 }
-function Invoke-SignedPhase([string]$Stage) {
-    Invoke-Command -Session $session -FilePath (Join-Path $PSScriptRoot 'Test-SignedAppControlFeasibility.ps1') -ArgumentList $biosGuid,$env:COMPUTERNAME,$Stage
+function Invoke-SignedPhase([string]$Stage, [bool]$GrantInitiallyAllowed = $false) {
+    Invoke-Command -Session $session -FilePath (Join-Path $PSScriptRoot 'Test-SignedAppControlFeasibility.ps1') -ArgumentList $biosGuid,$env:COMPUTERNAME,$Stage,$GrantInitiallyAllowed
 }
 try {
     Import-Module Hyper-V
@@ -135,12 +135,20 @@ try {
         $phase = 'signed-exact-grant'
         $report.Experiment.Grant = Invoke-SignedPhase 'Grant'
         $session = Restart-LabVM
-        $report.Experiment.ExpiredGrantAfterBoot = Invoke-SignedPhase 'VerifyGrant'
+        $report.Experiment.ExpiredGrantAfterBoot = Invoke-SignedPhase 'VerifyGrant' ($report.Experiment.Grant.Marker -eq 'Allowed' -and -not $report.Experiment.Grant.MarkerDiagnostic)
         $report.Experiment.NativeOnlyTtlGate = $report.Experiment.ExpiredGrantAfterBoot.NativeOnlyTtlGate
         $phase = 'signed-revoke'
         $report.Experiment.Revoke = Invoke-SignedPhase 'Revoke'
         $session = Restart-LabVM
         $report.Experiment.RevokedBoot = Invoke-SignedPhase 'VerifyRevoke'
+        if ($report.Experiment.Grant.Marker -ne 'Allowed' -or $report.Experiment.Grant.MarkerDiagnostic) {
+            $phase = 'signed-exact-grant'
+            throw ('Live grant failed; post-boot marker=' + $report.Experiment.ExpiredGrantAfterBoot.Marker + '; ' + $report.Experiment.Grant.MarkerDiagnostic)
+        }
+        if ($report.Experiment.NativeOnlyTtlGate -ne 'PASS') {
+            $phase = 'native-only-expiry'
+            throw 'Native-only grant did not expire; no Guard/reconciler is installed in this prototype.'
+        }
     } else {
         $report.Experiment = Invoke-Command -Session $session -FilePath (Join-Path $PSScriptRoot $experimentFile) -ArgumentList $biosGuid,$env:COMPUTERNAME
         if ($report.Experiment.Status -ne 'PASS') { throw $report.Experiment.Failure }

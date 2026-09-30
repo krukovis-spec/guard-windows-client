@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][guid]$ExpectedUuid,
     [Parameter(Mandatory = $true)][string]$HostComputerName,
-    [ValidateSet('Prepare','Audit','VerifyAudit','Enforce','VerifyEnforce','Tamper','Grant','VerifyGrant','Revoke','VerifyRevoke','Recovery','Remove')][string]$Phase = 'Prepare'
+    [ValidateSet('Prepare','Audit','VerifyAudit','Enforce','VerifyEnforce','Tamper','Grant','VerifyGrant','Revoke','VerifyRevoke','Recovery','Remove')][string]$Phase = 'Prepare',
+    [bool]$GrantInitiallyAllowed = $false
 )
 $ErrorActionPreference = 'Stop'
 $machine = Get-CimInstance Win32_ComputerSystem
@@ -50,12 +51,13 @@ if ($Phase -eq 'Prepare') {
     $hashPath = Join-Path $root 'AppControl.hash.xml'
     New-CIPolicy -ScanPath $scanPath -FilePath $hashPath -Level Hash -UserPEs -MultiplePolicyFormat | Out-Null
     $hashXml = [xml](Get-Content -LiteralPath $hashPath -Raw)
-    # Keep one native SHA-256 file hash, not SHA-1/page hashes, paths or publishers.
+    # LAB ONLY compatibility probe: event 3089 selected SHA-1 even though 3077 also reported SHA-256.
+    # Keep both full-file native hashes, not page hashes, paths or publishers. Not a production SHA-256 identity guarantee.
     $hashRules = @($hashXml.SiPolicy.FileRules.ChildNodes | Where-Object {$_.NodeType -eq 'Element'})
-    $keptRules = @($hashRules | Where-Object {$_.LocalName -eq 'Allow' -and $_.Hash -match '^[a-fA-F0-9]{64}$' -and $_.FriendlyName -match 'Hash Sha256$'})
-    if ($keptRules.Count -ne 1) { throw 'Unexpected native SHA-256 rule shape' }
+    $keptRules = @($hashRules | Where-Object {$_.LocalName -eq 'Allow' -and $_.Hash -match '^([a-fA-F0-9]{40}|[a-fA-F0-9]{64})$' -and $_.FriendlyName -match 'Hash Sha(1|256)$'})
+    if ($keptRules.Count -ne 2 -or @($keptRules | Where-Object {$_.Hash.Length -eq 40}).Count -ne 1 -or @($keptRules | Where-Object {$_.Hash.Length -eq 64}).Count -ne 1) { throw 'Unexpected native full-file hash rule shape' }
     foreach ($rule in $hashRules) {
-        if ($rule.ID -eq $keptRules[0].ID) { continue }
+        if ($rule.ID -in $keptRules.ID) { continue }
         foreach ($reference in @($hashXml.SelectNodes("//*[local-name()='FileRuleRef']") | Where-Object {$_.RuleID -eq $rule.ID})) { $reference.ParentNode.RemoveChild($reference) | Out-Null }
         $rule.ParentNode.RemoveChild($rule) | Out-Null
     }
@@ -68,9 +70,9 @@ if ($Phase -eq 'Prepare') {
     $grantXml = [xml](Get-Content -LiteralPath $grantPath -Raw)
     $baseXml = [xml](Get-Content -LiteralPath $policyPath -Raw)
     if ($grantXml.SiPolicy.PolicyID -ne $baseXml.SiPolicy.PolicyID -or $grantXml.SiPolicy.BasePolicyID -ne $baseXml.SiPolicy.BasePolicyID) { throw 'Grant changed base policy identity' }
-    $grantedRules = @($grantXml.SiPolicy.FileRules.Allow | Where-Object {$_.Hash -eq $keptRules[0].Hash})
+    $grantedRules = @($grantXml.SiPolicy.FileRules.Allow | Where-Object {$_.Hash -in $keptRules.Hash})
     $userRuleIds = @($grantXml.SiPolicy.SigningScenarios.SigningScenario | Where-Object {$_.Value -eq '12'} | ForEach-Object {$_.ProductSigners.FileRulesRef.FileRuleRef.RuleID})
-    if ($grantedRules.Count -ne 1 -or $userRuleIds -notcontains $grantedRules[0].ID) { throw 'Native SHA-256 grant is not linked to UMCI' }
+    if ($grantedRules.Count -ne 2 -or @($grantedRules | Where-Object {$userRuleIds -notcontains $_.ID}).Count) { throw 'Native full-file hash grant is not linked to UMCI' }
     ConvertFrom-CIPolicy -XmlFilePath $grantPath -BinaryFilePath (Join-Path $root 'unsigned-grant.cip') | Out-Null
     Set-CIPolicyVersion -FilePath $revokedPath -Version '4.0.0.0' | Out-Null
     ConvertFrom-CIPolicy -XmlFilePath $revokedPath -BinaryFilePath (Join-Path $root 'unsigned-revoke.cip') | Out-Null
@@ -80,7 +82,18 @@ if ($Phase -eq 'Prepare') {
     Set-CIPolicyVersion -FilePath $policyPath -Version '5.0.0.0' | Out-Null
     ConvertFrom-CIPolicy -XmlFilePath $policyPath -BinaryFilePath (Join-Path $root 'unsigned-recovery.cip') | Out-Null
     $xml = [xml](Get-Content -LiteralPath $policyPath -Raw)
-    return [pscustomobject]@{PolicyId=$xml.SiPolicy.PolicyID;BeforePolicy=(Wait-MarkerDecision $marker 'Allowed');HasUpdateSigner=(@($xml.SiPolicy.UpdatePolicySigners.UpdatePolicySigner).Count -gt 0);NativeGrantSha256=$keptRules[0].Hash;FlatMarkerSha256=(Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash;GrantLinkedToUmci=$true}
+    return [pscustomobject]@{
+        PolicyId=$xml.SiPolicy.PolicyID; BeforePolicy=(Wait-MarkerDecision $marker 'Allowed')
+        HasUpdateSigner=(@($xml.SiPolicy.UpdatePolicySigners.UpdatePolicySigner).Count -gt 0)
+        NativeGrantSha256=($keptRules | Where-Object {$_.Hash.Length -eq 64}).Hash
+        NativeGrantSha1=($keptRules | Where-Object {$_.Hash.Length -eq 40}).Hash
+        GrantUsesSha1Compatibility=$true
+        FlatMarkerSha256=(Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash
+        GrantLinkedToUmci=$true; GrantRules=@($grantedRules | ForEach-Object {$_.OuterXml})
+        GrantOptions=@($grantXml.SiPolicy.Rules.Rule.Option)
+        GrantBinarySha256=(Get-FileHash -LiteralPath (Join-Path $root 'unsigned-grant.cip') -Algorithm SHA256).Hash
+        EnforceBinarySha256=(Get-FileHash -LiteralPath (Join-Path $root 'unsigned-enforce.cip') -Algorithm SHA256).Hash
+    }
 }
 $xml = [xml](Get-Content -LiteralPath $policyPath -Raw)
 $policyId = [guid]$xml.SiPolicy.PolicyID
@@ -126,16 +139,19 @@ $expected = if ($Phase -in @('Enforce','VerifyEnforce','Tamper','Revoke','Verify
 if ($Phase -eq 'Tamper' -and $removeExit -eq 0) { throw 'Administrator removed signed base policy' }
 $eventStart = Get-Date
 $nativeTtlGate = $null
+$markerDiagnostic = $null
 if ($Phase -eq 'VerifyGrant') {
     $deadline = [datetime]::ParseExact((Get-Content -LiteralPath (Join-Path $root 'grant-expiry.txt') -Raw).Trim(), 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
     if ([datetime]::UtcNow -lt $deadline) { throw 'Grant expiry observation ran before the deadline' }
     # No Guard/reconciler is installed. Observe native-only expiry; do not fake it with a test timer.
     $decision = Get-MarkerDecision $marker
-    $nativeTtlGate = if ($decision -eq 'Blocked') {'PASS'} else {'FAIL'}
+    # A grant that never worked cannot prove expiry merely by staying blocked.
+    $nativeTtlGate = if (-not $GrantInitiallyAllowed) {'NOT_RUN'} elseif ($decision -eq 'Blocked') {'PASS'} else {'FAIL'}
 } else {
     try { $decision = Wait-MarkerDecision $marker $expected }
     catch {
         $markerFailure = $_.Exception.Message
+        $signatureEvents = @(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-CodeIntegrity/Operational';Id=3089;StartTime=$eventStart} -MaxEvents 256 -ErrorAction SilentlyContinue)
         $markerCodes = @(Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-CodeIntegrity/Operational';Id=3077;StartTime=$eventStart} -MaxEvents 32 -ErrorAction SilentlyContinue | Where-Object {
             $_.ToXml() -match 'GuardLab\\marker-v1\.exe' -and $_.ToXml() -match [regex]::Escape($policyId.ToString())
         } | Select-Object -First 2 | ForEach-Object {
@@ -143,11 +159,26 @@ if ($Phase -eq 'VerifyGrant') {
             $codes = [ordered]@{}
             foreach ($data in @($eventXml.Event.EventData.Data)) {
                 $name = $data.GetAttribute('Name')
-                if ($name -in @('SHA256 Hash','SHA256 Flat Hash','SI Signing Scenario','Status','StatusCode','PolicyGUID','PolicyID')) { $codes[$name] = $data.InnerText }
+                if ($name -in @('SHA256 Hash','SHA256 Flat Hash','SI Signing Scenario','Status','StatusCode','PolicyGUID','PolicyID','PolicyHash','FileVersion','Requested Signing Level','Validated Signing Level')) { $codes[$name] = $data.InnerText }
             }
+            $activityId = [string]$eventXml.Event.System.Correlation.ActivityID
+            $codes.SignatureChecks = @($signatureEvents | ForEach-Object {
+                $signatureXml = [xml]$_.ToXml()
+                if ($activityId -and [string]$signatureXml.Event.System.Correlation.ActivityID -eq $activityId) {
+                    $signatureCodes = [ordered]@{}
+                    foreach ($data in @($signatureXml.Event.EventData.Data)) {
+                        $name = $data.GetAttribute('Name')
+                        if ($name -in @('Hash','TotalSignatureCount','Signature','SignatureType','ValidatedSigningLevel','VerificationError')) { $signatureCodes[$name] = $data.InnerText }
+                    }
+                    [pscustomobject]$signatureCodes
+                }
+            } | Select-Object -First 4)
             [pscustomobject]$codes
         })
-        throw ($markerFailure + '; native=' + $nativeState + '; markerCodes=' + (ConvertTo-Json -InputObject $markerCodes -Compress))
+        $markerDiagnostic = $markerFailure + '; native=' + $nativeState + '; markerCodes=' + (ConvertTo-Json -InputObject $markerCodes -Depth 5 -Compress)
+        if ($Phase -ne 'Grant') { throw $markerDiagnostic }
+        # Preserve the failed live-update observation, but still inspect the same signed policy after boot.
+        $decision = Get-MarkerDecision $marker
     }
 }
 if ($Phase -in @('Grant','VerifyGrant')) {
@@ -179,4 +210,4 @@ if ($Phase -in @('VerifyAudit','VerifyEnforce','VerifyRevoke')) {
         throw ('No marker-specific event ' + $eventId + ' for signed policy after boot; native=' + $nativeState + '; activation=' + (ConvertTo-Json -InputObject $activationEvents -Depth 4 -Compress))
     }
 }
-[pscustomobject]@{PolicyId=$policyId.ToString();Phase=$Phase;Marker=$decision;PolicyEvents=$eventCount;Signed=$policies[0].IsSignedPolicy;Authorized=$policies[0].IsAuthorized;Enforced=$policies[0].IsEnforced;RemoveExit=$removeExit;NativeOnlyTtlGate=$nativeTtlGate;GrantDeadlineExpired=($Phase -eq 'VerifyGrant');ReconcilerInstalled=$false;VariantTwo=$(if ($Phase -in @('Grant','VerifyGrant')) {'Blocked'} else {$null})}
+[pscustomobject]@{PolicyId=$policyId.ToString();Phase=$Phase;Marker=$decision;MarkerDiagnostic=$markerDiagnostic;PolicyEvents=$eventCount;Signed=$policies[0].IsSignedPolicy;Authorized=$policies[0].IsAuthorized;Enforced=$policies[0].IsEnforced;RemoveExit=$removeExit;NativeOnlyTtlGate=$nativeTtlGate;GrantDeadlineExpired=($Phase -eq 'VerifyGrant');ReconcilerInstalled=$false;VariantTwo=$(if ($Phase -in @('Grant','VerifyGrant')) {'Blocked'} else {$null})}
