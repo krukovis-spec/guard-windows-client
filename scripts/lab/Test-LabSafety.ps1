@@ -1,11 +1,13 @@
+param([switch]$PolicySigning)
 $ErrorActionPreference = 'Stop'
-foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'MarkerProcess.ps1', 'Invoke-AppLockerLab.ps1')) {
+if ($PolicySigning -and $PSVersionTable.PSVersion.Major -lt 7) { throw 'Custom-content PKCS#7 self-test requires the installed PowerShell 7 runtime' }
+foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1', 'LabPolicySigning.ps1', 'MarkerProcess.ps1', 'Invoke-AppLockerLab.ps1')) {
     $tokens = $null
     $parseErrors = $null
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
     if ($parseErrors.Count) { throw ('Parse failure: ' + $file) }
 }
-foreach ($probe in @('Get-GuestBaseline.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1')) {
+foreach ($probe in @('Get-GuestBaseline.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1')) {
     try {
         & (Join-Path $PSScriptRoot $probe) -ExpectedUuid ([guid]::Empty) -HostComputerName $env:COMPUTERNAME
         throw 'Host guard did not reject execution'
@@ -22,7 +24,22 @@ New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $markerOne = Join-Path $outputRoot 'marker-v1.exe'
 $markerTwo = Join-Path $outputRoot 'marker-v2.exe'
 . (Join-Path $PSScriptRoot 'MarkerProcess.ps1')
+. (Join-Path $PSScriptRoot 'LabPolicySigning.ps1')
+$certificate = $null
 try {
+    if ($PolicySigning) {
+        $certificate = New-LabPolicyCertificate
+        $samplePath = Join-Path $outputRoot 'sample.cip'
+        $signedPath = Join-Path $outputRoot 'sample.p7'
+        [IO.File]::WriteAllBytes($samplePath, [Text.Encoding]::UTF8.GetBytes('LAB ONLY signature self-test'))
+        Write-LabSignedPolicy $samplePath $signedPath $certificate
+        $badSignature = [IO.File]::ReadAllBytes($signedPath)
+        $badSignature[$badSignature.Length - 1] = $badSignature[$badSignature.Length - 1] -bxor 1
+        $badCms = New-Object Security.Cryptography.Pkcs.SignedCms
+        $rejected = $false
+        try { $badCms.Decode($badSignature); $badCms.CheckSignature($true) } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Corrupt signature was accepted' }
+    }
     & $compiler /nologo /target:exe /optimize+ /warnaserror+ ('/out:' + $markerOne) (Join-Path $PSScriptRoot 'Marker.cs')
     if ($LASTEXITCODE -ne 0) { throw 'Marker v1 compile failed' }
     & $compiler /nologo /target:exe /optimize+ /warnaserror+ /define:VARIANT_TWO ('/out:' + $markerTwo) (Join-Path $PSScriptRoot 'Marker.cs')
@@ -34,8 +51,9 @@ try {
     $hashTwo = (Get-FileHash -LiteralPath $markerTwo -Algorithm SHA256).Hash
     if ($hashOne -eq $hashTwo) { throw 'Marker variants must have distinct exact identities' }
 } finally {
+    if ($certificate) { $certificate.Dispose() }
     $folder = Get-Item -LiteralPath $outputRoot
     if ($folder.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Temporary directory became a reparse point; cleanup refused' }
     Remove-Item -LiteralPath $folder.FullName -Recurse
 }
-[pscustomobject]@{Status='PASS';HostGuard='REJECTED';TemporaryFilesRemoved=(-not (Test-Path -LiteralPath $outputRoot));VariantOneSha256=$hashOne;VariantTwoSha256=$hashTwo}
+[pscustomobject]@{Status='PASS';HostGuard='REJECTED';LabSignature=$(if ($PolicySigning) {'VERIFIED_WITH_TAMPER_REJECTION'} else {'NOT_RUN'});TemporaryFilesRemoved=(-not (Test-Path -LiteralPath $outputRoot));VariantOneSha256=$hashOne;VariantTwoSha256=$hashTwo}
