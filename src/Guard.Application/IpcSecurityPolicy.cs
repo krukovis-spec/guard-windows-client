@@ -27,6 +27,7 @@ namespace Guard.Application
                     return verb == GuardVerb.GetStatus ||
                            verb == GuardVerb.GetReadiness ||
                            verb == GuardVerb.BeginSetup ||
+                           verb == GuardVerb.GetDeviceProvisioning ||
                            verb == GuardVerb.BindChildAccount;
 
                 case ClientRole.Proxy:

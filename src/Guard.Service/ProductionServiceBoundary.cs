@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.Json;
 using Guard.Application;
 using Guard.Domain;
 using Guard.Storage;
@@ -136,6 +137,40 @@ namespace Guard.Service
         }
 
         internal FileAuthoritativeStateStore NativeEnrollmentStore => GetAcquiredStore();
+
+        internal async Task<DeviceSecurityState> LoadPristineAsync(CancellationToken cancellationToken)
+        {
+            var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
+            if (state.Version != 0 || state.IsProvisioned || state.SetupChallenge != null ||
+                state.Enrollment != null || state.ChildAccountSid != null)
+                throw new InvalidOperationException("Device provisioning requires pristine initial state.");
+            return state;
+        }
+
+        // Public bootstrap request for the trusted off-PC operator, NOT a QR/session/ownership proof.
+        // The installer must authenticate the service endpoint before presenting/exporting this response.
+        internal async Task<byte[]> ExportDeviceProvisioningAsync(EnrollmentDeploymentTrust trust, CancellationToken cancellationToken)
+        {
+            _dataBoundaryGuard.DemandReady();
+            await LoadPristineAsync(cancellationToken).ConfigureAwait(false);
+            var identity = Identity;
+            var payload = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                version = 1,
+                relayOrigin = trust.Origin.GetLeftPart(UriPartial.Authority),
+                deviceId = identity.DeviceId,
+                signingKeyId = identity.SigningKeyId,
+                signingPublicKeySpki = Convert.ToBase64String(identity.Signing.ExportSubjectPublicKeyInfo()),
+                encryptionKeyId = identity.EncryptionKeyId,
+                encryptionPublicKeySpki = Convert.ToBase64String(identity.Encryption.ExportSubjectPublicKeyInfo()),
+                deviceEpoch = 1,
+                authorityEpoch = 1
+            });
+            if (payload.Length > 2048) throw new InvalidOperationException("Device provisioning response size.");
+            _dataBoundaryGuard.DemandReady();
+            cancellationToken.ThrowIfCancellationRequested();
+            return payload;
+        }
 
         public async Task InitializeNewAsync(
             CancellationToken cancellationToken)

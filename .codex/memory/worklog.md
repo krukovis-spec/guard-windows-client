@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — public device provisioning through existing admin IPC
+
+- Added empty-request verb 33 on the existing AdminSetup endpoint only. Explicit <=2048-byte JSON whitelist exports compiled relay origin, persistent device ID, separate public SPKIs/key IDs and initial epochs. No token, private key, setup secret, state mutation, new pipe or dependency. Import/export reuse one pristine-state check; missing production pins refuses without fallback.
+- Actual frame decode → dispatcher → service handler → temporary persistent identity verified exact public fields/keys and unchanged state. Every other role, caller payload, begun setup and absent writer lease refuse; default unconfigured build returns no descriptor. The optional internal trusted-profile constructor input is used only by tests; production DI supplies no override. Self-review checked call sites, roles and that an exported JSON is not ownership/authentication; future installer must authenticate the SCM/SYSTEM server and off-PC operator must independently pin its destination.
+- Focused Crypto and fresh `scripts/run-safe-tests.ps1` Release/29 v2/45 legacy PASS. PROJECT_ONLY capsule/canonical M3 updated. No live pipe/SCM/VM, phone, cloud/auth or full installer/operator workflow test; strict M1 remains open. Ponytail reused existing IPC/JSON/key storage rather than creating a transport/DTO hierarchy.
+
 ## 2026-10-01 — connect one-time installer profile to service startup
 
 - Implemented explicit fixed-path encrypted profile import before IPC using the existing startup/state boundary and protected record, no new dependency/interface. Normal startup never imports; duplicate/mixed bootstrap flags refuse. No credential or caller-chosen path in args, config or IPC. SYSTEM-only staging files use a distinct DPAPI purpose.

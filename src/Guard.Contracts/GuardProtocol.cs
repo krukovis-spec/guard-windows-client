@@ -70,6 +70,7 @@ namespace Guard.Contracts
         BeginSetup = 30,
         CompleteSetup = 31,
         BindChildAccount = 32,
+        GetDeviceProvisioning = 33,
         ApplyParentDecision = 40,
         ReconcilePolicy = 50
     }

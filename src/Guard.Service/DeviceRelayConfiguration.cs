@@ -128,11 +128,10 @@ internal sealed class DeviceRelayConfigurationStore(GuardDataPaths paths, IState
         try
         {
             // Read through the held writer boundary; never authorize import from a caller's stale state snapshot.
-            var pristineState = await service.LoadAsync(cancellationToken).ConfigureAwait(false);
+            var pristineState = await service.LoadPristineAsync(cancellationToken).ConfigureAwait(false);
             var config = DeviceRelayConfiguration.Decode(plaintext);
             config.RequireMatches(trust, service.Identity, pristineState, now);
-            if (pristineState.Version != 0 || pristineState.IsProvisioned || pristineState.SetupChallenge != null ||
-                pristineState.Enrollment != null || pristineState.ChildAccountSid != null || config.DeviceEpoch != 1 || config.AuthorityEpoch != 1)
+            if (config.DeviceEpoch != 1 || config.AuthorityEpoch != 1)
                 throw new InvalidOperationException("Connection installation requires pristine initial state.");
             if (resumeIdenticalInstall && File.Exists(paths.DeviceRelayConfigurationFile))
             {

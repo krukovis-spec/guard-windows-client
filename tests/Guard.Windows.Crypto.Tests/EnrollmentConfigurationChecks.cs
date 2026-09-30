@@ -9,7 +9,11 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Guard.Contracts;
+using Guard.Application;
+using Guard.Application.Readiness;
 using Guard.Domain;
+using Guard.Domain.Readiness;
+using Guard.Protocol;
 using Guard.Service;
 using Guard.Storage;
 using Guard.Windows.Cryptography;
@@ -56,6 +60,48 @@ internal static class EnrollmentConfigurationChecks
             var store = new DeviceRelayConfigurationStore(paths, protector, guard);
             await boundary.AcquireAsync(default); await boundary.InitializeNewAsync(default);
             var state = await boundary.LoadAsync(default); var identity = boundary.Identity;
+            var publicRequest = new GuardIpcRequest(GuardProtocol.CurrentVersion, Guid.NewGuid().ToString("D"),
+                GuardVerb.GetDeviceProvisioning, Array.Empty<byte>());
+            var publicHandler = Handler(boundary, trust);
+            var dispatcher = new SecureIpcRequestDispatcher(publicHandler);
+            var beforeExport = File.ReadAllBytes(paths.StateFile);
+            using (var frame = new MemoryStream(IpcFrameCodec.Encode(publicRequest)))
+            {
+                var decoded = await IpcFrameCodec.DecodeAsync(frame, TimeSpan.FromSeconds(5), default);
+                var response = await dispatcher.DispatchAsync(ClientRole.AdminSetup, decoded, default);
+                Check(response.Status == GuardIpcResponseStatus.Success && response.RequestId == publicRequest.RequestId &&
+                    response.PayloadLength <= 2048, "public provisioning IPC response");
+                using var document = JsonDocument.Parse(response.GetPayloadCopy());
+                var descriptor = document.RootElement;
+                var fields = descriptor.EnumerateObject().Select(p => p.Name).OrderBy(p => p).ToArray();
+                Check(fields.SequenceEqual(new[] { "version", "relayOrigin", "deviceId", "signingKeyId", "signingPublicKeySpki",
+                    "encryptionKeyId", "encryptionPublicKeySpki", "deviceEpoch", "authorityEpoch" }.OrderBy(p => p)),
+                    "public provisioning exposed unexpected fields");
+                Check(descriptor.GetProperty("version").GetInt32() == 1 && descriptor.GetProperty("relayOrigin").GetString() == Origin &&
+                    descriptor.GetProperty("deviceId").GetString() == identity.DeviceId &&
+                    descriptor.GetProperty("signingKeyId").GetString() == identity.SigningKeyId &&
+                    descriptor.GetProperty("encryptionKeyId").GetString() == identity.EncryptionKeyId &&
+                    descriptor.GetProperty("deviceEpoch").GetInt64() == 1 && descriptor.GetProperty("authorityEpoch").GetInt64() == 1,
+                    "public provisioning used unbound identifiers");
+                Check(Convert.FromBase64String(descriptor.GetProperty("signingPublicKeySpki").GetString()!).SequenceEqual(identity.Signing.ExportSubjectPublicKeyInfo()) &&
+                    Convert.FromBase64String(descriptor.GetProperty("encryptionPublicKeySpki").GetString()!).SequenceEqual(identity.Encryption.ExportSubjectPublicKeyInfo()),
+                    "public provisioning did not return the distinct persistent PUBLIC keys");
+            }
+            Check(beforeExport.SequenceEqual(File.ReadAllBytes(paths.StateFile)) && !File.Exists(paths.DeviceRelayConfigurationFile),
+                "public export changed state or installed a credential");
+            guard.Check = () => throw new InvalidOperationException("unexpected storage access");
+            foreach (var role in Enum.GetValues<ClientRole>().Where(r => r != ClientRole.AdminSetup))
+            {
+                var denied = await publicHandler.HandleAsync(role, publicRequest, default);
+                Check(!IpcSecurityPolicy.CanInvoke(role, GuardVerb.GetDeviceProvisioning) &&
+                    denied.Status == GuardIpcResponseStatus.Forbidden && denied.PayloadLength == 0, "non-admin public export");
+            }
+            var badRequest = new GuardIpcRequest(GuardProtocol.CurrentVersion, publicRequest.RequestId, publicRequest.Verb, new byte[] { 1 });
+            Check((await publicHandler.HandleAsync(ClientRole.AdminSetup, badRequest, default)).Status == GuardIpcResponseStatus.InvalidRequest,
+                "public export accepted caller-supplied identity");
+            guard.Check = () => { };
+            var noPins = await Handler(boundary, null).HandleAsync(ClientRole.AdminSetup, publicRequest, default);
+            Check(noPins.Status == GuardIpcResponseStatus.Unavailable && noPins.PayloadLength == 0, "default build invented release authority");
             await ThrowsAsync(() => ServiceNativeEnrollment.OpenAsync(boundary, store, default));
             Check(!File.Exists(paths.DeviceRelayConfigurationFile), "missing pins caused config creation");
             var profile = Profile(identity);
@@ -75,6 +121,9 @@ internal static class EnrollmentConfigurationChecks
             var (result, start) = await runtime.Coordinator.BeginAsync(ClientRole.AdminSetup, offer, default);
             using (start) Check(result == Guard.Application.SetupOperationStatus.Succeeded && start != null, "real coordinator did not accept locally constructed offer");
             var pending = await boundary.LoadAsync(default);
+            var afterSetup = await dispatcher.DispatchAsync(ClientRole.AdminSetup, publicRequest, default);
+            Check(afterSetup.Status == GuardIpcResponseStatus.Conflict && afterSetup.PayloadLength == 0,
+                "setup exported a new provisioning request");
             _ = store.Load(trust, identity, pending, Now);
             await ThrowsAsync(() => store.InstallNewAsync(raw, trust, boundary, Now, default));
             Check(ciphertext.SequenceEqual(File.ReadAllBytes(paths.DeviceRelayConfigurationFile)), "setup import changed profile");
@@ -119,6 +168,7 @@ internal static class EnrollmentConfigurationChecks
             var freshStore = new DeviceRelayConfigurationStore(freshPaths, protector, guard);
             // No held writer lease must fail before any protected record can be published.
             await ThrowsAsync(() => freshStore.InstallNewAsync(original, trust, freshBoundary, Now, default));
+            await ThrowsAsync(() => freshBoundary.ExportDeviceProvisioningAsync(trust, default));
             CryptographicOperations.ZeroMemory(raw); CryptographicOperations.ZeroMemory(original);
             await freshBoundary.AcquireAsync(default); await freshBoundary.InitializeNewAsync(default);
             _ = await freshBoundary.LoadAsync(default);
@@ -181,6 +231,20 @@ internal static class EnrollmentConfigurationChecks
         ["mailboxId"] = "mailbox-configuration-test", ["deviceEpoch"] = 1L, ["authorityEpoch"] = 1L,
         ["accessToken"] = Credential, ["issuedAt"] = Now.ToUnixTimeMilliseconds(), ["expiresAt"] = Now.AddDays(2).ToUnixTimeMilliseconds() };
     private sealed class TestGuard : IServiceDataBoundaryGuard { internal Action Check = () => { }; public void DemandReady() => Check(); }
+    private static GuardServiceIpcOperationHandler Handler(ServiceAuthoritativeStateBoundary boundary, EnrollmentDeploymentTrust? trust)
+    {
+        var unused = new UnusedSetupDependencies();
+        return new GuardServiceIpcOperationHandler(boundary,
+            new SetupCoordinator(boundary, new SetupCeremony(new CryptographicSetupSecretGenerator(), new Sha256SetupSecretHasher(), new EcdsaP256SignatureVerifier())),
+            new ChildAccountBindingCoordinator(boundary, unused), new GuardReadinessCoordinator(boundary, unused), unused, trust);
+    }
+    private sealed class UnusedSetupDependencies : IManagedChildAccountValidator, IDeviceReadinessFactsProvider, IServiceUtcClock
+    {
+        public DateTimeOffset UtcNow => Now;
+        public bool TryValidate(string sid, out WindowsAccountSid binding) => throw new InvalidOperationException("Export must not query accounts.");
+        public ReadinessProbeFacts Probe(DeviceSecurityState state, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Export must not probe/change platform readiness.");
+    }
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
     private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
     private static void Throws(Action action)

@@ -13,7 +13,7 @@ using Guard.Windows.Storage;
 
 namespace Guard.Service;
 
-// Service-owned keys, never part of an IPC response or the public authoritative-state model.
+// Service-owned PRIVATE keys, never part of IPC or authoritative-state DTOs. Setup may export public SPKI only.
 internal sealed class DeviceIdentity : IDisposable
 {
     internal DeviceIdentity(string deviceId, ECDsa signing, ECDiffieHellman encryption)
