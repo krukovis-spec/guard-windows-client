@@ -73,6 +73,10 @@ namespace Guard.Service
                 provider.GetRequiredService<GuardDataPaths>(),
                 new LocalSystemDpapiDataProtector(DeviceIdentityStore.Purpose),
                 provider.GetRequiredService<IServiceDataBoundaryGuard>()));
+            services.AddSingleton(provider => new DeviceRelayConfigurationStore(
+                provider.GetRequiredService<GuardDataPaths>(),
+                new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.Purpose),
+                provider.GetRequiredService<IServiceDataBoundaryGuard>()));
             services.AddSingleton<ServiceAuthoritativeStateBoundary>();
             services.AddSingleton<IServiceWriterLease>(
                 provider => provider.GetRequiredService<ServiceAuthoritativeStateBoundary>());

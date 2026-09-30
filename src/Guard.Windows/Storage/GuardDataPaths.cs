@@ -23,6 +23,8 @@ namespace Guard.Windows.Storage
             WriterLeaseFile = StateFile + ".writer.lock";
             DeviceIdentityFile = Path.Combine(RootDirectory, "device.identity");
             DeviceIdentityPendingFile = DeviceIdentityFile + ".pending";
+            DeviceRelayConfigurationFile = Path.Combine(RootDirectory, "device.relay");
+            DeviceRelayConfigurationPendingFile = DeviceRelayConfigurationFile + ".pending";
             RelayRootDirectory = Path.Combine(RootDirectory, "relay");
             RelayStateFile = Path.Combine(RelayRootDirectory, "state.dat");
             RelayStateBackupFile = RelayStateFile + ".bak";
@@ -47,6 +49,10 @@ namespace Guard.Windows.Storage
         public string DeviceIdentityFile { get; }
 
         public string DeviceIdentityPendingFile { get; }
+
+        public string DeviceRelayConfigurationFile { get; }
+
+        public string DeviceRelayConfigurationPendingFile { get; }
 
         public string RelayRootDirectory { get; }
 

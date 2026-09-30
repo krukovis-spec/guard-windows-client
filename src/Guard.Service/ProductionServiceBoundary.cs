@@ -33,6 +33,8 @@ namespace Guard.Service
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.WriterLeaseFile);
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceIdentityFile);
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceIdentityPendingFile);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceRelayConfigurationFile);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.DeviceRelayConfigurationPendingFile);
         }
 
         public void PrepareEmptyBoundary()
@@ -129,6 +131,8 @@ namespace Guard.Service
         {
             get { lock (_sync) return _identity ?? throw new InvalidOperationException("Device identity is not loaded."); }
         }
+
+        internal FileAuthoritativeStateStore NativeEnrollmentStore => GetAcquiredStore();
 
         public async Task InitializeNewAsync(
             CancellationToken cancellationToken)

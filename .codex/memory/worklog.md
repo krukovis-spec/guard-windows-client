@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — deployment trust pins and protected device relay configuration
+
+- Added compiled public release pins with no runtime trust fallback, strict bounded device profile under separate DPAPI purpose, and ServiceNativeEnrollment composition using persistent keys, actual Google roots/status and existing coordinator/HTTP. Reused immutable protected-file publication for identity/config; no new dependency, system action or network during composition. Import itself reads current pristine state through the held writer boundary; no caller-supplied stale-state authorization or overwrite. It remains an internal pre-IPC installer operation, not a child/relay/phone API.
+- Real test-user DPAPI/files plus actual coordinator cover reopen, malformed/duplicate/unknown JSON, identity/key-role/mailbox/epoch/origin mismatch, expiry, wrong purpose, missing build pins/lease, repeat/setup import, cancellation and guard-after-flush. Fresh Release/29 v2 harnesses/45 legacy PASS; after the final import-state tightening fresh Crypto PASS. A build with only relay pin failed as intended. No release values/credentials were generated, no cloud deployment or physical/VM/SYSTEM tests performed.
+- PROJECT_ONLY: capsule/plan/protocol and stale Worker README status updated. Actual release APK identity, verified endpoint, trusted off-PC provisioning/secure installer import/startup/setup UI and physical phone remain; JSON role is not evidence of opaque credential scope. No external connection changed, registry update unnecessary. M1 strict admin-resistant expiry unresolved; M7 Codex-like visual pass stays queued. Ponytail reused existing file boundary, validators and test harness, no second journal/framework.
+
 ## 2026-10-01 — persistent Windows device identity in service bootstrap
 
 - Added one immutable purpose-separated DPAPI key record using existing SYSTEM-only paths/ACL guard and authoritative writer lease. Distinct signing/encryption keys and device ID publish before initial state; full record without state resumes explicit bootstrap, partial pending record refuses. Normal startup never generates replacement keys; service load/commit checks device ID and any pinned offer's key roles/bytes. Keys stay outside authoritative DTO/IPC; live objects dispose on shutdown and plaintext buffers clear after protect/import/failure.

@@ -23,4 +23,16 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="[10.0.10]" />
   </ItemGroup>
+
+  <!-- Public release pins only: never pass credentials to MSBuild. No development trust fallback. -->
+  <ItemGroup Condition="'$(GuardRelayOrigin)' != '' And '$(GuardAndroidSignerSha256)' != '' And '$(GuardMinimumAndroidVersion)' != ''">
+    <AssemblyMetadata Include="Guard.Enrollment.RelayOrigin" Value="$(GuardRelayOrigin)" />
+    <AssemblyMetadata Include="Guard.Enrollment.AndroidSignerSha256" Value="$(GuardAndroidSignerSha256)" />
+    <AssemblyMetadata Include="Guard.Enrollment.MinimumAndroidVersion" Value="$(GuardMinimumAndroidVersion)" />
+  </ItemGroup>
+  <Target Name="RequireCompleteEnrollmentPins" BeforeTargets="GenerateAssemblyInfo"
+      Condition="'$(GuardRelayOrigin)' != '' Or '$(GuardAndroidSignerSha256)' != '' Or '$(GuardMinimumAndroidVersion)' != ''">
+    <Error Condition="'$(GuardRelayOrigin)' == '' Or '$(GuardAndroidSignerSha256)' == '' Or '$(GuardMinimumAndroidVersion)' == ''"
+        Text="Guard enrollment release pins must supply relay origin, Android certificate SHA256 and minimum version together." />
+  </Target>
 </Project>
