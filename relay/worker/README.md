@@ -31,6 +31,27 @@ The device's .NET outbox keeps its local queue sequence separate from each recip
 
 Signing-intent state is an availability hint only, never authority. Approval operations are scoped to the pinned signing key and epoch. A finalize call requires an existing opaque receipt for the client's pinned inbox and remains `receipt_observed`; it can advance only the untrusted server hint floor, not the computer/phone replay floor. The relay cannot verify the encrypted receipt's command or terminal outcome. Android must independently decrypt and verify the exact device-signed terminal receipt before issuing sequence N+1. If no verified receipt arrives, signing remains blocked until explicit expiry/cancellation policy on the client.
 
+## Native enrollment transport
+
+The existing mailbox also carries bounded opaque GREX exchanges, separate from GRF1. These routes are implemented and locally tested, **not deployed or wired into client startup yet**. The QR never carries a mailbox admin credential. A trusted, already provisioned `device` credential opens a transport session at `POST /v1/mailboxes/{mailboxId}/enrollments/{offerHashHex}` with exact JSON `{ "phoneToken": "<64 lowercase hex characters>", "expiresAt": <offer expiry Unix milliseconds> }`. The expiry must be within ten minutes. Owner is the credential's pinned device recipient; admins/other recipients cannot act as that device through these routes. Exact re-provisioning is idempotent and never extends the deadline or replaces the capability.
+
+Both clients derive the 32-byte phone capability as `HMAC-SHA256(SHA256(QR secret), ASCII("guard-enrollment-relay-capability-v1") || fullOfferHash)`, serialized lowercase hex. It is domain-separated from the claim possession MAC and never reveals that MAC key. Only SHA-256 of the textual bearer token is retained in SQLite. Capabilities cannot be reused for another retained offer in that mailbox or ordinary token provisioning. The phone uses it only as an Authorization Bearer on that exact pinned HTTPS endpoint, never in URLs/logs/browser storage. The phone must retain it without the QR secret for retries; that Android storage/client wiring is still open.
+
+Suffixes below use the same offer-scoped base path. No query parameters or path aliases are accepted; binary POSTs require `application/octet-stream`.
+
+| Route | Credential | Meaning |
+| --- | --- | --- |
+| `POST /requests` | Phone capability | Enqueue exact GREX claim/proof/query; 201 new, 200 byte-identical retry, 409 nonce collision. |
+| `GET /requests` | Owning device | One oldest unreplied request as exact binary bytes, or 204. Read does not consume. |
+| `POST /replies` | Owning device | Store exact GREX reply matching full offer/claim/nonce header of an existing request. |
+| `GET /replies/{nonceHex}` | Phone capability | Exact reply, 204 waiting, 410 missing/expired, 422 device rejected. |
+| `DELETE /requests/{nonceHex}` | Owning device | Mark an invalid request rejected so it cannot jam the queue. Does not replace an existing reply. |
+| `DELETE` base path | Owning device | Revoke this transport session and its queue, **not** ownership/keys on either endpoint. |
+
+New claim/proof submissions stop at offer expiry; query-only reconciliation lasts another 24 hours. Each exchange lasts at most two minutes, while signed replies have their independent one-minute client-verified validity. After a lost/stale reply the client creates a fresh nonce/query; after retention expiry it requires explicit recovery/reconciliation, never silent key deletion or re-enrollment. HTTP statuses, retention deadlines and rejection hints are untrusted availability information, not proof of ownership or revocation. Cryptographic verification/local confirmation remains mandatory.
+
+Bounds: 70 KiB requests, 414-byte replies, 1024-byte provisioning JSON; eight retained offers/mailbox, 32 exchanges/offer, 256 exchanges/1 MiB request bytes/mailbox. Expired rows are purged on enrollment requests; exact retries do not use additional quota. There is no new Durable Object namespace, service or dependency. Publication/replies use synchronous SQLite transactions with fresh capability/device-token checks after body/crypto awaits ([Cloudflare storage semantics](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)). Bodies retain the shared streaming size/deadline enforcement. Ordinary GRF1 limits and roles are unchanged.
+
 ## Parent WebAuthn BFF
 
 The parent BFF uses exact-pinned `@simplewebauthn/server` `13.3.3`. It fails closed with `503 webauthn_bff_not_configured` unless these deployment values are present and valid:

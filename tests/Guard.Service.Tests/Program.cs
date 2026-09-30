@@ -44,7 +44,8 @@ namespace Guard.Service.Tests
                 ("validates bounded recipient-bound relay inbox pages", RelayTransportChecks.ValidatesBoundedInboxAsync),
                 ("preserves native key fingerprints and canonical IDs through HTTP", RelayTransportChecks.PreservesCanonicalIdentifiersAsync),
                 ("acknowledges only the locally committed inbox cursor", RelayTransportChecks.AcknowledgesOnlyCommittedCursorAsync),
-                ("rejects unsafe relay HTTP and cancels stalled bodies", RelayTransportChecks.RejectsUnsafeHttpAndCancelsBodyAsync)
+                ("rejects unsafe relay HTTP and cancels stalled bodies", RelayTransportChecks.RejectsUnsafeHttpAndCancelsBodyAsync),
+                ("bounds and pins enrollment provisioning binary queues and replies", RelayTransportChecks.GuardsEnrollmentHttpAsync)
             };
             var failures = 0;
             foreach (var test in tests)

@@ -30,13 +30,15 @@ class EnrollmentSigningOperation internal constructor(private val store: Pending
     }
 }
 
-/** No network/ownership transition here. Actual attestation and final owner CAS belong to Windows. */
+/** Windows alone performs attestation/final owner CAS; this client retains its signed acknowledgment. */
 class AndroidEnrollmentCeremony(context: Context) {
     private val store = PendingEnrollmentStore(File(context.noBackupFilesDir, "enrollment"))
     fun listPending() = store.list()
 
     fun prepare(transcript: EnrollmentTranscript): PendingEnrollment {
-        val state = store.prepare(transcript.offer) // persisted BEFORE the first non-exportable key is created
+        store.prepare(transcript.offer) // persisted BEFORE the first non-exportable key is created
+        val capability = transcript.relayCapability()
+        val state = try { store.saveCapability(transcript.offer, capability) } finally { capability.fill(0) }
         if (state.claim != null) {
             checkKeys(state)
             require(state.possessionProof().contentEquals(transcript.proofFor(state.claim))) { "different QR secret" }
@@ -64,46 +66,26 @@ class AndroidEnrollmentCeremony(context: Context) {
         return EnrollmentSigningOperation(store, state, signature)
     }
 
-    fun forSend(offer: EnrollmentOffer): PendingEnrollment {
-        resume(offer)
-        return store.forSend(offer)
-    }
-
-    fun answerKeyConfirmation(offer: EnrollmentOffer, enc: ByteArray, cipher: ByteArray): ByteArray {
-        val state = forSend(offer)
-        val proof = EnrollmentWire.answerKeyConfirmation(requireNotNull(state.claim), AndroidRelayEncryptionKey.openExisting(state.encryptionAlias), enc, cipher)
-        try { store.forSend(offer); return proof } catch (error: Exception) { proof.fill(0); throw error }
-    }
-
-    fun encryptedClaim(offer: EnrollmentOffer, nonce: ByteArray): ByteArray {
-        val state = forSend(offer)
-        val encoded = EnrollmentExchange.claim(offer, requireNotNull(state.claim), state.certificateChain(), state.possessionProof(), state.signature(), nonce)
-        store.forSend(offer) // expiry during HPKE must not release a new submission
-        return encoded
-    }
-
-    fun encryptedKeyProof(offer: EnrollmentOffer, result: EnrollmentResult, nonce: ByteArray): ByteArray {
-        require(result.outcome == EnrollmentExchange.NEEDS_PHONE_PROOF)
-        val state = forSend(offer)
-        val proof = answerKeyConfirmation(offer, result.encapsulatedKey(), result.encryptedChallenge())
-        return try {
-            EnrollmentExchange.keyProof(offer, requireNotNull(state.claim), proof, nonce).also { store.forSend(offer) }
-        } finally { proof.fill(0) }
-    }
-
-    /** A post-timeout query is allowed, but cannot generate/replace keys or assert local ownership. */
-    fun encryptedStatusQuery(offer: EnrollmentOffer, nonce: ByteArray): ByteArray {
+    /** One bounded exchange, not a background polling loop. Null means no signed reply yet. */
+    suspend fun synchronize(offer: EnrollmentOffer): EnrollmentResult? {
         val state = requireNotNull(store.load(offer)); require(state.isSigned); checkKeys(state)
-        return EnrollmentExchange.query(offer, requireNotNull(state.claim), nonce)
+        val key = AndroidRelayEncryptionKey.openExisting(state.encryptionAlias)
+        store.lastResult(offer, key)?.let { if (it.outcome == EnrollmentExchange.CONFIRMED) return it }
+        val delivery = store.nextRequest(offer, key)
+        val raw = EnrollmentHttpTransport().exchange(delivery) {
+            val current = requireNotNull(store.load(offer))
+            check(current.request().contentEquals(delivery.request())) { "enrollment delivery changed" }
+            store.requireSendable(current)
+        } ?: return store.lastResult(offer, key)
+        checkKeys(requireNotNull(store.load(offer)))
+        return store.acceptReply(offer, raw, key)
     }
 
-    fun receiveExchangeResult(offer: EnrollmentOffer, raw: ByteArray, expectedNonce: ByteArray): EnrollmentResult {
-        val state = requireNotNull(store.load(offer)); require(state.isSigned); checkKeys(state)
-        check(System.currentTimeMillis() >= state.observedUnixMillis) { "clock rollback" }
-        val result = EnrollmentExchange.receive(raw, offer, requireNotNull(state.claim),
-            AndroidRelayEncryptionKey.openExisting(state.encryptionAlias), expectedNonce, System.currentTimeMillis())
-        check(System.currentTimeMillis() in result.issuedUnixMillis until result.expiryUnixMillis)
-        return result // Not active-owner promotion; durable reconciliation must consume the outstanding nonce.
+    /** Confirmed enrollment only, NOT current permission, recovery readiness or protection status. */
+    fun confirmedEnrollment(offer: EnrollmentOffer): PendingEnrollment? {
+        val state = requireNotNull(store.load(offer)); checkKeys(state)
+        return if (store.lastResult(offer, AndroidRelayEncryptionKey.openExisting(state.encryptionAlias))?.outcome == EnrollmentExchange.CONFIRMED)
+            state else null
     }
 
     fun abandon(offer: EnrollmentOffer) = store.abandon(offer)

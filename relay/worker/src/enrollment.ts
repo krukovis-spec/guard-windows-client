@@ -63,13 +63,15 @@ export async function handleEnrollment(request: Request, state: DurableObjectSta
       requireDevice(auth!.recipientKeyId!);
       const existing = [...sql.exec<Session>("SELECT * FROM enrollments WHERE offer=?", offer!)][0];
       if (existing) {
-        if (existing.owner !== auth!.recipientKeyId || !same(existing.token_hash, phoneHash) || existing.submit_until !== input.expiresAt)
+        if (existing.owner !== auth!.recipientKeyId) reject(403, "role_forbidden");
+        if (!same(existing.token_hash, phoneHash) || existing.submit_until !== input.expiresAt)
           reject(409, "enrollment_conflict");
         return json({ duplicate: true, retainUntil: existing.retain_until }); // Never renew either deadline.
       }
       const created = Date.now();
       if ((input.expiresAt as number) <= created || (input.expiresAt as number) > created + 10 * minute) reject(400, "invalid_enrollment_expiry");
       if ([...sql.exec("SELECT 1 FROM tokens WHERE hash=?", phoneHash)].length) reject(409, "enrollment_token_conflict");
+      if ([...sql.exec("SELECT 1 FROM enrollments WHERE token_hash=?", phoneHash)].length) reject(409, "enrollment_token_conflict");
       if ([...sql.exec<{ n: number }>("SELECT count(*) n FROM enrollments")][0]!.n >= 8) reject(429, "enrollment_limit");
       const retain = (input.expiresAt as number) + 24 * 60 * minute;
       sql.exec("INSERT INTO enrollments(offer,owner,token_hash,submit_until,retain_until) VALUES(?,?,?,?,?)", offer!, auth!.recipientKeyId!, phoneHash, input.expiresAt as number, retain);
@@ -125,6 +127,7 @@ export async function handleEnrollment(request: Request, state: DurableObjectSta
     return state.storage.transactionSync(() => {
       current();
       const at = Date.now();
+      sql.exec("DELETE FROM enrollment_exchanges WHERE expires_at<=?", at);
       const row = [...sql.exec<Exchange>("SELECT * FROM enrollment_exchanges WHERE offer=? AND nonce=? AND expires_at>?", offer!, frame.nonce, at)][0];
       if (resource === "requests") {
         if (row) {

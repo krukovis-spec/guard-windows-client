@@ -54,6 +54,8 @@ namespace Guard.Windows.Storage.Tests
                 "Guard security root was not fixed directly under ProgramData.");
             Assert(string.Equals(paths.RootDirectory, expected, StringComparison.OrdinalIgnoreCase), "Guard data root was not fixed under ProgramData.");
             Assert(string.Equals(paths.StateFile, Path.Combine(expected, "state.dat"), StringComparison.OrdinalIgnoreCase), "State path changed.");
+            Assert(paths.DeviceIdentityFile == Path.Combine(expected, "device.identity") &&
+                paths.DeviceIdentityPendingFile == paths.DeviceIdentityFile + ".pending", "Device identity escaped the service boundary.");
             Assert(
                 string.Equals(
                     paths.StateBackupFile,

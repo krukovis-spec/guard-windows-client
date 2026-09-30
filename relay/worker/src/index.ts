@@ -144,6 +144,8 @@ export class DeviceMailbox implements DurableObject {
     if (!validToken(body.accessToken) || !scope || typeof body.expiresAt !== "number" ||
       !Number.isSafeInteger(body.expiresAt) || body.expiresAt <= Date.now()) throw new RelayHttpError(400, "invalid_token_provisioning");
     const hash = await sha256(body.accessToken);
+    if ([...this.sql.exec("SELECT 1 FROM enrollments WHERE token_hash=?", hash.buffer)].length)
+      throw new RelayHttpError(409, "enrollment_token_conflict");
     const existing = [...this.sql.exec("SELECT 1 FROM tokens WHERE hash=?", hash.buffer)][0];
     if (!existing && [...this.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n >= 256)
       throw new RelayHttpError(429, "token_limit_reached");

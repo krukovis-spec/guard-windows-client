@@ -12,5 +12,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Guard.Domain\Guard.Domain.csproj" />
     <ProjectReference Include="..\..\src\Guard.Windows\Guard.Windows.csproj" />
+    <ProjectReference Include="..\..\src\Guard.Service\Guard.Service.csproj" />
   </ItemGroup>
 </Project>
