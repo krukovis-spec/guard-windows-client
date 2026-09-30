@@ -42,7 +42,12 @@ class EnrollmentTest {
         val signature = Signature.getInstance("SHA256withECDSA").apply { initSign(ExchangeVector.key.privateKey()); update(input) }
         val output = File("build/test-interop/android-enrollment.txt")
         requireNotNull(output.parentFile).mkdirs()
-        output.writeText(listOf(raw.hex(), input.hex(), proof.hex(), EcdsaP1363.fromDer(signature.sign()).hex(), text).joinToString("\n"))
+        val capability = EnrollmentQrParser.parse(text, binding, now).use { it.relayCapability() }
+        assertArrayEquals(EnrollmentWire.relayCapability(GuardWire.sha256(secret), offer), capability)
+        assertFalse(capability.contentEquals(proof) || capability.contentEquals(GuardWire.sha256(secret)) || capability.contentEquals(secret))
+        assertFalse(capability.contentEquals(EnrollmentWire.relayCapability(GuardWire.sha256(secret), offer(epoch = 3))))
+        assertThrows(IllegalArgumentException::class.java) { EnrollmentWire.relayCapability(ByteArray(31), offer) }
+        output.writeText(listOf(raw.hex(), input.hex(), proof.hex(), EcdsaP1363.fromDer(signature.sign()).hex(), text, capability.hex()).joinToString("\n"))
     }
 
     @Test fun `QR rejects ambiguous parsing foreign relay expiry and use after close`() {
@@ -64,6 +69,7 @@ class EnrollmentTest {
         assertThrows(IllegalArgumentException::class.java) { opened.proofFor(claim(offer(epoch = 3))) }
         opened.close()
         assertThrows(IllegalStateException::class.java) { opened.proofFor(claim(offer())) }
+        assertThrows(IllegalStateException::class.java) { opened.relayCapability() }
     }
 
     @Test fun `phone answers dotnet key confirmation only for exact claim key and authenticated ciphertext`() {

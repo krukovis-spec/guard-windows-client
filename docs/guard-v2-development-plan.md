@@ -2,7 +2,7 @@
 
 Статус: исполнение M0–M9 разрешено Иваном. P0 containment завершён; интеграция и приёмка продукта продолжаются в `codex/guard-v2-integrated`. Готовой системы пока нет.
 
-Последнее обновление: 2026-09-30.
+Последнее обновление: 2026-10-01.
 
 Актуальный маршрут исполнения — раздел «Подробный план завершения M0–M9» ниже. Исторические Stage 0–7 и старые количества тестов описывают сделанные foundations, а не готовность продукта. Один канонический план остаётся в этом файле.
 
@@ -188,6 +188,10 @@ Android lifecycle M3.2, 2026-09-30: `AndroidEnrollmentCeremony` сохраняе
 **Приёмка:** clean setup и одна проверенная карточка на Android/PWA, свежая аппаратная подпись и её проверка .NET. Реальные тесты отпечатка заменяют пустые `@Ignore` placeholders. Инженерная проверка телефона на этом этапе ещё не означает приглашение к семейному использованию. Тесты: T05–T06, T13–T16.
 
 Зашифрованная граница M3, 2026-09-30: `NativeEnrollmentExchange` принимает GREX claim/chain/proof/query и вызывает настоящий durable coordinator; не имеет маршрута local-confirm. Kotlin шифрует HPKE существующим фиксированным suite; ответы Windows отдельно подписаны и связаны с полными offer/claim hashes, свежим nonce, version и сроком до минуты. Три исхода строго различаются: требуется proof телефона, требуется исходное локальное подтверждение, owner уже сохранён. Проверены реальные синтетические attestation/file/CAS, restart, exact retry, запрос после истечения QR, tamper/expiry/cancellation и предел chain 64 KiB без увеличения обычного GRF1. Kotlin проверяет реальные .NET ответы, .NET независимо расшифровывает Kotlin claim/proof/query; Android 34 JVM tests/debug APK/lint PASS. Физическая биометрия и live relay НЕ проверены. Следующий шаг: scoped GREX endpoint/credentials + HTTP delivery, durable Android outstanding nonce/result/active-owner reconciliation, затем setup/scanner/биометрия/Recovery Kit. Текущий возвращаемый verified result ещё не активирует владельца; основная система всё ещё не готова.
+
+Сетевой инкремент M3, 2026-10-01: в существующем mailbox реализован отдельный bounded GREX requests/replies path; device credential открывает ровно offer hash, phone capability выводится domain-separated HMAC из QR proof key и полного offer hash (.NET/Kotlin interop). Только hash capability и непрозрачные bytes сохраняются на relay; нет approval/admin прав и изменения owner. Проверены настоящий HTTP→Durable Object→SQLite путь в локальном Worker runner, точные bytes Kotlin/.NET, роли/чужой offer/mailbox, retry/reopen/конкурирующие nonce, >64 KiB chain без расширения GRF1, квоты и отзыв/expiry при медленном body. Срок отправки новых claim/proof до QR expiry; query результата ещё 24 часа, отдельный обмен хранится до двух минут. Deadline не продлевается повторным provisioning. После окна нужен явный recovery/reconciliation, не удаление локальных ключей. Внешнего deploy нет. Durable Android nonce/result/active-owner, сохранение capability без QR secret, клиентское HTTP wiring и setup UI остаются следующей связанной частью; серверные тесты не означают готовности телефона или M3 целиком.
+
+Проверка сборки 2026-10-01: interop обнаружил, что `Guard.RelayState.Tests`/`Guard.Windows.RelayCrypto.Tests` не входили в solution, а safe script запускал прежние DLL с `--no-build`. Оба проекта включены в Release build; скрипт теперь заранее отказывает, если любой разрешённый harness не входит в эту конфигурацию. После исправления свежие Release/29 harnesses/45 legacy и обе .NET↔Kotlin проверки PASS; Worker 51/typecheck, Android 34/debug/lint PASS. Прежний общий build сам по себе не доказывал свежесть этих двух DLL (отдельные project builds остаются валидным evidence).
 
 ### M4. Первый законченный сценарий — приложение
 

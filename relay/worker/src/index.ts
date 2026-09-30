@@ -1,5 +1,6 @@
 import { FrameError, isGuardIdentifier as validId, MAX_FRAME_BYTES, parseRelayFrame, type RelayFrame } from "./frame";
 import { readBoundedBody, RequestBodyError } from "./bounded-body";
+import { handleEnrollment, MAX_ENROLLMENT_BYTES, migrateEnrollment } from "./enrollment";
 import {
   BFF_AUTH_OBJECT_NAME,
   forwardParentBff,
@@ -29,7 +30,7 @@ async function forward(env: Env, mailboxId: string, request: Request, token: str
   const copy = new Headers(request.headers); if (token) copy.set("x-guard-token", token); if (bootstrap) copy.set("x-guard-bootstrap", "1");
   copy.delete("content-length");
   const body = request.method === "GET" || request.method === "HEAD" ? undefined :
-    await readBoundedBody(request, MAX_FRAME_BYTES);
+    await readBoundedBody(request, request.method === "POST" && /^\/v1\/mailboxes\/[^/]+\/enrollments\/[a-f0-9]{64}\/requests$/.test(new URL(request.url).pathname) ? MAX_ENROLLMENT_BYTES : MAX_FRAME_BYTES);
   return env.DEVICE_MAILBOX.get(id).fetch(new Request(`https://mailbox.internal${new URL(request.url).pathname}${new URL(request.url).search}`, { method: request.method, headers: copy, body }));
 }
 
@@ -63,6 +64,7 @@ export class DeviceMailbox implements DurableObject {
   private readonly sql: SqlStorage;
   constructor(readonly state: DurableObjectState, readonly env: Env) { this.sql = state.storage.sql; state.blockConcurrencyWhile(async () => this.migrate()); }
   private migrate(): void {
+    migrateEnrollment(this.sql);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS tokens(hash BLOB PRIMARY KEY, role TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS frames(frame_id TEXT PRIMARY KEY, recipient_key_id TEXT NOT NULL, kind INTEGER NOT NULL, cursor INTEGER NOT NULL, expires_at INTEGER NOT NULL, bytes BLOB NOT NULL, size INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS frames_recipient_cursor ON frames(recipient_key_id,cursor);
@@ -102,6 +104,8 @@ export class DeviceMailbox implements DurableObject {
       const bffResponse = await handleParentBffRequest({ state: this.state, sql: this.sql, env: this.env }, request);
       if (bffResponse) return bffResponse;
       if (request.headers.get("x-guard-bootstrap") === "1" && path === "/v1/admin/bootstrap") return await this.bootstrap(request);
+      const enrollmentResponse = await handleEnrollment(request, this.state, () => this.authenticate(request));
+      if (enrollmentResponse) return enrollmentResponse;
       const auth = await this.authenticate(request); if (!auth) return fail(401, "authentication_required");
       const prefix = `/v1/mailboxes/${this.state.id.name}`;
       if (path === `${prefix}/registration-tickets` && (request.method === "POST" || request.method === "DELETE")) {
@@ -140,6 +144,8 @@ export class DeviceMailbox implements DurableObject {
     if (!validToken(body.accessToken) || !scope || typeof body.expiresAt !== "number" ||
       !Number.isSafeInteger(body.expiresAt) || body.expiresAt <= Date.now()) throw new RelayHttpError(400, "invalid_token_provisioning");
     const hash = await sha256(body.accessToken);
+    if ([...this.sql.exec("SELECT 1 FROM enrollments WHERE token_hash=?", hash.buffer)].length)
+      throw new RelayHttpError(409, "enrollment_token_conflict");
     const existing = [...this.sql.exec("SELECT 1 FROM tokens WHERE hash=?", hash.buffer)][0];
     if (!existing && [...this.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n >= 256)
       throw new RelayHttpError(429, "token_limit_reached");
