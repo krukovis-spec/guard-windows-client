@@ -97,9 +97,10 @@ internal class NativeApprovalDelivery(
                         } finally { active.compareAndSet(connection, null); connection.disconnect() }
                     }
                     val now = guard(allowExpiredAttempt = true)
-                    // Once the outer frame expires it cannot be accepted, even if an earlier POST succeeded.
-                    // Keep the exact signed command: Windows alone decides Expired or returns its signed history.
-                    var replaced = attempt?.let { now >= it.expiry } == true
+                    // A confirmed publication may have been consumed while its signed receipt was lost.
+                    // Explicit resend uses a fresh outer frame; ambiguous live POSTs still retry exact bytes.
+                    // Windows alone decides Expired or returns signed history for the unchanged GRAP.
+                    var replaced = attempt?.let { it.published || now >= it.expiry } == true
                     if (attempt == null || replaced)
                         save(NativeApprovalAttempt.prepare(pending, offer, claim, now, profile.expiryUnixMillis), replaced)
                     // At most one outer replacement per user action. Ambiguous live attempts retain exact bytes.

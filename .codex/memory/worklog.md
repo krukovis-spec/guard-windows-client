@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-01 — immediate receipt refresh and bounded poison scan
+
+- Explicit Android resend of a confirmed publication now replaces only its outer frame immediately, so a lost receipt need not wait seven days. Original GRAP/sequence stay exact; ambiguous live POSTs still retry saved bytes. Existing guards/CAS and one replacement/pass are retained. The actual Android prior/refreshed frames enter Windows preparation and return identical saved signed receipt/time/policy/sequence, not a second permission.
+- Native delivery scans structurally valid rejected ciphertext with a transient read bookmark: ≤64 pages ×16 frames (Worker quota 1000), one fully verified outcome. No cursor/ack changes for all-invalid pages; local storage/profile/ACL failures and CAS conflict still stop, malformed JSON/GRF1 pages still refuse. Found/fixed the missing whole-native-pass timeout using existing TimeProvider + BCL cooperative 25s cancellation; no new packages/queues/schema. A malicious unavailable relay remains an availability limit, not authority.
+- Focused Crypto, fresh Release/29 v2/45 legacy, Android 90 JVM/debug+instrumentation APK/lint 0 errors/13 prior warnings and six interop PASS. Existing real synthetic-owner/temp DPAPI/controlled HTTP tests cover two bad pages then valid history, all-invalid/empty continuation, 64-page exhaustion, profile expiry, deterministic timer cancellation/disposal and lost receipt/restart. No cloud/VM/phone/host-policy actions; Worker/PWA unchanged/not rerun.
+- PROJECT_ONLY via wiki-memory/project-memory: capsule/plan/protocol/Android usage updated, connection journal unchanged. Ponytail reuses existing signing/receipt/CAS/transport and test fixtures. Next trusted observations, actual enforcement/verified terminal reconciliation and live gates. M1/TTL/admin/phone and Codex-style M7 remain open; not a release.
+
 ## 2026-10-01 — expired Android approval envelope and missing transport positions
 
 - Root cause: a persisted expired GAD1 could never pass the send guard; a replacement would then hit Windows' exact-next wire cursor despite relay TTL deletion. Android now renews only the outer prepared/sealed/published attempt under a current profile, once/pass, through existing pending/record CAS. Exact signed GRAP and sequence survive, including lost new POST response/restart; changed owner, cancellation, rollback or expiry before atomic replacement refuses. No new signature or terminal status is invented.

@@ -154,15 +154,15 @@ class NativeApprovalDeliveryTest {
         assertEquals(2, calls); unchanged()
     }
 
-    @Test fun `expired outer attempts recover the same signed command even after confirmed publication`() = runBlocking {
+    @Test fun `expired or published attempts resend the same command without waiting for a lost receipt`() = runBlocking {
         val root = directory
-        for (phase in 0..2) {
+        for (phase in 0..3) {
             directory = File(root, "phase-$phase").apply { mkdirs() }; clock.time = now
             store().save(pending)
             val original = prepared().let { if (phase == 0) it else it.seal(pending, offer, claim, reservation(it), 201, now) }
-                .let { if (phase == 2) it.markPublished(publication(it), 201, now) else it }
+                .let { if (phase >= 2) it.markPublished(publication(it), 201, now) else it }
             store().saveDelivery(pending, null, original) {}
-            clock.time = original.expiry // Exclusive expiry, with a still-current profile.
+            clock.time = if (phase == 3) now + 1000 else original.expiry // Confirmed publication can refresh immediately.
             var calls = 0
             session { url ->
                 calls++; val saved = store().delivery(pending)!!
@@ -183,6 +183,7 @@ class NativeApprovalDeliveryTest {
                 "guard-relay-approval-hpke-v1".toByteArray() + aad))
             assertNull(store().lastReceipt(pending.keyId)) // Transport recovery is never a terminal receipt.
             if (phase == 2) writeInterop("android-recovered-approval-frame.txt", recovered)
+            if (phase == 3) writeInterop("android-refreshed-approval-frame.txt", recovered, original)
         }
     }
 
@@ -324,13 +325,14 @@ class NativeApprovalDeliveryTest {
         assertTrue(store().delivery(pending)!!.frameBytes().isEmpty()); unchanged()
     }
 
-    private fun writeInterop(name: String, saved: NativeApprovalAttempt) {
+    private fun writeInterop(name: String, saved: NativeApprovalAttempt, prior: NativeApprovalAttempt? = null) {
         val root = File(System.getProperty("user.dir"), "build/test-interop").apply { mkdirs() }
-        File(root, name).writeText(listOf(
+        File(root, name).writeText((listOf(
             "offer=" + EnrollmentWire.encodeOffer(offer).hex(), "claim=" + EnrollmentWire.encodeClaimForSignature(claim).hex(),
             "snapshot=" + GuardWire.encodeRequestSnapshot(snapshot).hex(), "approval=" + pending.exactBytes.hex(), "frame=" + saved.frameBytes().hex(),
             // Ephemeral JVM TEST key only, under ignored build/. Never a phone/Keystore/production key.
-            "testDeviceSigningPkcs8=" + deviceSigning.private.encoded.hex()).joinToString("\n"))
+            "testDeviceSigningPkcs8=" + deviceSigning.private.encoded.hex()) +
+            if (prior == null) emptyList() else listOf("priorFrame=" + prior.frameBytes().hex())).joinToString("\n"))
     }
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
     private class TestClock(var time: Long) : Clock() {
