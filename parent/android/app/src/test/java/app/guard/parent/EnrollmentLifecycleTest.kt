@@ -259,6 +259,24 @@ class EnrollmentLifecycleTest {
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun `query-only polling stays sparse and repeated failures have a bounded backoff`() = runTest {
+        val ready = ready(); store.saveCapability(ready.offer, ByteArray(32) { 3 })
+        signed(store.load(ready.offer)!!); store.abandon(ready.offer)
+        val stopped = store.load(ready.offer)!!
+        var calls = 0
+        val polling = launch {
+            awaitEnrollment(inspect = { stopped to null }, exchange = { calls++; throw EnrollmentExchangeUnavailable() },
+                display = { _, _, _ -> }, now = { start + testScheduler.currentTime })
+        }
+        runCurrent(); assertEquals(1, calls)
+        for ((index, pause) in listOf(10000L, 10000L, 10000L, 16000L, 30000L, 30000L).withIndex()) {
+            advanceTimeBy(pause - 1); runCurrent(); assertEquals(index + 1, calls)
+            advanceTimeBy(1); runCurrent(); assertEquals(index + 2, calls)
+        }
+        polling.cancelAndJoin()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun `polling never signs and only observes queryable or terminal durable states`() = runTest {
         val ready = ready()
         var calls = 0

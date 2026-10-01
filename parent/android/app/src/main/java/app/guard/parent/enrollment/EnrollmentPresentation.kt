@@ -61,8 +61,10 @@ internal suspend fun awaitEnrollment(
         val (after, verified) = inspect()
         currentCoroutineContext().ensureActive()
         display(after, verified, failures != 0)
-        if (!enrollmentStage(after, verified, now()).canSynchronize) return
-        // One outstanding exchange; 2s normal polling, 2/4/8/16/30s after consecutive network failures.
-        delay(if (failures == 0) 2000 else minOf(2000L shl (failures - 1), 30000))
+        val stage = enrollmentStage(after, verified, now())
+        if (!stage.canSynchronize) return
+        // One logical exchange; older query-only attempts use 10s instead of continuous 2s setup traffic.
+        val normalDelay = if (stage == EnrollmentStage.QUERY_ONLY) 10000L else 2000L
+        delay(if (failures == 0) normalDelay else maxOf(normalDelay, minOf(2000L shl (failures - 1), 30000)))
     }
 }
