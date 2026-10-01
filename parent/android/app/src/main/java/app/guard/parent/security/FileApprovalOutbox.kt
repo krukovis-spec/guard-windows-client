@@ -1,6 +1,7 @@
 package app.guard.parent.security
 
 import app.guard.parent.protocol.GuardWire
+import app.guard.parent.protocol.NativeApprovalAttempt
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -14,11 +15,26 @@ import java.nio.file.StandardCopyOption
 class FileApprovalOutbox(private val directory: File) : ApprovalOutbox {
     // ponytail: one process-wide lock; use an OS file lock if the app ever gains multiple processes.
     private companion object { val storageLock = Any() }
-    private data class State(val next: Long = 1, val pending: PendingSignedEnvelope? = null)
+    private data class State(val next: Long = 1, val pending: PendingSignedEnvelope? = null, val delivery: NativeApprovalAttempt? = null)
     init { check(directory.isDirectory || directory.mkdirs()) { "approval storage unavailable" } }
 
     override fun load(keyId: String): PendingSignedEnvelope? = synchronized(storageLock) { read(keyId).pending }
     override fun nextSequence(keyId: String): Long = synchronized(storageLock) { read(keyId).next }
+
+    internal fun delivery(pending: PendingSignedEnvelope): NativeApprovalAttempt? = synchronized(storageLock) {
+        val state = read(pending.keyId)
+        require(state.pending?.exactBytes?.contentEquals(pending.exactBytes) == true) { "pending approval changed" }
+        state.delivery
+    }
+
+    internal fun saveDelivery(pending: PendingSignedEnvelope, expected: NativeApprovalAttempt?, next: NativeApprovalAttempt,
+        beforeCommit: () -> Unit): Unit = synchronized(storageLock) {
+        val state = read(pending.keyId)
+        require(state.pending?.exactBytes?.contentEquals(pending.exactBytes) == true) { "pending approval changed" }
+        require(if (expected == null) state.delivery == null else state.delivery?.encode()?.contentEquals(expected.encode()) == true) { "delivery changed" }
+        next.requirePending(pending)
+        write(pending.keyId, state.copy(delivery = next), beforeCommit)
+    }
 
     override fun save(envelope: PendingSignedEnvelope, beforeCommit: () -> Unit): Unit = synchronized(storageLock) {
         val state = read(envelope.keyId)
@@ -43,31 +59,39 @@ class FileApprovalOutbox(private val directory: File) : ApprovalOutbox {
     private fun read(keyId: String): State {
         val path = file(keyId)
         if (!path.exists()) return State()
-        require(path.length() in 48..(65536 + 48)) { "approval storage size" }
+        require(path.length() in 48..(2 * 65536 + 52)) { "approval storage size" }
         val all = path.readBytes()
         val body = all.copyOfRange(0, all.size - 32)
         // Corruption detection, not an authentication boundary; Android's app sandbox owns this directory.
         require(java.security.MessageDigest.isEqual(GuardWire.sha256(body), all.copyOfRange(body.size, all.size))) { "approval storage corrupt" }
         return DataInputStream(ByteArrayInputStream(body)).use { input ->
-            require(input.readInt() == 0x474f4231) { "approval storage version" }
+            val version = input.readInt(); require(version == 0x474f4231 || version == 0x474f4232) { "approval storage version" }
             val next = input.readLong(); require(next > 0)
-            val size = input.readInt(); require(size in 0..65536 && input.available() == size)
+            val size = input.readInt(); require(size in 0..65536 && input.available() >= size)
             val bytes = ByteArray(size).also(input::readFully)
             val pending = if (size == 0) null else {
                 val decoded = GuardWire.decodeSignedApproval(bytes)
                 require(decoded.keyId == keyId && decoded.sequence == next) { "approval storage binding" }
                 PendingSignedEnvelope(keyId, next, bytes)
             }
-            State(next, pending)
+            val delivery = if (version == 0x474f4232) {
+                val length = input.readInt(); require(length in 0..65536 && input.available() == length)
+                if (length == 0) null else NativeApprovalAttempt.decode(ByteArray(length).also(input::readFully))
+                    .also { it.requirePending(requireNotNull(pending)) }
+            } else null
+            require(input.available() == 0)
+            State(next, pending, delivery)
         }
     }
 
     private fun write(keyId: String, state: State, beforeCommit: () -> Unit = {}) {
         val bytes = ByteArrayOutputStream().apply {
             DataOutputStream(this).apply {
-                writeInt(0x474f4231); writeLong(state.next)
+                writeInt(0x474f4232); writeLong(state.next)
                 val pending = state.pending?.exactBytes ?: ByteArray(0)
                 writeInt(pending.size); write(pending)
+                val delivery = state.delivery?.encode() ?: ByteArray(0)
+                writeInt(delivery.size); write(delivery)
             }
         }.toByteArray()
         val target = file(keyId)

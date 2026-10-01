@@ -3,6 +3,7 @@ package app.guard.parent.enrollment
 import android.content.Context
 import app.guard.parent.BuildConfig
 import app.guard.parent.approval.NativeRequestInbox
+import app.guard.parent.approval.NativeApprovalDelivery
 import app.guard.parent.approval.ApprovalChoice
 import app.guard.parent.approval.ApprovalSigningOperation
 import app.guard.parent.approval.VerifiedNativeRequest
@@ -42,7 +43,8 @@ class EnrollmentSigningOperation internal constructor(private val store: Pending
 class AndroidEnrollmentCeremony(context: Context) {
     private val store = PendingEnrollmentStore(File(context.noBackupFilesDir, "enrollment"))
     private val nativeProfiles = NativeRelayProfileStore(File(context.noBackupFilesDir, "native-transport"))
-    private val approvals = StopAndWaitApprovals(FileApprovalOutbox(File(context.noBackupFilesDir, "approvals")))
+    private val approvalStore = FileApprovalOutbox(File(context.noBackupFilesDir, "approvals"))
+    private val approvals = StopAndWaitApprovals(approvalStore)
     fun listPending() = store.list()
 
     fun prepare(transcript: EnrollmentTranscript): PendingEnrollment {
@@ -146,6 +148,17 @@ class AndroidEnrollmentCeremony(context: Context) {
     internal fun pendingApproval(offer: EnrollmentOffer): PendingSignedEnvelope? {
         val state = nativeProfileOwner(offer)
         return approvals.getPending(requireNotNull(state.claim).approvalKeyId)
+    }
+
+    /** Reuses the saved signature; no new biometric operation or caller-supplied destination. */
+    internal fun openApprovalDelivery(offer: EnrollmentOffer): NativeApprovalDelivery {
+        val state = nativeProfileOwner(offer)
+        val claim = requireNotNull(state.claim)
+        val pending = requireNotNull(approvals.getPending(claim.approvalKeyId)) { "pending approval required" }
+        val profile = requireNotNull(nativeProfiles.open(offer, claim, AndroidRelayEncryptionKey.openExisting(state.encryptionAlias)))
+        try {
+            return NativeApprovalDelivery(offer, claim, pending, approvalStore, profile, { nativeProfileOwner(offer); Unit })
+        } catch (error: Exception) { profile.close(); throw error }
     }
 
     private fun nativeProfileOwner(offer: EnrollmentOffer): PendingEnrollment {

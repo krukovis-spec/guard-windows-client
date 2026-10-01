@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — Android durable reserved approval publication
+
+- Connected confirmed ceremony + pending UI to a bounded foreground publisher: persist reservation input, reserve shared device cursor, persist HPKE/GRF1, send exact bytes. Existing outbox owns both records (GOB2, GOB1 read/migrate); CAS blocks stale senders, failures preserve signed GRAP. One outer-lease renewal only after exact known error; no new biometric/signature/sequence or ack. Russian status distinguishes saved/server-stored from device Applied.
+- 78 JVM/debug+instrumentation APK/lint 0 errors/13 prior warnings, fresh Release/29 v2/45 legacy and Kotlin→.NET encrypted approval interop PASS. Real JCA/HPKE/temp-file/controlled HTTP cover lost replies/reload/lease expiry/headers/bounds/clock/cancellation/timeout/competing ciphertext/commit failure/corruption. Initial guard test accidentally called byte-response helper `error` rather than throwing; fixed explicitly and rerun. Self-review added a final time check after slow validation; no new dependencies or cloud/host/VM/phone actions. Hardware biometry/lifecycle/power loss/actual Windows effect unverified.
+- PROJECT_ONLY via wiki-memory/project-memory: updated existing capsule/plan/protocol/Android README. Ponytail reuses original outbox/atomic move, canonical codecs/JCA/HPKE/platform HTTPS; no second queue or transport framework. Service journal unchanged (no external auth/endpoint change); production still `477f18f`. Next receipt consumption + Windows production approval runtime; M1 remains unresolved, M4 and Codex-style M7 not accepted.
+
 ## 2026-10-01 — coordinated native approval publication cursor
 
 - Added exact four-field approval-only `/frames/reserve`, native SQLite active-recipient uniqueness and atomic publication state. Lease max60s, immutable retry metadata/token hash, committed head+1, abandoned expiry without cursor consumption, bounded history. New kind-2 frames require exact live lease and ack=0; admin/other kinds cannot steal it. Existing exact-byte published retries survive lease expiry/ack. Signing sequences/intents/authority remain untouched; server status is never a device receipt.

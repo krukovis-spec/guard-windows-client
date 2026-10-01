@@ -96,6 +96,49 @@ internal static class InteropExchange
         Console.WriteLine("PASS Android approval signature and exact request binding verified by .NET.");
     }
 
+    // Test-only cross-runtime exchange, not a production trust importer. The recipient is the fixed public fixture key.
+    public static void VerifyAndroidApprovalFrame(string path)
+    {
+        var values = File.ReadAllLines(path).Select(x => x.Split('=', 2)).ToDictionary(x => x[0], x => x[1]);
+        Require(values.Count == 5);
+        var offer = RelayCanonicalEncoding.DecodeEnrollmentOffer(Hex(values["offer"]));
+        var claim = RelayCanonicalEncoding.DecodeEnrollmentClaimForSignature(Hex(values["claim"]));
+        var snapshot = RelayCanonicalEncoding.DecodeRequestSnapshot(Hex(values["snapshot"]));
+        var frame = RelayCanonicalEncoding.DecodeRelayFrame(Hex(values["frame"]));
+        Require(offer.GetEncryptionKeyCopy().SequenceEqual(Hex(RecipientPublic)) &&
+            claim.GetOfferHashCopy().SequenceEqual(RelayCanonicalEncoding.ComputeEnrollmentOfferHash(offer)));
+        Require(frame.Kind == RelayFrameKind.Approval && frame.MailboxId == offer.MailboxId &&
+            frame.RecipientKeyId == offer.EncryptionKeyId && frame.Cursor == 7 && frame.AckCursor == 0 &&
+            frame.CreatedAtUtc == Now && frame.ExpiresAtUtc == Now.AddDays(1));
+        var aad = RelayCanonicalEncoding.EncodeRelayFrameAssociatedData(frame);
+        var info = Encoding.ASCII.GetBytes("guard-relay-approval-hpke-v1").Concat(aad).ToArray();
+        var plaintext = RelayCryptography.Decrypt(Hex(RecipientPrivate), Hex(RecipientPublic),
+            frame.GetEncapsulatedKeyCopy(), frame.GetCiphertextCopy(), aad, info);
+        Require(plaintext.SequenceEqual(Hex(values["approval"])));
+        var approval = RelayCanonicalEncoding.DecodeApprovalEnvelope(plaintext);
+        using var parent = ECDsa.Create();
+        parent.ImportSubjectPublicKeyInfo(claim.GetApprovalKeyCopy(), out var consumed);
+        Require(consumed == claim.GetApprovalKeyCopy().Length && parent.VerifyHash(
+            RelayCanonicalEncoding.ComputeApprovalHash(approval), approval.GetSignatureP1363Copy()));
+        Require(approval.KeyId == claim.ApprovalKeyId && approval.Sequence == 1 && approval.DeviceId == offer.DeviceId &&
+            approval.DeviceEpoch == offer.DeviceEpoch && approval.AuthorityEpoch == offer.AuthorityEpoch &&
+            approval.DeviceId == snapshot.DeviceId && approval.DeviceEpoch == snapshot.DeviceEpoch && approval.AuthorityEpoch == snapshot.AuthorityEpoch &&
+            approval.RequestId == snapshot.RequestId && approval.RequestRevision == snapshot.RequestRevision &&
+            approval.PolicyRevision == snapshot.PolicyRevision && approval.TargetKind == snapshot.TargetKind &&
+            approval.CanonicalTargetIdentity == snapshot.CanonicalTargetIdentity &&
+            approval.GetRequestSnapshotHashCopy().SequenceEqual(RelayCanonicalEncoding.ComputeRequestSnapshotHash(snapshot)) &&
+            approval.GetDecisionChallengeCopy().SequenceEqual(snapshot.GetDecisionChallengeCopy()));
+        // A different message kind/domain cannot decrypt the same ciphertext.
+        try
+        {
+            RelayCryptography.Decrypt(Hex(RecipientPrivate), Hex(RecipientPublic), frame.GetEncapsulatedKeyCopy(),
+                frame.GetCiphertextCopy(), aad, Encoding.ASCII.GetBytes("guard-relay-request-hpke-v1").Concat(aad).ToArray());
+            throw new InvalidOperationException("Wrong approval domain accepted.");
+        }
+        catch (CryptographicException) { }
+        Console.WriteLine("PASS Android reserved GRF1 decrypts in .NET; exact GRAP, signature, enrollment and request binding verified.");
+    }
+
     private static byte[] Seal(RelayFrameKind kind, byte[] plaintext, long cursor)
     {
         RelayFrame Frame(byte[] enc, byte[] cipher) => new(kind, "mailbox-alpha-0001", "recipient-key-0001", "frame-alpha-00000" + cursor,

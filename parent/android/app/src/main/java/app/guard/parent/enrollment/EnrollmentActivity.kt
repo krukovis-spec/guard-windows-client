@@ -280,7 +280,7 @@ class EnrollmentActivity : FragmentActivity() {
         }
         if (pending != null) { renderPendingApproval(offer, pending); return@work }
         content.removeAllViews(); device(offer); requestDetails(request.snapshot)
-        label(R.string.approval_local_only)
+        label(R.string.approval_delivery_scope)
         val choices = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL; isSaveEnabled = false }
         val options = listOf(ApprovalDecision.ALLOW_ALWAYS to R.string.approval_always,
             ApprovalDecision.ALLOW_TEMPORARY to R.string.approval_temporary,
@@ -317,7 +317,7 @@ class EnrollmentActivity : FragmentActivity() {
             }
             val choice = ApprovalChoice(decision, count)
             content.removeAllViews(); device(offer); requestDetails(request.snapshot)
-            text(decisionText(choice), 22f); label(R.string.approval_local_only)
+            text(decisionText(choice), 22f); label(R.string.approval_delivery_scope)
             button(R.string.approval_sign) { authenticateApproval(offer, request, choice) }
             button(R.string.native_inbox_refresh) { showRequests(offer) }
         }
@@ -339,8 +339,14 @@ class EnrollmentActivity : FragmentActivity() {
             text(getString(R.string.native_inbox_request_id, approval.requestId, approval.requestRevision))
             text(decisionText(ApprovalChoice(approval.decision, approval.minutes)), 20f)
             text(getString(R.string.approval_deadline, DateFormat.getDateTimeInstance().format(Date(approval.expiryUnixMillis))))
-            label(R.string.approval_local_only)
+            label(R.string.approval_delivery_scope)
             label(R.string.approval_pending_wait)
+            button(R.string.approval_send) {
+                work(R.string.approval_sending, success = R.string.approval_published, failure = R.string.approval_delivery_failed) {
+                    withContext(Dispatchers.IO) { ceremony.openApprovalDelivery(offer).use { it.publish() } }
+                    renderPendingApproval(offer, withContext(Dispatchers.IO) { ceremony.pendingApproval(offer) })
+                }
+            }
         }
         button(R.string.native_profile_back) { showOffer(offer) }
     }

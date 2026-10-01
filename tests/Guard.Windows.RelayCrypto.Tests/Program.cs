@@ -29,6 +29,11 @@ namespace Guard.Windows.RelayCrypto.Tests
                 InteropExchange.VerifyAndroid(args[1]);
                 return 0;
             }
+            if (args.Length == 2 && args[0] == "--verify-android-approval-frame")
+            {
+                InteropExchange.VerifyAndroidApprovalFrame(args[1]);
+                return 0;
+            }
             var tests = new List<(string Name, Action Run)>
             {
                 ("enrollment canonical binding and hostile input", EnrollmentTranscriptChecks.Run),
