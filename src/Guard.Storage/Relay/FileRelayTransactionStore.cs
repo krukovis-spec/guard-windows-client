@@ -230,11 +230,18 @@ namespace Guard.Storage.Relay
             }
         }
 
-        public async Task<bool> TryCommitAsync(
+        public Task<bool> TryCommitAsync(
             long expectedVersion,
             RelayTransactionState nextState,
             CancellationToken cancellationToken)
+            => TryCommitGuardedAsync(expectedVersion, nextState, () => true, cancellationToken);
+
+        // Trusted local predicate under the relay CAS lock, rechecked after temp-file
+        // flush immediately before publication. It must not reenter either store.
+        public async Task<bool> TryCommitGuardedAsync(long expectedVersion, RelayTransactionState nextState,
+            Func<bool> canPublish, CancellationToken cancellationToken)
         {
+            ArgumentNullException.ThrowIfNull(canPublish);
             if (expectedVersion < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(expectedVersion));
@@ -260,7 +267,7 @@ namespace Guard.Storage.Relay
                 ThrowIfDisposed();
                 var current = await LoadCoreAsync(cancellationToken)
                     .ConfigureAwait(false);
-                if (current.State.Version != expectedVersion)
+                if (current.State.Version != expectedVersion || !canPublish())
                 {
                     return false;
                 }
@@ -269,8 +276,7 @@ namespace Guard.Storage.Relay
                 var envelope = CreateEnvelope(
                     nextState,
                     current.StateCommitment);
-                await ReplaceStateFileAsync(envelope, cancellationToken)
-                    .ConfigureAwait(false);
+                if (!await ReplaceStateFileAsync(envelope, canPublish, cancellationToken).ConfigureAwait(false)) return false;
                 var persisted = await VerifyPublishedStateAsync(
                     nextState,
                     current.StateCommitment).ConfigureAwait(false);
@@ -671,8 +677,9 @@ namespace Guard.Storage.Relay
             }
         }
 
-        private async Task ReplaceStateFileAsync(
+        private async Task<bool> ReplaceStateFileAsync(
             byte[] envelope,
+            Func<bool> canPublish,
             CancellationToken cancellationToken)
         {
             var temporaryPath = CreateTemporaryPath();
@@ -683,11 +690,14 @@ namespace Guard.Storage.Relay
                     envelope,
                     cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!canPublish()) return false;
+                cancellationToken.ThrowIfCancellationRequested();
                 File.Replace(
                     temporaryPath,
                     _stateFilePath,
                     _backupFilePath,
                     ignoreMetadataErrors: false);
+                return true;
             }
             finally
             {

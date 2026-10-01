@@ -166,6 +166,28 @@ namespace Guard.Storage
             }
         }
 
+        // Trusted local operation only; does not write the owner record. Hold this
+        // lock through a dependent relay commit so owner state cannot change between
+        // verification and publication. Lock order: owner -> relay; never reenter
+        // this store or perform HTTP inside the callback.
+        public async Task<bool> TryWithCurrentStateAsync(long expectedVersion,
+            Func<DeviceSecurityState, CancellationToken, Task<bool>> operation, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(operation);
+            ArgumentOutOfRangeException.ThrowIfNegative(expectedVersion);
+            ThrowIfDisposed();
+            await _processLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                ThrowIfDisposed();
+                var current = await LoadCoreAsync(cancellationToken).ConfigureAwait(false);
+                if (current.State.Version != expectedVersion) return false;
+                cancellationToken.ThrowIfCancellationRequested();
+                return await operation(current.State, cancellationToken).ConfigureAwait(false);
+            }
+            finally { _processLock.Release(); }
+        }
+
         public Task<bool> TryCommitAsync(
             long expectedVersion,
             DeviceSecurityState nextState,
@@ -627,6 +649,7 @@ namespace Guard.Storage
                 await WriteTemporaryFileAsync(temporaryPath, envelope, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!canPublish()) return false;
+                cancellationToken.ThrowIfCancellationRequested();
                 File.Replace(temporaryPath, _stateFilePath, _backupFilePath, ignoreMetadataErrors: false);
                 return true;
             }
