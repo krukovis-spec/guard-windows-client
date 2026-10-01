@@ -16,8 +16,9 @@ namespace Guard.Windows.Ipc.Tests
 {
     internal static class Program
     {
-        private static int Main()
+        private static int Main(string[] args)
         {
+            if (args.Length != 0) return InstalledServiceChecks.Run(args);
             var tests = new List<(string Name, Action Run)>
             {
                 ("builds protected least-privilege pipe descriptors", BuildsLeastPrivilegeDescriptors),

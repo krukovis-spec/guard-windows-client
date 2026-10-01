@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-01 — prepared pinned-VM SYSTEM service smoke test; UAC cancelled
+
+- Added lab-only self-contained publisher and manifest-verified guest installer/probe. Host orchestrator pins VM ID, BIOS UUID, disk root/size, Secure Boot/vTPM; checks current guest is Guard-free, snapshots current state before any guest writes, uses existing DPAPI guest credential without echo/re-save, and restores/boot-verifies its own checkpoint in finally. No forced VM/host shutdown, no host Guard/policy changes. Existing known clean snapshot is never removed. Guard directories are checked through accessible parents so denied child access is not treated as absence.
+- Opt-in `Guard.Windows.Ipc.Tests --installed-service-lab inspect|reject-bootstrap` uses actual production setup client/inspection with machine/admin guard. Plans to reject one-shot SCM flag, verify real SYSTEM reply/ProgramData ACL/public descriptor, compare exact identity after normal restart; no mocks in live mode and no Protected acceptance. Default safe suite does not enter it. Service path update uses CIM to avoid PS5.1 native quote loss. No new NuGet application dependency or product enforcement change.
+- Evidence: 439-file/164835088-byte lab package and SHA256 manifest published; source/host guards PASS; negative live-mode-on-host refuses before IPC; fresh complete Release/29 v2/45 legacy PASS. RID-only lock additions from publish were removed by normal restore; no dependency versions changed. UAC launch terminated with Windows cancellation (exec 3394), before returning a helper PID; zero service-bootstrap reports. Therefore actual VM install/restart/recovery and WPF UI are NOT RUN. Asked availability for a fresh UAC; no repeated prompt was launched. Temporary package is disposable/rebuildable and removed after this attempt.
+- PROJECT_ONLY: saved repeatable route in `scripts/lab/service-bootstrap.md`, capsule and canonical M3. Next: rerun only when Ivan can approve UAC; otherwise independent provisioning/recovery work. No new proof for M1, QR permission, real phone or family readiness.
+
 ## 2026-10-01 — Windows setup inspection and public device export
 
 - Added real `Guard.Setup` WPF executable with administrator manifest, defensive runtime privilege check, Russian status/readiness, cancellation, exact public descriptor export and full SHA256. Reuses authenticated IPC; no installer, service start, policy/account changes or network credential use. Origin from trusted service is displayed, never used to send admin credentials. Operator independently pins origin/hash.
