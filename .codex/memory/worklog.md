@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-01 — actual relay update with existing restricted access
+
+- Published existing verified source `95bb8ca` to only `guard-relay`, using existing CurrentUser DPAPI token after checking user-only ACL. No new dependency, deployment wrapper, credential, permission, route, namespace or VoicePaste change. Ponytail reused the existing deployment and test path.
+- 57 Worker tests, typecheck, dry-run and production audit (0) PASS. Upload activated version `55fd57ef-52b6-4669-8a47-6987ff289641` at 100% (deployment `20a567df-1a92-49c0-8e98-c8b02289a2f8`). CLI exit 1 was the already-known post-upload account-wide subdomain denial. A new process verified token active, exact deployment/version/message and unchanged namespace; no repeated deploy or scope expansion.
+- Eight external HTTPS checks PASS: root/OPTIONS, missing and invalid mailbox auth, unauthenticated initial issuance, disabled bootstrap with/without forged internal headers, unconfigured BFF; no-store/no permissive CORS. Invalid auth used one synthetic `guard-deploy-smoke-20261001` DO to exercise SQL initialization, with no credentials/messages issued. Existing-data migration/authenticated exchange/phone/VM not accepted. No host system actions or renewed UAC.
+- WIKI_CANDIDATE: updated existing connection registry and project capsule/canonical M2/Worker README; bootstrap/session/RP/PWA/operator provisioning remain open. Previous version is incident evidence, not blind rollback: it predates auth fixes and code rollback does not restore DO data. One local inspection used a doubled relative directory and was rerun correctly before deployment; all verification commands completed.
+
 ## 2026-10-01 — prepared pinned-VM SYSTEM service smoke test; UAC cancelled
 
 - Added lab-only self-contained publisher and manifest-verified guest installer/probe. Host orchestrator pins VM ID, BIOS UUID, disk root/size, Secure Boot/vTPM; checks current guest is Guard-free, snapshots current state before any guest writes, uses existing DPAPI guest credential without echo/re-save, and restores/boot-verifies its own checkpoint in finally. No forced VM/host shutdown, no host Guard/policy changes. Existing known clean snapshot is never removed. Guard directories are checked through accessible parents so denied child access is not treated as absence.
