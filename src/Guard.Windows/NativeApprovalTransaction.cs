@@ -11,15 +11,39 @@ using Guard.Windows.Cryptography;
 namespace Guard.Windows;
 
 /// <summary>
-/// Untrusted GRF1 to one complete successor aggregate, without I/O or policy effects.
-/// The service must hold its authority boundary, supply its durable request snapshot,
+/// Native request publication and untrusted GRF1 approval to complete successor aggregates, without I/O or policy effects.
+/// The service must hold its authority boundary, originate the request snapshot locally,
 /// and CAS this successor before publishing the outbox or acknowledging the input.
 /// Preparing a result is not a commit, application, or fresh attestation check.
 /// </summary>
 public static class NativeApprovalTransaction
 {
+    public static RelayTransactionState PrepareRequest(DeviceSecurityState owner, RelayTransactionState current,
+        RequestSnapshot snapshot, ECDiffieHellman decryptionKey, ECDsa signingKey, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        var session = RequireOwner(owner, current, decryptionKey, signingKey);
+        // Canonical copy is the single source for both the stored original and signed phone display.
+        var bytes = RelayCanonicalEncoding.EncodeRequestSnapshot(snapshot);
+        snapshot = RelayCanonicalEncoding.DecodeRequestSnapshot(bytes);
+        if (snapshot.DeviceId != current.DeviceId || snapshot.DeviceEpoch != current.DeviceEpoch ||
+            snapshot.AuthorityEpoch != current.AuthorityEpoch || snapshot.PolicyRevision != current.PolicyRevision ||
+            snapshot.CreatedAtUtc < session.Offer.CreatedAtUtc || now < snapshot.CreatedAtUtc || now >= snapshot.PendingExpiresAtUtc)
+            throw new InvalidDataException("Request authority, policy or time binding.");
+        RequireClockFloor(current, now);
+        var signed = new DeviceSignedRequestEnvelope(snapshot, session.Offer.SigningKeyId, new byte[64]);
+        byte[] signature;
+        lock (signingKey) signature = signingKey.SignHash(RelayCanonicalEncoding.ComputeDeviceRequestHash(signed),
+            DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        signed = new DeviceSignedRequestEnvelope(snapshot, session.Offer.SigningKeyId, signature);
+        var tracked = new RelayTrackedRequest(snapshot.RequestId, snapshot.RequestRevision,
+            RelayCanonicalEncoding.ComputeRequestSnapshotHash(snapshot), snapshot.GetDecisionChallengeCopy(), encodedSnapshot: bytes);
+        return current.WithPublishedRequest(tracked, Seal(current, session.Offer, session.Candidate!, RelayFrameKind.Request,
+            RelayCanonicalEncoding.EncodeDeviceRequestEnvelope(signed), now, snapshot.PendingExpiresAtUtc));
+    }
+
     public static RelayTransactionState Prepare(DeviceSecurityState owner, RelayTransactionState current,
-        RequestSnapshot snapshot, byte[] encodedFrame, ECDiffieHellman decryptionKey, ECDsa signingKey, DateTimeOffset now)
+        byte[] encodedFrame, ECDiffieHellman decryptionKey, ECDsa signingKey, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(current);
         var session = RequireOwner(owner, current, decryptionKey, signingKey);
@@ -57,10 +81,13 @@ public static class NativeApprovalTransaction
             DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
             throw new InvalidDataException("Approval signature.");
 
+        var tracked = current.TrackedRequests.SingleOrDefault(r => r.RequestId == approval.RequestId &&
+            r.RequestRevision == approval.RequestRevision && Equal(r.GetSnapshotHashCopy(), approval.GetRequestSnapshotHashCopy()));
+        if (tracked == null || tracked.GetEncodedSnapshotCopy().Length == 0)
+            throw new InvalidDataException("Original durable request snapshot required; legacy metadata cannot authorize.");
+        var snapshot = RelayCanonicalEncoding.DecodeRequestSnapshot(tracked.GetEncodedSnapshotCopy());
         var snapshotHash = RelayCanonicalEncoding.ComputeRequestSnapshotHash(snapshot);
-        var tracked = current.TrackedRequests.SingleOrDefault(r => r.RequestId == snapshot.RequestId &&
-            r.RequestRevision == snapshot.RequestRevision && Equal(r.GetSnapshotHashCopy(), snapshotHash));
-        if (tracked == null || !Equal(tracked.GetDecisionChallengeCopy(), snapshot.GetDecisionChallengeCopy()) ||
+        if (!Equal(tracked.GetSnapshotHashCopy(), snapshotHash) || !Equal(tracked.GetDecisionChallengeCopy(), snapshot.GetDecisionChallengeCopy()) ||
             snapshot.DeviceId != current.DeviceId || snapshot.DeviceEpoch != current.DeviceEpoch ||
             snapshot.AuthorityEpoch != current.AuthorityEpoch || approval.RequestId != snapshot.RequestId ||
             approval.RequestRevision != snapshot.RequestRevision || !Equal(approval.GetRequestSnapshotHashCopy(), snapshotHash) ||
@@ -70,10 +97,7 @@ public static class NativeApprovalTransaction
             approval.IssuedAtUtc < offer.CreatedAtUtc || now < approval.IssuedAtUtc ||
             approval.ExpiresAtUtc > snapshot.PendingExpiresAtUtc)
             throw new InvalidDataException("Approval request binding or time.");
-        // The stored response time is a local rollback floor, not a hardware-backed trusted clock.
-        foreach (var saved in current.SignedReceipts)
-            if (now < RelayCanonicalEncoding.DecodeDeviceReceiptEnvelope(saved.GetSignedReceiptCopy()).Receipt.ProcessedAtUtc)
-                throw new InvalidDataException("Approval clock rollback.");
+        RequireClockFloor(current, now);
         var nextSequence = current.TryGetReplayFloor(current.AuthorityEpoch, approval.KeyId, out var floor)
             ? checked(floor.HighestAcceptedSequence + 1) : 1;
         if (approval.Sequence != nextSequence || current.SignedReceipts.Any(r => r.CommandId == approval.CommandId))
@@ -123,7 +147,7 @@ public static class NativeApprovalTransaction
         var signedBytes = RelayCanonicalEncoding.EncodeDeviceReceiptEnvelope(signed);
         var record = new RelaySignedReceiptRecord(current.DeviceId, current.DeviceEpoch, approval.CommandId, approval.RequestId,
             approval.RequestRevision, current.AuthorityEpoch, approval.KeyId, approval.Sequence, status, hash, signedBytes);
-        var outbox = SealReceipt(current, offer, claim, signedBytes, now);
+        var outbox = Seal(current, offer, claim, RelayFrameKind.Receipt, signedBytes, now, now.AddDays(1));
         return current.WithCommittedApproval(new RelayApprovalTransaction(frame.Cursor, snapshot.RequestId, snapshot.RequestRevision,
             snapshotHash, disposition, new RelayReplayFloor(current.AuthorityEpoch, approval.KeyId, approval.Sequence, approval.CommandId, hash),
             policy, intent, record, outbox));
@@ -154,18 +178,27 @@ public static class NativeApprovalTransaction
         return session;
     }
 
-    private static RelayEncryptedOutboxItem SealReceipt(RelayTransactionState state, EnrollmentOffer offer, EnrollmentKeyClaim claim,
-        byte[] signedReceipt, DateTimeOffset now)
+    private static RelayEncryptedOutboxItem Seal(RelayTransactionState state, EnrollmentOffer offer, EnrollmentKeyClaim claim,
+        RelayFrameKind kind, byte[] signedPayload, DateTimeOffset now, DateTimeOffset expires)
     {
         state.RecipientOutboundCursors.TryGetValue(claim.EncryptionKeyId, out var head);
         var cursor = checked(head + 1); var id = Guid.NewGuid().ToString("N");
-        RelayFrame Frame(byte[] enc, byte[] cipher) => new(RelayFrameKind.Receipt, offer.MailboxId, claim.EncryptionKeyId,
-            id, cursor, 0, now, now.AddDays(1), enc, cipher); // Inbound ack is a separate post-commit operation, not this recipient's cursor.
+        RelayFrame Frame(byte[] enc, byte[] cipher) => new(kind, offer.MailboxId, claim.EncryptionKeyId,
+            id, cursor, 0, now, expires, enc, cipher); // Inbound ack is a separate post-commit operation, not this recipient's cursor.
         var aad = RelayCanonicalEncoding.EncodeRelayFrameAssociatedData(Frame(Array.Empty<byte>(), Array.Empty<byte>()));
-        var encrypted = RelayCryptography.Encrypt(claim.GetEncryptionKeyCopy(), signedReceipt, aad,
-            "guard-relay-receipt-hpke-v1"u8.ToArray().Concat(aad).ToArray(), out var encapsulated);
-        return new RelayEncryptedOutboxItem(id, checked(state.HighestOutboundCursor + 1), RelayFrameKind.Receipt,
+        var domain = kind == RelayFrameKind.Request ? "guard-relay-request-hpke-v1"u8.ToArray() : "guard-relay-receipt-hpke-v1"u8.ToArray();
+        var encrypted = RelayCryptography.Encrypt(claim.GetEncryptionKeyCopy(), signedPayload, aad,
+            domain.Concat(aad).ToArray(), out var encapsulated);
+        return new RelayEncryptedOutboxItem(id, checked(state.HighestOutboundCursor + 1), kind,
             claim.EncryptionKeyId, cursor, RelayCanonicalEncoding.EncodeRelayFrame(Frame(encapsulated, encrypted)));
+    }
+
+    private static void RequireClockFloor(RelayTransactionState current, DateTimeOffset now)
+    {
+        // Stored response time is a local rollback floor, not a hardware-backed trusted clock.
+        foreach (var saved in current.SignedReceipts)
+            if (now < RelayCanonicalEncoding.DecodeDeviceReceiptEnvelope(saved.GetSignedReceiptCopy()).Receipt.ProcessedAtUtc)
+                throw new InvalidDataException("Relay clock rollback.");
     }
 
     private static bool Equal(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right) => CryptographicOperations.FixedTimeEquals(left, right);

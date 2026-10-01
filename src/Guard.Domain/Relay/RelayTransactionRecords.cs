@@ -29,6 +29,7 @@ namespace Guard.Domain.Relay
         private readonly byte[] _snapshotHash;
         private readonly byte[] _decisionChallenge;
         private readonly byte[] _approvalHash;
+        private readonly byte[] _encodedSnapshot;
 
         public RelayTrackedRequest(
             string requestId,
@@ -37,7 +38,8 @@ namespace Guard.Domain.Relay
             byte[] decisionChallenge,
             RelayRequestResolution resolution = RelayRequestResolution.Pending,
             string? resolvedCommandId = null,
-            byte[]? approvalHash = null)
+            byte[]? approvalHash = null,
+            byte[]? encodedSnapshot = null)
         {
             RequireToken(requestId, nameof(requestId));
             if (requestRevision <= 0)
@@ -73,6 +75,20 @@ namespace Guard.Domain.Relay
             _snapshotHash = Copy(snapshotHash);
             _decisionChallenge = Copy(decisionChallenge);
             _approvalHash = approvalHash == null ? Array.Empty<byte>() : Copy(approvalHash);
+            if (encodedSnapshot != null && (encodedSnapshot.Length == 0 || encodedSnapshot.Length > RelayProtocol.MaximumFrameBytes))
+                throw new ArgumentException("The stored request snapshot is empty or oversized.", nameof(encodedSnapshot));
+            _encodedSnapshot = encodedSnapshot == null ? Array.Empty<byte>() : Copy(encodedSnapshot);
+            if (_encodedSnapshot.Length != 0)
+            {
+                using (var sha = SHA256.Create())
+                {
+                    var hash = sha.ComputeHash(_encodedSnapshot);
+                    var difference = 0;
+                    for (var i = 0; i < hash.Length; i++) difference |= hash[i] ^ _snapshotHash[i];
+                    if (difference != 0)
+                        throw new ArgumentException("The stored request snapshot does not match its hash.", nameof(encodedSnapshot));
+                }
+            }
         }
 
         public string RequestId { get; }
@@ -84,6 +100,9 @@ namespace Guard.Domain.Relay
         public string? ResolvedCommandId { get; }
 
         public bool IsPending => Resolution == RelayRequestResolution.Pending;
+
+        // Empty only for legacy metadata-only history; never sufficient for native approval.
+        public byte[] GetEncodedSnapshotCopy() => Copy(_encodedSnapshot);
 
         public byte[] GetSnapshotHashCopy()
         {
@@ -122,7 +141,8 @@ namespace Guard.Domain.Relay
                 _decisionChallenge,
                 resolution,
                 commandId,
-                approvalHash);
+                approvalHash,
+                _encodedSnapshot.Length == 0 ? null : _encodedSnapshot);
         }
 
         private static void RequireChallenge(byte[]? value, string parameterName)

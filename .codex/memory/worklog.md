@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — durable original request and native encrypted publication
+
+- Stored exact canonical request bytes with the existing tracked request/outbox, retained by resolution and acknowledgment. Schema 3 reads V2 without resetting history or inventing missing snapshots; V1 safety unchanged. Native approval no longer accepts a caller-supplied snapshot. `PrepareRequest` signs/seals the same original for the phone; no new store, dependency, grant or service activation.
+- Fresh Release, 29 v2 harnesses/45 legacy and production .NET verification of the existing Android-generated frame PASS. Added real temp encrypted file reopen before delivery/approval, immutable/hash/size/legacy/malformed checks, exact request retry, ack-erasure rejection and populated V2→V3 history migration. Self-review traced all preparation/record/store callers and commitment handling. Android/Worker suites unchanged, not rerun; no host-policy/VM/phone/cloud action.
+- PROJECT_ONLY via wiki-memory/project-memory: capsule/plan/protocol updated; no service-connection change. Ponytail reused codecs, HPKE and atomic aggregate. Next service authority/profile/time commit boundary + trusted observations, duplicate/invalid delivery handling, transport and verified terminal reconciliation; M1 and M7 remain open.
+
 ## 2026-10-01 — native Windows approval transaction preparation
 
 - Added actual GRF1/HPKE→native owner/signature/exact snapshot checks→complete relay successor→signed/encrypted receipt. Reuses the existing aggregate, HPKE/codec and file CAS; no new package, second writer or policy adapter. Allowed stays pending until verified effect; next sequence cannot bypass an interim response. Nonpermissive terminal outcomes preserve policy. Original QR expiry is not owner expiry.

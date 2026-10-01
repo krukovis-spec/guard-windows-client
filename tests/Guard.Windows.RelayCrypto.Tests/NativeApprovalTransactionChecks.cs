@@ -19,13 +19,20 @@ internal static class NativeApprovalTransactionChecks
     public static void Run()
     {
         using var f = new Fixture();
+        f.CheckPublished(f.Published);
+        Check(f.Initial.TrackedRequests.Count == 0 && f.Initial.Outbox.Count == 0, "preparation has no side effects");
+        Reject(() => f.Publish(f.Snapshot, f.Published), "duplicate request publication");
+        Reject(() => f.Publish(f.Snapshot, now: f.Snapshot.PendingExpiresAtUtc), "expired request publication");
+        Reject(() => f.Publish(f.Snapshot, now: f.Snapshot.CreatedAtUtc.AddSeconds(-1)), "future request publication");
+        Reject(() => f.Publish(f.Snapshot, owner: new DeviceSecurityState(f.Owner.DeviceId, 0, 0, 0)), "unprovisioned publication");
         foreach (var decision in new[] { Decision.AllowAlways, Decision.AllowTemporary, Decision.AllowDailyQuota, Decision.Deny })
         {
             var approval = f.Approval(decision);
             var next = f.Prepare(f.Seal(approval));
             var receipt = f.OpenReceipt(next);
             Check(next.Version == f.Current.Version + 1 && next.CommittedInboundCursor == 1 &&
-                next.ReplayFloors.Single().HighestAcceptedSequence == 1 && next.SignedReceipts.Count == 1, "atomic markers");
+                next.ReplayFloors.Single().HighestAcceptedSequence == 1 && next.SignedReceipts.Count == 1 &&
+                next.TrackedRequests.Single().GetEncodedSnapshotCopy().SequenceEqual(RelayCanonicalEncoding.EncodeRequestSnapshot(f.Snapshot)), "atomic markers and original preserved");
             Check(receipt.KeyId == approval.KeyId && receipt.CommandId == approval.CommandId && receipt.RequestId == approval.RequestId &&
                 receipt.RequestRevision == approval.RequestRevision && receipt.GetApprovalHashCopy().SequenceEqual(RelayCanonicalEncoding.ComputeApprovalHash(approval)), "exact receipt");
             if (decision == Decision.Deny)
@@ -55,6 +62,7 @@ internal static class NativeApprovalTransactionChecks
                 "another-command-001", RelayTargetKind.Application, "another.exe", Decision.AllowAlways, 0, new byte[32]) },
             recipientOutboundCursors: f.Current.RecipientOutboundCursors);
         var rejected = f.Prepare(f.Seal(f.Approval()), stalePolicy);
+        Reject(() => f.Publish(f.Snapshot, stalePolicy), "stale policy request publication");
         Check(f.OpenReceipt(rejected).Status == CommandReceiptStatus.Rejected && rejected.PolicyLedger.Count == 1 &&
             rejected.PolicyLedger[0].CommandId == "another-command-001" && rejected.PolicyRevision == 1 &&
             rejected.TrackedRequests.Single().IsPending, "stale policy cannot grant");
@@ -86,12 +94,32 @@ internal static class NativeApprovalTransactionChecks
             trustedParentKeys: f.Owner.TrustedParentKeys)), "legacy owner is not native authority");
         using var wrongDecrypt = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         using var wrongSign = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        Reject(() => NativeApprovalTransaction.Prepare(f.Owner, f.Current, f.Snapshot, good, wrongDecrypt, f.DeviceSigning, f.Now), "device decryption key");
-        Reject(() => NativeApprovalTransaction.Prepare(f.Owner, f.Current, f.Snapshot, good, f.DeviceEncryption, wrongSign, f.Now), "device signing key");
+        Reject(() => NativeApprovalTransaction.Prepare(f.Owner, f.Current, good, wrongDecrypt, f.DeviceSigning, f.Now), "device decryption key");
+        Reject(() => NativeApprovalTransaction.Prepare(f.Owner, f.Current, good, f.DeviceEncryption, wrongSign, f.Now), "device signing key");
+        var original = f.Current.TrackedRequests.Single();
+        var legacy = new RelayTrackedRequest(original.RequestId, original.RequestRevision, original.GetSnapshotHashCopy(), original.GetDecisionChallengeCopy());
+        Reject(() => f.Prepare(good, ReplaceRequest(f.Current, legacy)), "legacy metadata alone cannot authorize");
+        var stored = original.GetEncodedSnapshotCopy();
+        var immutable = new RelayTrackedRequest(original.RequestId, original.RequestRevision, original.GetSnapshotHashCopy(), original.GetDecisionChallengeCopy(), encodedSnapshot: stored);
+        Reject(() => f.Prepare(good, ReplaceRequest(f.Current, new RelayTrackedRequest(original.RequestId, original.RequestRevision,
+            original.GetSnapshotHashCopy(), new byte[32], encodedSnapshot: stored))), "tracked challenge differs from original");
+        stored[0] ^= 1;
+        immutable.GetEncodedSnapshotCopy()[0] ^= 1;
+        Check(immutable.GetEncodedSnapshotCopy().SequenceEqual(original.GetEncodedSnapshotCopy()), "defensive snapshot copies");
+        Reject(() => new RelayTrackedRequest(original.RequestId, 1, original.GetSnapshotHashCopy(), original.GetDecisionChallengeCopy(), encodedSnapshot: stored), "snapshot hash mismatch");
+        Reject(() => new RelayTrackedRequest(original.RequestId, 1, original.GetSnapshotHashCopy(), original.GetDecisionChallengeCopy(), encodedSnapshot: Array.Empty<byte>()), "empty snapshot");
+        Reject(() => new RelayTrackedRequest(original.RequestId, 1, original.GetSnapshotHashCopy(), original.GetDecisionChallengeCopy(), encodedSnapshot: new byte[RelayProtocol.MaximumFrameBytes + 1]), "oversized snapshot");
         var otherSnapshot = new RequestSnapshot(f.Snapshot.DeviceId, 1, 1, f.Snapshot.DeviceEventId, f.Snapshot.RequestId, 1,
             RelayTargetKind.Application, "different.exe", Array.Empty<RelayEvidenceField>(), "test", f.Now.AddMinutes(-2),
             f.Now.AddMinutes(10), f.Snapshot.GetDecisionChallengeCopy(), 0);
-        Reject(() => NativeApprovalTransaction.Prepare(f.Owner, f.Current, otherSnapshot, good, f.DeviceEncryption, f.DeviceSigning, f.Now), "durable snapshot mismatch");
+        var otherBytes = RelayCanonicalEncoding.EncodeRequestSnapshot(otherSnapshot);
+        var otherHash = SHA256.HashData(otherBytes);
+        var otherTracked = new RelayTrackedRequest(original.RequestId, 1, otherHash, original.GetDecisionChallengeCopy(), encodedSnapshot: otherBytes);
+        Reject(() => f.Prepare(good, ReplaceRequest(f.Current, otherTracked)), "different durable snapshot hash");
+        Reject(() => f.Prepare(f.Seal(f.Approval(snapshotHash: otherHash)), ReplaceRequest(f.Current, otherTracked)), "different durable snapshot target");
+        var malformedHash = SHA256.HashData(stored);
+        var malformed = new RelayTrackedRequest(original.RequestId, 1, malformedHash, original.GetDecisionChallengeCopy(), encodedSnapshot: stored);
+        Reject(() => f.Prepare(f.Seal(f.Approval(snapshotHash: malformedHash)), ReplaceRequest(f.Current, malformed)), "noncanonical stored snapshot");
         var nextTime = f.Prepare(f.Seal(f.Approval(Decision.Deny)), now: f.Now.AddSeconds(2));
         Reject(() => f.Prepare(f.Seal(f.Approval(sequence: 2, command: "next-command-0001"), cursor: 2), nextTime), "stored receipt time floor");
         // Enrollment QR expiry is NOT expiry of an already confirmed owner.
@@ -101,6 +129,11 @@ internal static class NativeApprovalTransactionChecks
             CommandReceiptStatus.AcceptedPendingReconciliation, "confirmed owner survives QR expiry");
         PersistsAtomic(f);
     }
+
+    private static RelayTransactionState ReplaceRequest(RelayTransactionState state, RelayTrackedRequest request) => new(
+        state.DeviceId, state.Version, state.DeviceEpoch, state.AuthorityEpoch, state.CommittedInboundCursor,
+        state.HighestOutboundCursor, state.AcknowledgedOutboundCursor, state.PolicyRevision, state.ReplayFloors,
+        new[] { request }, state.PolicyLedger, state.ReconcileIntents, state.SignedReceipts, state.Outbox, state.RecipientOutboundCursors);
 
     private static void PersistsAtomic(Fixture f)
     {
@@ -115,13 +148,25 @@ internal static class NativeApprovalTransactionChecks
             {
                 store.InitializeAsync(f.Initial, CancellationToken.None).GetAwaiter().GetResult();
                 Check(store.TryCommitAsync(0, f.Published, CancellationToken.None).GetAwaiter().GetResult(), "publish commit");
+            }
+            using (var store = Open())
+            {
+                var persistedRequest = store.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+                f.CheckPublished(persistedRequest);
+                Check(persistedRequest.Outbox.Single().GetEncryptedFrameCopy().SequenceEqual(f.Published.Outbox.Single().GetEncryptedFrameCopy()), "restart retries exact encrypted request");
+                var legacy = new RelayTrackedRequest(f.Snapshot.RequestId, 1, RelayCanonicalEncoding.ComputeRequestSnapshotHash(f.Snapshot), f.Snapshot.GetDecisionChallengeCopy());
+                Reject(() => store.TryCommitAsync(1, ReplaceRequest(f.Current, legacy), CancellationToken.None).GetAwaiter().GetResult(), "ack cannot erase original snapshot");
                 Check(store.TryCommitAsync(1, f.Current, CancellationToken.None).GetAwaiter().GetResult(), "delivery commit");
+            }
+            using (var store = Open())
+            {
+                var current = store.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
                 var encoded = f.Seal(f.Approval());
-                var next = f.Prepare(encoded);
+                var next = f.Prepare(encoded, current);
                 using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
                 Reject(() => store.TryCommitAsync(f.Current.Version, next, cancelled.Token).GetAwaiter().GetResult(), "cancel before commit");
                 Check(store.LoadAsync(CancellationToken.None).GetAwaiter().GetResult().CommittedInboundCursor == 0, "cancellation unchanged");
-                var other = f.Prepare(encoded);
+                var other = f.Prepare(encoded, current);
                 Check(store.TryCommitAsync(f.Current.Version, next, CancellationToken.None).GetAwaiter().GetResult(), "approval commit");
                 Check(!store.TryCommitAsync(f.Current.Version, other, CancellationToken.None).GetAwaiter().GetResult(), "CAS loser");
                 exactReply = next.Outbox.Single().GetEncryptedFrameCopy();
@@ -164,10 +209,31 @@ internal static class NativeApprovalTransactionChecks
             Snapshot = new RequestSnapshot(Offer.DeviceId, 1, 1, "event-test-00001", "request-test-001", 1, RelayTargetKind.Application,
                 "sha256:" + new string('a', 64), Array.Empty<RelayEvidenceField>(), "test", Now.AddMinutes(-2), Now.AddMinutes(10), RandomNumberGenerator.GetBytes(32), 0);
             Initial = new RelayTransactionState(Offer.DeviceId, 0, 1, 1, 0, 0, 0, 0);
-            Published = Initial.WithPublishedRequest(new RelayTrackedRequest(Snapshot.RequestId, 1,
-                RelayCanonicalEncoding.ComputeRequestSnapshotHash(Snapshot), Snapshot.GetDecisionChallengeCopy()),
-                new RelayEncryptedOutboxItem("test-request-frame", 1, RelayFrameKind.Request, Claim.EncryptionKeyId, 1, new byte[] { 1 }));
+            Published = Publish(Snapshot);
             Current = Published.WithAcknowledgedOutboundCursor(1);
+        }
+        public RelayTransactionState Publish(RequestSnapshot snapshot, RelayTransactionState? state = null,
+            DateTimeOffset? now = null, DeviceSecurityState? owner = null) =>
+            NativeApprovalTransaction.PrepareRequest(owner ?? Owner, state ?? Initial, snapshot, DeviceEncryption, DeviceSigning, now ?? Now);
+        public void CheckPublished(RelayTransactionState state)
+        {
+            var tracked = state.TrackedRequests.Single(); var item = state.Outbox.Single();
+            var frame = RelayCanonicalEncoding.DecodeRelayFrame(item.GetEncryptedFrameCopy());
+            Check(frame.Kind == RelayFrameKind.Request && frame.MailboxId == Offer.MailboxId && frame.RecipientKeyId == Claim.EncryptionKeyId &&
+                frame.Cursor == 1 && frame.AckCursor == 0 && item.OutboundCursor == 1 && item.RecipientCursor == 1 &&
+                frame.CreatedAtUtc == Now && frame.ExpiresAtUtc == Snapshot.PendingExpiresAtUtc, "request transport");
+            var aad = RelayCanonicalEncoding.EncodeRelayFrameAssociatedData(frame); var key = _parentEncryption.ExportParameters(true);
+            byte[] plain;
+            try { plain = Cryptography.RelayCryptography.Decrypt(key.D!, Claim.GetEncryptionKeyCopy(), frame.GetEncapsulatedKeyCopy(), frame.GetCiphertextCopy(),
+                aad, "guard-relay-request-hpke-v1"u8.ToArray().Concat(aad).ToArray()); }
+            finally { CryptographicOperations.ZeroMemory(key.D!); }
+            var signed = RelayCanonicalEncoding.DecodeDeviceRequestEnvelope(plain);
+            Check(signed.DeviceKeyId == Offer.SigningKeyId && DeviceSigning.VerifyHash(RelayCanonicalEncoding.ComputeDeviceRequestHash(signed),
+                signed.GetSignatureP1363Copy(), DSASignatureFormat.IeeeP1363FixedFieldConcatenation), "published request signature");
+            Check(tracked.GetEncodedSnapshotCopy().SequenceEqual(RelayCanonicalEncoding.EncodeRequestSnapshot(Snapshot)) &&
+                tracked.GetEncodedSnapshotCopy().SequenceEqual(RelayCanonicalEncoding.EncodeRequestSnapshot(signed.Snapshot)) &&
+                tracked.IsPending && state.PolicyRevision == 0 && state.CommittedInboundCursor == 0 && state.ReplayFloors.Count == 0,
+                "stored original equals signed phone display without a grant");
         }
         public SignedApprovalEnvelope Approval(Decision decision = Decision.AllowTemporary, long sequence = 1, string command = "command-test-001",
             string? key = null, string? device = null, long deviceEpoch = 1, long authorityEpoch = 1, string? request = null, long revision = 1,
@@ -191,7 +257,7 @@ internal static class NativeApprovalTransactionChecks
             return RelayCanonicalEncoding.EncodeRelayFrame(Make(encapsulated, ciphertext));
         }
         public RelayTransactionState Prepare(byte[] frame, RelayTransactionState? state = null, DateTimeOffset? now = null, DeviceSecurityState? owner = null) =>
-            NativeApprovalTransaction.Prepare(owner ?? Owner, state ?? Current, Snapshot, frame, DeviceEncryption, DeviceSigning, now ?? Now);
+            NativeApprovalTransaction.Prepare(owner ?? Owner, state ?? Current, frame, DeviceEncryption, DeviceSigning, now ?? Now);
         public CommandReceipt OpenReceipt(RelayTransactionState state)
         {
             var item = state.Outbox.Last(); var frame = RelayCanonicalEncoding.DecodeRelayFrame(item.GetEncryptedFrameCopy());

@@ -142,11 +142,12 @@ internal static class InteropExchange
         var owner = new DeviceSecurityState(offer.DeviceId, 3, 0, 0, trustedParentKeys: new[] { anchor }, enrollment: enrollment);
         var current = new RelayTransactionState(offer.DeviceId, 8, 1, 1, 6, 1, 1, snapshot.PolicyRevision,
             trackedRequests: new[] { new RelayTrackedRequest(snapshot.RequestId, snapshot.RequestRevision,
-                RelayCanonicalEncoding.ComputeRequestSnapshotHash(snapshot), snapshot.GetDecisionChallengeCopy()) },
+                RelayCanonicalEncoding.ComputeRequestSnapshotHash(snapshot), snapshot.GetDecisionChallengeCopy(),
+                encodedSnapshot: RelayCanonicalEncoding.EncodeRequestSnapshot(snapshot)) },
             policyLedger: new[] { new RelayPolicyLedgerEntry(snapshot.PolicyRevision, "other-request-001", "other-command-001",
                 RelayTargetKind.Application, "other.exe", ParentDecisionKind.AllowAlways, 0, new byte[32]) },
             recipientOutboundCursors: new[] { new KeyValuePair<string, long>(claim.EncryptionKeyId, 1) });
-        var next = NativeApprovalTransaction.Prepare(owner, current, snapshot, Hex(values["frame"]), deviceEncryption, deviceSigning, Now);
+        var next = NativeApprovalTransaction.Prepare(owner, current, Hex(values["frame"]), deviceEncryption, deviceSigning, Now);
         var response = RelayCanonicalEncoding.DecodeDeviceReceiptEnvelope(next.SignedReceipts.Single().GetSignedReceiptCopy());
         Require(next.CommittedInboundCursor == 7 && next.ReplayFloors.Single().HighestAcceptedSequence == 1 &&
             next.PolicyRevision == snapshot.PolicyRevision + 1 && next.PolicyLedger.Last().CanonicalTargetIdentity == snapshot.CanonicalTargetIdentity &&

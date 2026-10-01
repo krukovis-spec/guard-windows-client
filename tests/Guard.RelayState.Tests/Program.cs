@@ -887,6 +887,38 @@ namespace Guard.RelayState.Tests
                 throw new InvalidOperationException("Legacy history silently reset recipient floors.");
             }
             catch (TargetInvocationException exception) when (exception.InnerException is StateStoreCorruptionException) { }
+
+            // V2 has durable recipient heads but only request metadata. Preserve all
+            // history; absence of an original snapshot must never invent authority.
+            var published = initial.WithPublishedRequest(PendingRequest(), Outbox(1, RelayFrameKind.Request, "frame-legacy-0001"));
+            var requestAck = published.WithAcknowledgedOutboundCursor(1);
+            var denied = requestAck.WithCommittedApproval(DeniedTransaction(requestAck, 1)).WithAcknowledgedOutboundCursor(2);
+            var history = denied.WithPublishedRequest(PendingRequest("request-relay-0002", 13), Outbox(3, RelayFrameKind.Request, "frame-legacy-0003"));
+            var v3 = (byte[])encode.Invoke(null, new object[] { history })!;
+            int TextBytes(string value) => 4 + System.Text.Encoding.UTF8.GetByteCount(value);
+            var offset = recipientCountOffset + 4 + history.RecipientOutboundCursors.Sum(r => TextBytes(r.Key) + 8) + 4 +
+                history.ReplayFloors.Sum(f => 8 + TextBytes(f.ApprovalKeyId) + 8 + TextBytes(f.CommandId) + 32) + 4;
+            var legacyBytes = new List<byte>(v3.Take(offset));
+            foreach (var request in history.TrackedRequests)
+            {
+                var count = TextBytes(request.RequestId) + 8 + 32 + 32 + 4 + 1 +
+                    (request.IsPending ? 0 : TextBytes(request.ResolvedCommandId!) + 32);
+                legacyBytes.AddRange(v3.Skip(offset).Take(count));
+                offset += count;
+                Assert(v3[offset++] == 0, "Expected absent V3 snapshot flag in legacy fixture.");
+            }
+            legacyBytes.AddRange(v3.Skip(offset));
+            legacyBytes[11] = 2;
+            var restoredV2 = (RelayTransactionState)decode.Invoke(null, new object[] { legacyBytes.ToArray() })!;
+            Assert(((byte[])encode.Invoke(null, new object[] { restoredV2 })!).SequenceEqual(v3) &&
+                restoredV2.TrackedRequests.All(r => r.GetEncodedSnapshotCopy().Length == 0) &&
+                restoredV2.TrackedRequests[0].Resolution == RelayRequestResolution.Denied && restoredV2.TrackedRequests[1].IsPending &&
+                restoredV2.ReplayFloors.Single().HighestAcceptedSequence == 1 && restoredV2.CommittedInboundCursor == 1 &&
+                restoredV2.RecipientOutboundCursors.Single().Value == 3 && restoredV2.Outbox.Count == 1,
+                "V2 migration lost history or fabricated an original snapshot.");
+            var upgradedAck = restoredV2.WithAcknowledgedOutboundCursor(3);
+            Assert(((RelayTransactionState)decode.Invoke(null, new object[] { encode.Invoke(null, new object[] { upgradedAck })! })!)
+                .TrackedRequests.All(r => r.GetEncodedSnapshotCopy().Length == 0), "V3 update silently authorized legacy requests.");
         }
 
         private static void PersistsAlreadyResolvedReceipt()
