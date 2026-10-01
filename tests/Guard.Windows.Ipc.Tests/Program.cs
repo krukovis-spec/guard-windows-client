@@ -16,8 +16,9 @@ namespace Guard.Windows.Ipc.Tests
 {
     internal static class Program
     {
-        private static int Main()
+        private static int Main(string[] args)
         {
+            if (args.Length != 0) return InstalledServiceChecks.Run(args);
             var tests = new List<(string Name, Action Run)>
             {
                 ("builds protected least-privilege pipe descriptors", BuildsLeastPrivilegeDescriptors),
@@ -33,7 +34,8 @@ namespace Guard.Windows.Ipc.Tests
                 ("queries a real identification-only pipe token before reading", SetupClientChecks.ReadIdentificationToken),
                 ("binds setup to the exact running SYSTEM service", SetupClientChecks.RejectWrongServiceBinding),
                 ("bounds and correlates setup responses over a real test pipe", SetupClientChecks.CheckResponses),
-                ("keeps native setup capability, comparison and uncertain results separate", NativeSetupSessionChecks.Run)
+                ("keeps native setup capability, comparison and uncertain results separate", NativeSetupSessionChecks.Run),
+                ("keeps setup inspection observational and exports exact validated public bytes", SetupInspectionChecks.Run)
             };
             var failures = 0;
             foreach (var test in tests)

@@ -24,7 +24,7 @@ namespace Guard.Windows.Cryptography
             Encoding.ASCII.GetBytes("Guard.v2.DPAPI.CurrentUser\0");
 
         private readonly byte[] _entropy;
-        private readonly bool _allowNonLocalSystemForTests;
+        private readonly bool _requireLocalSystem;
 
         public LocalSystemDpapiDataProtector()
             : this(DefaultPurpose, allowNonLocalSystemForTests: false)
@@ -39,10 +39,19 @@ namespace Guard.Windows.Cryptography
         internal LocalSystemDpapiDataProtector(
             string purpose,
             bool allowNonLocalSystemForTests)
+            : this(CreatePurposeEntropy(purpose), !allowNonLocalSystemForTests)
         {
-            _entropy = CreatePurposeEntropy(purpose);
-            _allowNonLocalSystemForTests = allowNonLocalSystemForTests;
         }
+
+        private LocalSystemDpapiDataProtector(byte[] entropy, bool requireLocalSystem)
+        {
+            _entropy = entropy;
+            _requireLocalSystem = requireLocalSystem;
+        }
+
+        // Fixed, separate purpose for the OFF-PC operator's saved issuance intent. No service-state access.
+        public static IStateDataProtector ForOperatorProvisioning() => new LocalSystemDpapiDataProtector(
+            CreatePurposeEntropy("guard-v2-operator-provisioning-v1"), requireLocalSystem: false);
 
         public byte[] Protect(byte[] plaintext)
         {
@@ -108,7 +117,7 @@ namespace Guard.Windows.Cryptography
                     "Windows DPAPI is available only on Windows.");
             }
 
-            if (!_allowNonLocalSystemForTests && !IsEffectiveIdentityLocalSystem())
+            if (_requireLocalSystem && !IsEffectiveIdentityLocalSystem())
             {
                 throw new UnauthorizedAccessException(
                     "Authoritative state DPAPI requires the effective LocalSystem identity.");

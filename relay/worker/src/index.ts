@@ -93,6 +93,8 @@ export class DeviceMailbox implements DurableObject {
       for (const [column, type] of Object.entries(columns))
         if (!existing.has(column)) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     }
+    // Retain initial intents through their original expiry, including after token revocation.
+    this.sql.exec("CREATE TABLE IF NOT EXISTS initial_device_tokens(hash BLOB PRIMARY KEY,recipient_key_id TEXT NOT NULL,expires_at INTEGER NOT NULL)");
     this.sql.exec(`CREATE TABLE IF NOT EXISTS parent_registration_tickets(ticket_hash BLOB PRIMARY KEY,mailbox_id TEXT NOT NULL,recipient_key_id TEXT NOT NULL,username TEXT NOT NULL,display_name TEXT NOT NULL,expires_at INTEGER NOT NULL,UNIQUE(mailbox_id,username));
       CREATE TABLE IF NOT EXISTS publication_cursors(recipient_key_id TEXT PRIMARY KEY,cursor INTEGER NOT NULL);
       INSERT INTO publication_cursors(recipient_key_id,cursor)
@@ -117,6 +119,7 @@ export class DeviceMailbox implements DurableObject {
       if (path === `${prefix}/poll` && request.method === "GET") return this.poll(request, auth);
       if (path === `${prefix}/ack` && request.method === "POST") return await this.ack(request, auth);
       if (path === `${prefix}/tokens` && request.method === "POST") return await this.provisionToken(request, auth);
+      if (path === `${prefix}/tokens/initial` && request.method === "POST") return await this.provisionToken(request, auth, true);
       if (path === `${prefix}/tokens` && request.method === "DELETE") return await this.revokeToken(request, auth);
       if (path === `${prefix}/locators/redeem` && request.method === "POST") return await this.redeemLocator(request, auth);
       if (path === `${prefix}/intents/reserve` && request.method === "POST") return await this.intent(request, auth, "reserve");
@@ -130,6 +133,7 @@ export class DeviceMailbox implements DurableObject {
     const now = Date.now();
     this.sql.exec("DELETE FROM frames WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM tokens WHERE expires_at <= ?", now);
+    this.sql.exec("DELETE FROM initial_device_tokens WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM idempotency WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM tombstones WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM intents WHERE expires_at <= ? AND status != 'pending'", now);
@@ -138,27 +142,52 @@ export class DeviceMailbox implements DurableObject {
     this.sql.exec("DELETE FROM parent_registration_tickets WHERE expires_at <= ?", now);
   }
   private async bootstrap(request: Request): Promise<Response> { const body = await readJsonObject(request); if (!validToken(body.accessToken)) return fail(400, "invalid_bootstrap"); const hash = await sha256(body.accessToken); const exists = [...this.sql.exec("SELECT 1 FROM tokens LIMIT 1")].length > 0; if (exists) return fail(409, "already_bootstrapped"); this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,?,?)", hash.buffer, "admin", Date.now() + 365 * 86400000); return json({ role: "admin" }, 201); }
-  private async provisionToken(request: Request, auth: Auth): Promise<Response> {
+  private async provisionToken(request: Request, auth: Auth, initialOnly = false): Promise<Response> {
     if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden");
     const body = await readJsonObject(request);
     const scope = tokenScope(body.role, body);
     if (!validToken(body.accessToken) || !scope || typeof body.expiresAt !== "number" ||
       !Number.isSafeInteger(body.expiresAt) || body.expiresAt <= Date.now()) throw new RelayHttpError(400, "invalid_token_provisioning");
+    if (initialOnly && (scope.role !== "device" || scope.publishRecipientKeyIds.length !== 0 ||
+      Object.keys(body).length !== 5 || Object.keys(body).some(name =>
+        !["accessToken", "role", "expiresAt", "recipientKeyId", "publishRecipientKeyIds"].includes(name))))
+      throw new RelayHttpError(400, "invalid_initial_device_token");
+    const expiresAt = body.expiresAt;
     const hash = await sha256(body.accessToken);
-    this.requireCurrentAuth(auth);
-    if (body.expiresAt <= Date.now()) throw new RelayHttpError(400, "invalid_token_provisioning");
-    if ([...this.sql.exec("SELECT 1 FROM enrollments WHERE token_hash=?", hash.buffer)].length)
-      throw new RelayHttpError(409, "enrollment_token_conflict");
-    const existing = [...this.sql.exec("SELECT 1 FROM tokens WHERE hash=?", hash.buffer)][0];
-    if (!existing && [...this.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n >= 256)
-      throw new RelayHttpError(429, "token_limit_reached");
-    this.sql.exec(`INSERT INTO tokens(hash,role,expires_at,recipient_key_id,publish_recipient_key_ids,approval_key_id,authority_epoch,view_recipient_key_ids)
-      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(hash) DO UPDATE SET role=excluded.role,expires_at=excluded.expires_at,
-      recipient_key_id=excluded.recipient_key_id,publish_recipient_key_ids=excluded.publish_recipient_key_ids,
-      approval_key_id=excluded.approval_key_id,authority_epoch=excluded.authority_epoch,view_recipient_key_ids=excluded.view_recipient_key_ids`,
-      hash.buffer, scope.role, body.expiresAt, scope.recipientKeyId, JSON.stringify(scope.publishRecipientKeyIds),
-      scope.approvalKeyId, scope.authorityEpoch, JSON.stringify(scope.viewRecipientKeyIds));
-    return json({ role: scope.role, expiresAt: body.expiresAt }, 201);
+    return this.state.storage.transactionSync(() => {
+      this.requireCurrentAuth(auth);
+      if (expiresAt <= Date.now()) throw new RelayHttpError(400, "invalid_token_provisioning");
+      if ([...this.sql.exec("SELECT 1 FROM enrollments WHERE token_hash=?", hash.buffer)].length)
+        throw new RelayHttpError(409, "enrollment_token_conflict");
+      const existing = [...this.sql.exec<{ expires_at: number }>("SELECT expires_at FROM tokens WHERE hash=?", hash.buffer)][0];
+      if (initialOnly) {
+        const initial = [...this.sql.exec<{ recipient_key_id: string; expires_at: number }>(
+          "SELECT recipient_key_id,expires_at FROM initial_device_tokens WHERE hash=?", hash.buffer)][0];
+        if (initial) {
+          const current = this.findAuth(hash);
+          if (initial.recipient_key_id !== scope.recipientKeyId || initial.expires_at !== expiresAt ||
+            !existing || existing.expires_at !== expiresAt || !current || current.role !== "device" ||
+            current.recipientKeyId !== scope.recipientKeyId || current.publishRecipientKeyIds.length !== 0 ||
+            current.approvalKeyId !== null || current.authorityEpoch !== null || current.viewRecipientKeyIds.length !== 0)
+            throw new RelayHttpError(409, "initial_device_token_conflict");
+          return json({ role: "device", expiresAt }, 201); // Exact retry is read-only, never an upsert.
+        }
+        if (existing) throw new RelayHttpError(409, "initial_device_token_conflict");
+        if ([...this.sql.exec<{ n: number }>("SELECT count(*) n FROM initial_device_tokens")][0]!.n >= 256)
+          throw new RelayHttpError(429, "initial_device_token_limit_reached");
+      }
+      if (!existing && [...this.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n >= 256)
+        throw new RelayHttpError(429, "token_limit_reached");
+      if (initialOnly) this.sql.exec("INSERT INTO initial_device_tokens(hash,recipient_key_id,expires_at) VALUES(?,?,?)",
+        hash.buffer, scope.recipientKeyId, expiresAt);
+      this.sql.exec(`INSERT INTO tokens(hash,role,expires_at,recipient_key_id,publish_recipient_key_ids,approval_key_id,authority_epoch,view_recipient_key_ids)
+        VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(hash) DO UPDATE SET role=excluded.role,expires_at=excluded.expires_at,
+        recipient_key_id=excluded.recipient_key_id,publish_recipient_key_ids=excluded.publish_recipient_key_ids,
+        approval_key_id=excluded.approval_key_id,authority_epoch=excluded.authority_epoch,view_recipient_key_ids=excluded.view_recipient_key_ids`,
+        hash.buffer, scope.role, expiresAt, scope.recipientKeyId, JSON.stringify(scope.publishRecipientKeyIds),
+        scope.approvalKeyId, scope.authorityEpoch, JSON.stringify(scope.viewRecipientKeyIds));
+      return json({ role: scope.role, expiresAt }, 201);
+    });
   }
   private async revokeToken(request: Request, auth: Auth): Promise<Response> { if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden"); const b = await readJsonObject(request); if (!validToken(b.accessToken)) throw new RelayHttpError(400, "invalid_token_revocation"); const hash = await sha256(b.accessToken); this.requireCurrentAuth(auth); this.sql.exec("DELETE FROM tokens WHERE hash=?", hash.buffer); return new Response(null, { status: 204, headers }); }
   private async redeemLocator(request: Request, auth: Auth): Promise<Response> {

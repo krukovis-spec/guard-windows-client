@@ -196,7 +196,6 @@ namespace Guard.Service
             new DeviceRelayConfigurationStore(_paths,
                 new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.Purpose), _dataBoundaryGuard)
             .ImportStagedAsync(EnrollmentDeploymentTrust.FromServiceAssembly(), this,
-                new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.InstallPurpose),
                 TimeProvider.System.GetUtcNow(), cancellationToken);
 
         public ValueTask DisposeAsync()

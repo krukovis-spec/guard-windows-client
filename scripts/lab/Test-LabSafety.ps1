@@ -1,11 +1,17 @@
 param([switch]$PolicySigning)
 $ErrorActionPreference = 'Stop'
 if ($PolicySigning -and $PSVersionTable.PSVersion.Major -lt 7) { throw 'Custom-content PKCS#7 self-test requires the installed PowerShell 7 runtime' }
-foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1', 'LabPolicySigning.ps1', 'MarkerProcess.ps1', 'Invoke-AppLockerLab.ps1')) {
+foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1', 'LabPolicySigning.ps1', 'MarkerProcess.ps1', 'Invoke-AppLockerLab.ps1', 'Build-ServiceLabPackage.ps1', 'Test-ServiceBootstrap.ps1', 'Invoke-ServiceBootstrapLab.ps1')) {
     $tokens = $null
     $parseErrors = $null
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
     if ($parseErrors.Count) { throw ('Parse failure: ' + $file) }
+}
+try {
+    & (Join-Path $PSScriptRoot 'Test-ServiceBootstrap.ps1') -ExpectedUuid ([guid]::Empty) -HostComputerName $env:COMPUTERNAME -PackageRoot 'not-used' -ManifestSha256 'not-used'
+    throw 'Service test host guard did not reject execution'
+} catch {
+    if ($_.Exception.Message -ne 'This probe can run only in the validated disposable Hyper-V guest.') { throw }
 }
 foreach ($probe in @('Get-GuestBaseline.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1')) {
     try {

@@ -103,7 +103,6 @@ internal sealed class DeviceRelayConfiguration
 internal sealed class DeviceRelayConfigurationStore(GuardDataPaths paths, IStateDataProtector protector, IServiceDataBoundaryGuard boundary)
 {
     internal const string Purpose = "guard-v2-device-relay-configuration-v1";
-    internal const string InstallPurpose = "guard-v2-device-relay-install-v1";
     internal const int MaximumPlaintextBytes = 4096;
     private readonly ProtectedServiceRecord _record = new(paths.DeviceRelayConfigurationFile, paths.DeviceRelayConfigurationPendingFile,
         protector, boundary, MaximumPlaintextBytes, 8192);
@@ -151,14 +150,14 @@ internal sealed class DeviceRelayConfigurationStore(GuardDataPaths paths, IState
     }
 
     // Only the explicit SCM startup mode calls this, before IPC, under the service writer lease.
-    // The SYSTEM installer stages DPAPI ciphertext with InstallPurpose, never a token in args/appsettings.
+    // The SYSTEM installer stages a device-key-encrypted GDI1 envelope, never a token in args/appsettings.
     internal async Task ImportStagedAsync(EnrollmentDeploymentTrust trust, ServiceAuthoritativeStateBoundary service,
-        IStateDataProtector handoffProtector, DateTimeOffset now, CancellationToken cancellationToken)
+        DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!service.IsAcquired) throw new InvalidOperationException("Profile import requires the service writer lease.");
         var handoff = new ProtectedServiceRecord(paths.DeviceRelayInstallFile, paths.DeviceRelayInstallPendingFile,
-            handoffProtector, boundary, MaximumPlaintextBytes, 8192);
+            new DeviceRelayProfileEnvelope(service.Identity.Encryption), boundary, MaximumPlaintextBytes, DeviceRelayProfileEnvelope.MaximumFileBytes);
         var plaintext = handoff.Read();
         try
         {

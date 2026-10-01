@@ -33,6 +33,118 @@ function buildFrame(cursor: number, id: string, kind = 1, recipient = parentReci
 }
 
 describe("mailbox authorization and signing intent", () => {
+  it("retries initial device provisioning without changing later rights or resurrecting revocation", async () => {
+    const mailbox = "mailbox-initial-retry-0001", prefix = `/v1/mailboxes/${mailbox}`;
+    const call = (path: string, body: unknown, token = adminToken, method = "POST") => request(path, {
+      method, headers: { ...bearer(token), "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    expect((await call("/v1/admin/bootstrap", { mailboxId: mailbox, accessToken: adminToken }, bootstrapToken)).status).toBe(201);
+    const initial = { accessToken: deviceToken, role: "device", recipientKeyId: deviceRecipient,
+      publishRecipientKeyIds: [], expiresAt: Date.now() + 600000 };
+    const create = (body: unknown = initial, token = adminToken) => call(prefix + "/tokens/initial", body, token);
+    const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox));
+    expect((await create()).status).toBe(201); // Simulate lost reply: repeat the identical durable intent.
+    await runInDurableObject(stub, (_instance, state) => { new DeviceMailbox(state, env); });
+    expect(await (await create()).json()).toEqual({ role: "device", expiresAt: initial.expiresAt });
+    expect((await create(initial, deviceToken)).status).toBe(403);
+    expect((await call(prefix + "/tokens/initial", initial, adminToken, "DELETE")).status).toBe(404);
+    for (const change of [{ role: "admin", recipientKeyId: undefined }, { role: "reader" },
+      { publishRecipientKeyIds: [parentRecipient] }, { publishRecipientKeyIds: undefined },
+      { accessToken: "short" }, { expiresAt: Date.now() - 1 }, { expiresAt: Number.MAX_SAFE_INTEGER + 1 }, { ignored: true }])
+      expect((await create({ ...initial, ...change })).status).toBe(400);
+    for (const change of [{ recipientKeyId: parentRecipient }, { expiresAt: initial.expiresAt + 1 }])
+      expect((await create({ ...initial, ...change })).status).toBe(409);
+    // Intentional later provisioning remains available, but a delayed INITIAL retry must not undo it.
+    const later = { ...initial, publishRecipientKeyIds: [parentRecipient] };
+    expect((await call(prefix + "/tokens", later)).status).toBe(201);
+    expect((await create()).status).toBe(409);
+    expect((await request(prefix + "/frames", { method: "POST", headers: bearer(deviceToken),
+      body: buildFrame(1, "frame-initial-retry-001", 1, parentRecipient, mailbox) })).status).toBe(201);
+    expect((await call(prefix + "/tokens", { accessToken: deviceToken }, adminToken, "DELETE")).status).toBe(204);
+    await runInDurableObject(stub, (_instance, state) => { new DeviceMailbox(state, env); });
+    expect((await create()).status).toBe(409);
+    expect((await create({ ...initial, expiresAt: initial.expiresAt + 60000 })).status).toBe(409);
+    expect((await request(prefix + `/poll?recipient=${deviceRecipient}`, { headers: bearer(deviceToken) })).status).toBe(401);
+    // The initial route cannot adopt even an identical credential created by the ordinary admin route.
+    const legacy = { ...initial, accessToken: "l".repeat(32) };
+    expect((await call(prefix + "/tokens", legacy)).status).toBe(201);
+    expect((await create(legacy)).status).toBe(409);
+    await runInDurableObject(stub, (_instance, state) => {
+      const rows = [...state.storage.sql.exec("SELECT recipient_key_id,expires_at FROM initial_device_tokens")];
+      expect(rows).toEqual([{ recipient_key_id: deviceRecipient, expires_at: initial.expiresAt }]);
+    });
+  });
+
+  it("serializes conflicting initial intents and commits their retry marker atomically", async () => {
+    const mailbox = "mailbox-initial-atomic-0001", prefix = `/v1/mailboxes/${mailbox}`;
+    const post = (path: string, body: unknown, token = adminToken) => request(path, {
+      method: "POST", headers: { ...bearer(token), "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    expect((await post("/v1/admin/bootstrap", { mailboxId: mailbox, accessToken: adminToken }, bootstrapToken)).status).toBe(201);
+    const initial = { accessToken: deviceToken, role: "device", recipientKeyId: deviceRecipient,
+      publishRecipientKeyIds: [], expiresAt: Date.now() + 600000 };
+    const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox));
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("CREATE TRIGGER fail_initial BEFORE INSERT ON tokens BEGIN SELECT RAISE(ABORT,'test-only-fault'); END");
+    });
+    expect((await post(prefix + "/tokens/initial", initial)).status).toBe(503);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM initial_device_tokens")][0]!.n).toBe(0);
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n).toBe(1);
+      state.storage.sql.exec("DROP TRIGGER fail_initial");
+    });
+    const competing = [initial, { ...initial, recipientKeyId: parentRecipient }];
+    const results = await Promise.all(competing.map(body => post(prefix + "/tokens/initial", body)));
+    expect(results.map(result => result.status).sort()).toEqual([201, 409]);
+    const winner = competing[results.findIndex(result => result.status === 201)]!;
+    expect((await post(prefix + "/tokens/initial", winner)).status).toBe(201);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec("SELECT recipient_key_id,expires_at FROM initial_device_tokens")])
+        .toEqual([{ recipient_key_id: winner.recipientKeyId, expires_at: initial.expiresAt }]);
+    });
+  });
+
+  it("bounds initial retry history without evicting live revocation markers", async () => {
+    const mailbox = "mailbox-initial-quota-0001", prefix = `/v1/mailboxes/${mailbox}`;
+    const post = (path: string, body: unknown, token = adminToken) => request(path, {
+      method: "POST", headers: { ...bearer(token), "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    expect((await post("/v1/admin/bootstrap", { mailboxId: mailbox, accessToken: adminToken }, bootstrapToken)).status).toBe(201);
+    const initial = { accessToken: deviceToken, role: "device", recipientKeyId: deviceRecipient,
+      publishRecipientKeyIds: [], expiresAt: Date.now() + 600000 };
+    const create = (body: unknown = initial) => post(prefix + "/tokens/initial", body);
+    expect((await create()).status).toBe(201);
+    const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox));
+    await runInDurableObject(stub, (_instance, state) => {
+      for (let i = 0; i < 255; i++) {
+        const hash = new Uint8Array(32); hash[0] = i;
+        state.storage.sql.exec("INSERT INTO initial_device_tokens(hash,recipient_key_id,expires_at) VALUES(?,?,?)",
+          hash.buffer, parentRecipient, initial.expiresAt);
+      }
+    });
+    expect((await create()).status).toBe(201); // Read-only duplicates do not consume quota.
+    const next = { ...initial, accessToken: "n".repeat(32) };
+    expect((await create(next)).status).toBe(429);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n).toBe(2);
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM initial_device_tokens")][0]!.n).toBe(256);
+      state.storage.sql.exec("UPDATE initial_device_tokens SET expires_at=0 WHERE recipient_key_id=?", parentRecipient);
+    });
+    expect((await create(next)).status).toBe(201); // Only expired markers are cleaned up.
+    expect((await create({ ...initial, accessToken: "e".repeat(32), expiresAt: Date.now() - 1 })).status).toBe(400);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM initial_device_tokens")][0]!.n).toBe(2);
+      for (let i = 0; i < 253; i++) {
+        const hash = new Uint8Array(32); hash[0] = i;
+        state.storage.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,'admin',?)", hash.buffer, initial.expiresAt);
+      }
+    });
+    expect((await create({ ...initial, accessToken: "q".repeat(32) })).status).toBe(429);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM initial_device_tokens")][0]!.n).toBe(2);
+    });
+  });
+
   it("commits only one concurrent initial mailbox administrator", async () => {
     const mailbox = "mailbox-bootstrap-race-0001";
     const responses = await Promise.all([adminToken, "z".repeat(32)].map(accessToken => request("/v1/admin/bootstrap", {
@@ -50,6 +162,7 @@ describe("mailbox authorization and signing intent", () => {
       ["frames", "POST", deviceToken, "UPDATE tokens SET publish_recipient_key_ids='[]' WHERE role='device'", 403],
       ["frames", "POST", deviceToken, "UPDATE tokens SET expires_at=0 WHERE role='device'", 401],
       ["tokens", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
+      ["tokens/initial", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
       ["tokens", "DELETE", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
       ["ack", "POST", deviceToken, "UPDATE tokens SET recipient_key_id='recipient-other-0001' WHERE role='device'", 403],
       ...["reserve", "finalize", "cancel"].map(operation => ["intents/" + operation, "POST", approvalToken,
@@ -69,7 +182,8 @@ describe("mailbox authorization and signing intent", () => {
           ...(role === "approval" ? { approvalKeyId: "approval-signing-0001", authorityEpoch: 1, viewRecipientKeyIds: [parentRecipient] } : {}),
         })).status).toBe(201);
       const payload = route === "frames" ? buildFrame(1, "frame-slow-scope-001", 1, parentRecipient, mailbox) : new TextEncoder().encode(JSON.stringify(
-        route === "tokens" ? (method === "DELETE" ? { accessToken: deviceToken } : {
+        route === "tokens/initial" ? { accessToken: "x".repeat(32), role: "device", recipientKeyId: deviceRecipient,
+          publishRecipientKeyIds: [], expiresAt: Date.now() + 600000 } : route === "tokens" ? (method === "DELETE" ? { accessToken: deviceToken } : {
           accessToken: "x".repeat(32), role: "reader", recipientKeyId: parentRecipient, publishRecipientKeyIds: [], expiresAt: Date.now() + 600000,
         }) : route === "ack" ? { recipientKeyId: deviceRecipient, cursor: 0 } : route === "locators/redeem" ? { locator: "A".repeat(43) } :
           { keyId: "approval-signing-0001", authorityEpoch: 1, intentId: "intent-slow-test-0001" }));
@@ -83,7 +197,7 @@ describe("mailbox authorization and signing intent", () => {
         }));
         await reading;
         state.storage.sql.exec(mutation);
-        const capture = () => ["tokens", "frames", "acknowledgements", "intents", "sequence_floors", "parent_locators"]
+        const capture = () => ["tokens", "initial_device_tokens", "frames", "acknowledgements", "intents", "sequence_floors", "parent_locators"]
           .map(table => [...state.storage.sql.exec(`SELECT * FROM ${table} ORDER BY rowid`)]);
         const before = capture();
         controller.enqueue(payload); controller.close();
@@ -172,7 +286,7 @@ describe("mailbox authorization and signing intent", () => {
     const oldFrame = buildFrame(21, "frame-alpha-00021", 1, parentRecipient, migrationMailbox);
     await runInDurableObject(stub, async (_instance, state) => {
       // Only the disposable local test DO: recreate the previous schema.
-      state.storage.sql.exec(`DROP TABLE tokens; DROP TABLE parent_locators; DROP TABLE tombstones; DROP TABLE publication_cursors;
+      state.storage.sql.exec(`DROP TABLE tokens; DROP TABLE initial_device_tokens; DROP TABLE parent_locators; DROP TABLE tombstones; DROP TABLE publication_cursors;
         CREATE TABLE tokens(hash BLOB PRIMARY KEY,role TEXT NOT NULL,expires_at INTEGER NOT NULL);
         CREATE TABLE parent_locators(locator_hash BLOB PRIMARY KEY,request_id_hash BLOB NOT NULL,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL);
         CREATE TABLE tombstones(frame_id TEXT PRIMARY KEY,expires_at INTEGER NOT NULL);`);

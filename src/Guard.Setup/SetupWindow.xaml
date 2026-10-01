@@ -1,0 +1,56 @@
+<Window x:Class="Guard.Setup.SetupWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Настройка Guard" Width="820" Height="740" MinWidth="420" MinHeight="360"
+    WindowStartupLocation="CenterScreen" FontFamily="Segoe UI" FontSize="16"
+    Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
+    Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
+    UseLayoutRounding="True" Language="ru-RU">
+    <Window.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="14,9" />
+            <Setter Property="Margin" Value="0,0,8,8" />
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" />
+        </Style>
+    </Window.Resources>
+    <Grid Margin="24">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock Text="Настройка компьютера" FontSize="26" FontWeight="SemiBold" />
+            <TextBlock Text="Проверка установки и подготовка подключения. Это окно не включает и не отключает блокировки." />
+        </StackPanel>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+                <Border BorderBrush="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}" BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,0,0,16">
+                    <TextBlock x:Name="Protection" Margin="0" FontWeight="SemiBold" />
+                </Border>
+                <TextBlock x:Name="Status" Text="Нажмите «Проверить установку». Guard прочитает состояние службы; системные настройки не изменятся."
+                    AutomationProperties.LiveSetting="Polite" />
+                <TextBlock x:Name="CheckedAt" />
+                <ItemsControl x:Name="Facts">
+                    <ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" /></DataTemplate></ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="Описание компьютера для подключения" FontSize="20" FontWeight="SemiBold" Margin="0,16,0,12" />
+                <TextBlock Text="В файл входят адрес сервера, идентификатор компьютера и открытые ключи — без паролей. На доверенном компьютере оператора нужно отдельно сверить адрес сервера и весь код SHA-256 с этим окном." />
+                <Button x:Name="Export" Content="Сохранить описание компьютера…" Click="Export_Click" IsEnabled="False" HorizontalAlignment="Left" />
+                <TextBlock x:Name="ExportStatus" AutomationProperties.LiveSetting="Polite" />
+                <Label x:Name="DigestLabel" Target="{Binding ElementName=Digest}" Content="Код файла SHA-256 (все 64 символа)" Padding="0,0,0,8" />
+                <TextBox x:Name="Digest" IsReadOnly="True" IsReadOnlyCaretVisible="True" TextWrapping="Wrap"
+                    FontFamily="Consolas" Padding="8" VerticalContentAlignment="Center"
+                    Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
+                    Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
+                    AutomationProperties.Name="Полный код SHA-256 сохранённого описания компьютера" />
+                <TextBlock Text="Подключение телефона через QR и включение защиты ещё не доступны в этом окне. Не используйте этот комплект для защиты семейного компьютера." Margin="0,16,0,16" />
+            </StackPanel>
+        </ScrollViewer>
+        <WrapPanel Grid.Row="2" Margin="0,16,0,0">
+            <Button x:Name="Refresh" Content="Проверить установку" Click="Refresh_Click" />
+            <Button x:Name="Cancel" Content="Отменить проверку" Click="Cancel_Click" IsEnabled="False" />
+            <Button Content="Закрыть" Click="Close_Click" />
+        </WrapPanel>
+    </Grid>
+</Window>
