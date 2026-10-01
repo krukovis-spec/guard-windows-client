@@ -59,10 +59,34 @@ public partial class SetupWindow : Window
         });
     }
 
+    private async void ExportActivation_Click(object sender, RoutedEventArgs e)
+    {
+        if (_operation != null || _inspection?.Status.IsProvisioned != true) return;
+        Digest.Clear(); ExportStatus.Text = "";
+        await RunAsync(async token =>
+        {
+            Status.Text = "Читаем подписанное подтверждение привязки…";
+            var confirmation = await SetupInspection.ReadActivationConfirmationAsync(token);
+            token.ThrowIfCancellationRequested();
+            if (_closed) return;
+            var dialog = new SaveFileDialog { Title = "Сохранить подтверждение привязки", FileName = "guard-native.guard-proof",
+                Filter = "Подтверждение Guard (*.guard-proof)|*.guard-proof", DefaultExt = ".guard-proof", AddExtension = true,
+                CheckPathExists = true, OverwritePrompt = false };
+            if (dialog.ShowDialog(this) != true) { Status.Text = "Сохранение отменено. Привязка не изменена."; return; }
+            token.ThrowIfCancellationRequested();
+            confirmation.SaveNew(dialog.FileName, DateTimeOffset.UtcNow);
+            Digest.Text = confirmation.Sha256;
+            ExportStatus.Text = "Подтверждение сохранено. Проверить его на доверенном компьютере оператора нужно до " +
+                confirmation.ExpiresAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss zzz") +
+                ". Если срок истёк, сохраните новое подтверждение, не выполняя привязку заново.";
+            Status.Text = "Файл не выдаёт доступ сам по себе. Активация обмена и защита ещё не подтверждены.";
+        });
+    }
+
     private async Task RunAsync(Func<CancellationToken, Task> action)
     {
         using var operation = new CancellationTokenSource();
-        _operation = operation; Refresh.IsEnabled = Export.IsEnabled = false; Cancel.IsEnabled = true;
+        _operation = operation; Refresh.IsEnabled = Export.IsEnabled = ExportActivation.IsEnabled = false; Cancel.IsEnabled = true;
         try { await action(operation.Token); }
         catch (Exception error)
         {
@@ -75,7 +99,8 @@ public partial class SetupWindow : Window
         finally
         {
             _operation = null;
-            if (!_closed) { Refresh.IsEnabled = true; Cancel.IsEnabled = false; Export.IsEnabled = _inspection?.CanExport == true; }
+            if (!_closed) { Refresh.IsEnabled = true; Cancel.IsEnabled = false; Export.IsEnabled = _inspection?.CanExport == true;
+                ExportActivation.IsEnabled = _inspection?.Status.IsProvisioned == true; }
         }
     }
 

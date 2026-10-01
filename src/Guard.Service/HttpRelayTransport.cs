@@ -279,18 +279,23 @@ namespace Guard.Service
             if (response.Content.Headers.ContentType?.MediaType != mediaType ||
                 response.Content.Headers.ContentEncoding.Count != 0 || response.Content.Headers.ContentLength > maximumBytes)
                 throw new InvalidDataException("Invalid relay response headers or size.");
-            await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
-            using var buffer = new MemoryStream();
-            var chunk = new byte[4096];
-            while (true)
+            try
             {
-                var count = await stream.ReadAsync(chunk.AsMemory(0,
-                    (int)Math.Min(chunk.Length, maximumBytes + 1 - buffer.Length)), deadline.Token).ConfigureAwait(false);
-                if (count == 0) break;
-                buffer.Write(chunk, 0, count);
-                if (buffer.Length > maximumBytes) throw new InvalidDataException("Relay response exceeds its limit.");
+                await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
+                using var buffer = new MemoryStream();
+                var chunk = new byte[4096];
+                while (true)
+                {
+                    var count = await stream.ReadAsync(chunk.AsMemory(0,
+                        (int)Math.Min(chunk.Length, maximumBytes + 1 - buffer.Length)), deadline.Token).ConfigureAwait(false);
+                    if (count == 0) break;
+                    buffer.Write(chunk, 0, count);
+                    if (buffer.Length > maximumBytes) throw new InvalidDataException("Relay response exceeds its limit.");
+                }
+                return (response.StatusCode, buffer.ToArray());
             }
-            return (response.StatusCode, buffer.ToArray());
+            catch (IOException)
+            { throw new HttpRequestException("Relay response body could not be read."); }
         }
 
         private void RequireFrameBinding(RelayFrame frame)

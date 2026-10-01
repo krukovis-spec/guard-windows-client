@@ -42,7 +42,7 @@ export default {
     if (url.pathname === "/v1/admin/bootstrap" && request.method === "POST") {
       const bootstrap = tokenFrom(request); if (!env.BOOTSTRAP_ADMIN_TOKEN || !bootstrap || !constantTimeEqual(await sha256(bootstrap), await sha256(env.BOOTSTRAP_ADMIN_TOKEN))) return fail(403, "bootstrap_forbidden");
       const body = await readJsonObject(request);
-      if (!validMailboxId(body.mailboxId) || !validToken(body.accessToken)) return fail(400, "invalid_bootstrap");
+      if (url.search || Object.keys(body).length !== 2 || !validMailboxId(body.mailboxId) || !validToken(body.accessToken)) return fail(400, "invalid_bootstrap");
       return await forward(env, body.mailboxId, new Request(request.url, { method: "POST", headers: request.headers, body: JSON.stringify(body) }), bootstrap, true);
     }
     if (isParentBffPath(url.pathname)) return forwardParentBff(request, env);
@@ -64,6 +64,13 @@ export class DeviceMailbox implements DurableObject {
   private readonly sql: SqlStorage;
   constructor(readonly state: DurableObjectState, readonly env: Env) { this.sql = state.storage.sql; state.blockConcurrencyWhile(async () => this.migrate()); }
   private migrate(): void {
+    this.state.storage.transactionSync(() => {
+      if ([...this.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mailbox_bootstrap'")].length) return;
+      const legacy = [...this.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tokens'")].length > 0;
+      this.sql.exec("CREATE TABLE mailbox_bootstrap(id INTEGER PRIMARY KEY CHECK(id=1),hash BLOB,expires_at INTEGER)");
+      // Never guess ownership of a pre-migration mailbox, even if all its tokens expired.
+      if (legacy) this.sql.exec("INSERT INTO mailbox_bootstrap(id) VALUES(1)");
+    });
     migrateEnrollment(this.sql);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS tokens(hash BLOB PRIMARY KEY, role TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS frames(frame_id TEXT PRIMARY KEY, recipient_key_id TEXT NOT NULL, kind INTEGER NOT NULL, cursor INTEGER NOT NULL, expires_at INTEGER NOT NULL, bytes BLOB NOT NULL, size INTEGER NOT NULL);
@@ -95,6 +102,7 @@ export class DeviceMailbox implements DurableObject {
     }
     // Retain initial intents through their original expiry, including after token revocation.
     this.sql.exec("CREATE TABLE IF NOT EXISTS initial_device_tokens(hash BLOB PRIMARY KEY,recipient_key_id TEXT NOT NULL,expires_at INTEGER NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS native_token_activations(device_hash BLOB PRIMARY KEY,approval_hash BLOB NOT NULL UNIQUE,intent_hash BLOB NOT NULL,expires_at INTEGER NOT NULL)");
     this.sql.exec(`CREATE TABLE IF NOT EXISTS parent_registration_tickets(ticket_hash BLOB PRIMARY KEY,mailbox_id TEXT NOT NULL,recipient_key_id TEXT NOT NULL,username TEXT NOT NULL,display_name TEXT NOT NULL,expires_at INTEGER NOT NULL,UNIQUE(mailbox_id,username));
       CREATE TABLE IF NOT EXISTS publication_cursors(recipient_key_id TEXT PRIMARY KEY,cursor INTEGER NOT NULL);
       INSERT INTO publication_cursors(recipient_key_id,cursor)
@@ -120,6 +128,7 @@ export class DeviceMailbox implements DurableObject {
       if (path === `${prefix}/ack` && request.method === "POST") return await this.ack(request, auth);
       if (path === `${prefix}/tokens` && request.method === "POST") return await this.provisionToken(request, auth);
       if (path === `${prefix}/tokens/initial` && request.method === "POST") return await this.provisionToken(request, auth, true);
+      if (path === `${prefix}/tokens/activate-native` && request.method === "POST") return await this.activateNativeTokens(request, auth);
       if (path === `${prefix}/tokens` && request.method === "DELETE") return await this.revokeToken(request, auth);
       if (path === `${prefix}/locators/redeem` && request.method === "POST") return await this.redeemLocator(request, auth);
       if (path === `${prefix}/intents/reserve` && request.method === "POST") return await this.intent(request, auth, "reserve");
@@ -134,6 +143,7 @@ export class DeviceMailbox implements DurableObject {
     this.sql.exec("DELETE FROM frames WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM tokens WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM initial_device_tokens WHERE expires_at <= ?", now);
+    this.sql.exec("DELETE FROM native_token_activations WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM idempotency WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM tombstones WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM intents WHERE expires_at <= ? AND status != 'pending'", now);
@@ -141,7 +151,29 @@ export class DeviceMailbox implements DurableObject {
     this.sql.exec("DELETE FROM parent_locators WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM parent_registration_tickets WHERE expires_at <= ?", now);
   }
-  private async bootstrap(request: Request): Promise<Response> { const body = await readJsonObject(request); if (!validToken(body.accessToken)) return fail(400, "invalid_bootstrap"); const hash = await sha256(body.accessToken); const exists = [...this.sql.exec("SELECT 1 FROM tokens LIMIT 1")].length > 0; if (exists) return fail(409, "already_bootstrapped"); this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,?,?)", hash.buffer, "admin", Date.now() + 365 * 86400000); return json({ role: "admin" }, 201); }
+  private async bootstrap(request: Request): Promise<Response> {
+    const body = await readJsonObject(request);
+    if (Object.keys(body).length !== 2 || body.mailboxId !== this.state.id.name || !validToken(body.accessToken))
+      return fail(400, "invalid_bootstrap");
+    const hash = await sha256(body.accessToken);
+    return this.state.storage.transactionSync(() => {
+      const marker = [...this.sql.exec<{ hash: ArrayBuffer | null; expires_at: number | null }>(
+        "SELECT hash,expires_at FROM mailbox_bootstrap WHERE id=1")][0];
+      if (marker) {
+        const token = [...this.sql.exec<{ role: string; expires_at: number }>(
+          "SELECT role,expires_at FROM tokens WHERE hash=?", hash.buffer)][0];
+        if (!marker.hash || !constantTimeEqual(new Uint8Array(marker.hash), hash) || !token || token.role !== "admin" ||
+          token.expires_at !== marker.expires_at || token.expires_at <= Date.now())
+          return fail(409, "already_bootstrapped");
+        return json({ role: "admin", expiresAt: marker.expires_at }, 201); // Read-only exact retry, no renewed lifetime.
+      }
+      if ([...this.sql.exec("SELECT 1 FROM tokens LIMIT 1")].length) return fail(409, "already_bootstrapped");
+      const expiresAt = Date.now() + 365 * 86400000;
+      this.sql.exec("INSERT INTO mailbox_bootstrap(id,hash,expires_at) VALUES(1,?,?)", hash.buffer, expiresAt);
+      this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,'admin',?)", hash.buffer, expiresAt);
+      return json({ role: "admin", expiresAt }, 201);
+    });
+  }
   private async provisionToken(request: Request, auth: Auth, initialOnly = false): Promise<Response> {
     if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden");
     const body = await readJsonObject(request);
@@ -187,6 +219,54 @@ export class DeviceMailbox implements DurableObject {
         hash.buffer, scope.role, expiresAt, scope.recipientKeyId, JSON.stringify(scope.publishRecipientKeyIds),
         scope.approvalKeyId, scope.authorityEpoch, JSON.stringify(scope.viewRecipientKeyIds));
       return json({ role: scope.role, expiresAt }, 201);
+    });
+  }
+  private async activateNativeTokens(request: Request, auth: Auth): Promise<Response> {
+    if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden");
+    const b = await readJsonObject(request);
+    const fields = ["deviceAccessToken", "deviceRecipientKeyId", "approvalAccessToken", "approvalRecipientKeyId", "approvalKeyId", "authorityEpoch", "expiresAt"];
+    if (new URL(request.url).search || Object.keys(b).length !== fields.length || Object.keys(b).some(name => !fields.includes(name)) ||
+      !validToken(b.deviceAccessToken) || !validToken(b.approvalAccessToken) || b.deviceAccessToken === b.approvalAccessToken ||
+      !validId(b.deviceRecipientKeyId) || !validId(b.approvalRecipientKeyId) || !validId(b.approvalKeyId) ||
+      new Set([b.deviceRecipientKeyId, b.approvalRecipientKeyId, b.approvalKeyId]).size !== 3 || b.authorityEpoch !== 1 ||
+      typeof b.expiresAt !== "number" || !Number.isSafeInteger(b.expiresAt) || b.expiresAt <= Date.now())
+      throw new RelayHttpError(400, "invalid_native_activation");
+    // Only the off-PC operator can supply independently confirmed bindings. The relay cannot prove ownership.
+    const expiresAt = b.expiresAt;
+    const device = tokenScope("device", { recipientKeyId: b.deviceRecipientKeyId, publishRecipientKeyIds: [b.approvalRecipientKeyId] })!;
+    const initialDevice = tokenScope("device", { recipientKeyId: b.deviceRecipientKeyId, publishRecipientKeyIds: [] })!;
+    const approval = tokenScope("approval", { recipientKeyId: b.approvalRecipientKeyId, publishRecipientKeyIds: [b.deviceRecipientKeyId],
+      approvalKeyId: b.approvalKeyId, authorityEpoch: b.authorityEpoch, viewRecipientKeyIds: [] })!;
+    const deviceHash = await sha256(b.deviceAccessToken), approvalHash = await sha256(b.approvalAccessToken);
+    const intentHash = await sha256(JSON.stringify(fields.map(name => b[name])));
+    return this.state.storage.transactionSync(() => {
+      this.requireCurrentAuth(auth);
+      if (expiresAt <= Date.now()) throw new RelayHttpError(400, "invalid_native_activation");
+      const matches = (hash: Uint8Array, scope: TokenScope): boolean => {
+        const row = [...this.sql.exec<{ expires_at: number }>("SELECT expires_at FROM tokens WHERE hash=?", hash.buffer)][0];
+        return row?.expires_at === expiresAt && JSON.stringify(this.findAuth(hash)) === JSON.stringify({ ...scope, tokenHash: hash });
+      };
+      const prior = [...this.sql.exec<{ intent_hash: ArrayBuffer }>("SELECT intent_hash FROM native_token_activations WHERE device_hash=?", deviceHash.buffer)][0];
+      if (prior) {
+        if (!constantTimeEqual(new Uint8Array(prior.intent_hash), intentHash) || !matches(deviceHash, device) || !matches(approvalHash, approval))
+          throw new RelayHttpError(409, "native_activation_conflict");
+        return json({ role: "approval", expiresAt }, 201); // Exact retry is read-only, including after a lost response.
+      }
+      const initial = [...this.sql.exec<{ recipient_key_id: string; expires_at: number }>(
+        "SELECT recipient_key_id,expires_at FROM initial_device_tokens WHERE hash=?", deviceHash.buffer)][0];
+      if (!initial || initial.recipient_key_id !== device.recipientKeyId || initial.expires_at !== expiresAt || !matches(deviceHash, initialDevice) ||
+        [...this.sql.exec("SELECT 1 FROM tokens WHERE hash=? UNION ALL SELECT 1 FROM enrollments WHERE token_hash=? UNION ALL SELECT 1 FROM initial_device_tokens WHERE hash=? UNION ALL SELECT 1 FROM native_token_activations WHERE approval_hash=?",
+          approvalHash.buffer, approvalHash.buffer, approvalHash.buffer, approvalHash.buffer)].length)
+        throw new RelayHttpError(409, "native_activation_conflict");
+      if ([...this.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n >= 256)
+        throw new RelayHttpError(429, "token_limit_reached");
+      // One marker per initial device intent (already capped at 256); all three writes roll back together.
+      this.sql.exec("UPDATE tokens SET publish_recipient_key_ids=? WHERE hash=?", JSON.stringify(device.publishRecipientKeyIds), deviceHash.buffer);
+      this.sql.exec("INSERT INTO tokens(hash,role,expires_at,recipient_key_id,publish_recipient_key_ids,approval_key_id,authority_epoch,view_recipient_key_ids) VALUES(?,'approval',?,?,?,?,?,'[]')",
+        approvalHash.buffer, expiresAt, approval.recipientKeyId, JSON.stringify(approval.publishRecipientKeyIds), approval.approvalKeyId, approval.authorityEpoch);
+      this.sql.exec("INSERT INTO native_token_activations(device_hash,approval_hash,intent_hash,expires_at) VALUES(?,?,?,?)",
+        deviceHash.buffer, approvalHash.buffer, intentHash.buffer, expiresAt);
+      return json({ role: "approval", expiresAt }, 201);
     });
   }
   private async revokeToken(request: Request, auth: Auth): Promise<Response> { if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden"); const b = await readJsonObject(request); if (!validToken(b.accessToken)) throw new RelayHttpError(400, "invalid_token_revocation"); const hash = await sha256(b.accessToken); this.requireCurrentAuth(auth); this.sql.exec("DELETE FROM tokens WHERE hash=?", hash.buffer); return new Response(null, { status: 204, headers }); }
@@ -329,8 +409,9 @@ function tokenScope(role: unknown, input: Record<string, unknown>): TokenScope |
     (role === "approval" && input.publishRecipientKeyIds.length === 0)) return null;
   // An explicit empty device list bootstraps GREX before any phone key exists; it never authorizes GRF1 publication.
   if (role === "approval") {
+    // Native enrollment precedes browser pairing: explicit [] authorizes no locator, never every locator.
     if (!validId(input.approvalKeyId) || typeof input.authorityEpoch !== "number" || !Number.isSafeInteger(input.authorityEpoch) ||
-      input.authorityEpoch < 1 || !validRecipients(input.viewRecipientKeyIds) || input.viewRecipientKeyIds.length === 0) return null;
+      input.authorityEpoch < 1 || !validRecipients(input.viewRecipientKeyIds)) return null;
     return { role, recipientKeyId: input.recipientKeyId, publishRecipientKeyIds: input.publishRecipientKeyIds,
       approvalKeyId: input.approvalKeyId, authorityEpoch: input.authorityEpoch, viewRecipientKeyIds: input.viewRecipientKeyIds };
   }

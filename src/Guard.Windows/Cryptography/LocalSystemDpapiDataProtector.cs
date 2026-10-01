@@ -53,6 +53,9 @@ namespace Guard.Windows.Cryptography
         public static IStateDataProtector ForOperatorProvisioning() => new LocalSystemDpapiDataProtector(
             CreatePurposeEntropy("guard-v2-operator-provisioning-v1"), requireLocalSystem: false);
 
+        public static IStateDataProtector ForOperatorMailbox() => new LocalSystemDpapiDataProtector(
+            CreatePurposeEntropy("guard-v2-operator-mailbox-v1"), requireLocalSystem: false);
+
         public byte[] Protect(byte[] plaintext)
         {
             EnsureEffectiveIdentity();

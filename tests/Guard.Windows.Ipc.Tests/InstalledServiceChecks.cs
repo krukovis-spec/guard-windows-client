@@ -29,12 +29,13 @@ internal static class InstalledServiceChecks
             var inspection = SetupInspection.ReadAsync(default).GetAwaiter().GetResult();
             var descriptor = SetupInspection.ReadDescriptorAsync(default).GetAwaiter().GetResult();
             if (!inspection.CanExport || inspection.Status.StateVersion != 0 || inspection.Readiness.CanEnableProtection ||
+                inspection.Readiness.ServiceBoundary != GuardReadinessFactState.Satisfied ||
                 inspection.Readiness.ProgramDataAcl != GuardReadinessFactState.Satisfied ||
                 descriptor.RelayOrigin != "https://guard-lab.invalid")
                 throw new InvalidOperationException("Unexpected fresh lab state or trust profile.");
             Console.WriteLine(JsonSerializer.Serialize(new { status = "PASS", authenticatedSystemService = true,
                 stateVersion = inspection.Status.StateVersion, ownerBound = inspection.Status.IsProvisioned,
-                readiness = inspection.Readiness.CanEnableProtection, programDataAcl = "SYSTEM_ONLY",
+                readiness = inspection.Readiness.CanEnableProtection, serviceConfiguration = "OBSERVED", programDataAcl = "SYSTEM_ONLY",
                 descriptorSha256 = descriptor.Sha256, protectionAccepted = false }));
             return 0;
         }

@@ -20,7 +20,8 @@ public static class GuardSetupQueryClient
 {
     public static Task<GuardIpcResponse> QueryAsync(GuardVerb verb, CancellationToken cancellationToken)
     {
-        if (verb != GuardVerb.GetStatus && verb != GuardVerb.GetReadiness && verb != GuardVerb.GetDeviceProvisioning)
+        if (verb != GuardVerb.GetStatus && verb != GuardVerb.GetReadiness && verb != GuardVerb.GetDeviceProvisioning &&
+            verb != GuardVerb.GetNativeActivationConfirmation)
             throw new ArgumentOutOfRangeException(nameof(verb));
         return SendAsync(new GuardIpcRequest(GuardProtocol.CurrentVersion, Guid.NewGuid().ToString("D"), verb, Array.Empty<byte>()),
             GuardProtocol.DefaultIpcReadTimeoutMilliseconds, cancellationToken);

@@ -9,21 +9,6 @@ using Guard.Windows.Services;
 
 namespace Guard.Service
 {
-    /// <summary>
-    /// Placeholder for the future read-only SCM adapter. Until SCM install
-    /// facts are observed, the final service-boundary fact remains Unknown.
-    /// </summary>
-    internal sealed class UnobservedServiceHealthQuery :
-        IServiceHealthQuery
-    {
-        public ServiceHealthProbeResult Query(string serviceName)
-        {
-            return new ServiceHealthProbeResult(
-                ServiceHealthProbeState.Unknown,
-                facts: null);
-        }
-    }
-
     internal sealed class ProductionReadinessFactsProvider :
         IDeviceReadinessFactsProvider
     {

@@ -49,6 +49,13 @@ public sealed class SetupInspection
         Func<GuardVerb, CancellationToken, Task<GuardIpcResponse>> query, CancellationToken token) =>
         DeviceProvisioningDescriptor.Parse(await ReadPayload(query, GuardVerb.GetDeviceProvisioning, token).ConfigureAwait(false));
 
+    public static Task<NativeActivationConfirmation> ReadActivationConfirmationAsync(CancellationToken token) =>
+        ReadActivationConfirmationAsync(GuardSetupQueryClient.QueryAsync, TimeProvider.System, token);
+    internal static async Task<NativeActivationConfirmation> ReadActivationConfirmationAsync(
+        Func<GuardVerb, CancellationToken, Task<GuardIpcResponse>> query, TimeProvider clock, CancellationToken token) =>
+        NativeActivationConfirmation.FromAuthenticatedService(
+            await ReadPayload(query, GuardVerb.GetNativeActivationConfirmation, token).ConfigureAwait(false), clock.GetUtcNow());
+
     private static async Task<byte[]> ReadPayload(Func<GuardVerb, CancellationToken, Task<GuardIpcResponse>> query, GuardVerb verb, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();

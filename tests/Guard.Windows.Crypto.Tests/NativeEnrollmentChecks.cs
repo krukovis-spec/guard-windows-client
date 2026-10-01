@@ -312,6 +312,8 @@ internal static class NativeEnrollmentChecks
             }), TimeSpan.FromSeconds(2));
         using (var relay = new NativeEnrollmentRelay(lab.Store, lab.Exchange, transport, lab.Clock))
         {
+            await Reject<InvalidDataException>(() => relay.ProcessNextAsync(None, confirmedOnly: true));
+            Check(polls == 0, "background-only pass polled an unconfirmed ceremony");
             await Reject<HttpRequestException>(() => relay.ProvisionPendingAsync(None));
             Check((await lab.State()).Version == before.Version && !(await lab.State()).IsProvisioned, "HTTP failure reset/confirmed setup");
             await relay.ProvisionPendingAsync(None); // Same secret/hash/deadline; no new ceremony on lost acknowledgment.
@@ -345,7 +347,7 @@ internal static class NativeEnrollmentChecks
             "originating confirmation after HTTP exchange");
         lab.Clock.Now = lab.Offer.ExpiresAtUtc.AddMinutes(1);
         pending = Request(EnrollmentExchange.Query, Array.Empty<byte>());
-        Check(await resumed.ProcessNextAsync(None) && Outcome() == EnrollmentExchange.Confirmed, "late query lost final owner confirmation");
+        Check(await resumed.ProcessNextAsync(None, confirmedOnly: true) && Outcome() == EnrollmentExchange.Confirmed, "late query lost final owner confirmation");
         pending = Request(EnrollmentExchange.Query, Array.Empty<byte>());
         var concurrent = await Task.WhenAll(resumed.ProcessNextAsync(None), resumed.ProcessNextAsync(None));
         Check(concurrent.Count(processed => processed) == 1, "concurrent polling double-published a nonce");

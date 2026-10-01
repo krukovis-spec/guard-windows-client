@@ -102,6 +102,9 @@ namespace Guard.Service
                 case GuardVerb.GetDeviceProvisioning:
                     return await GetDeviceProvisioningAsync(authenticatedRole, request, cancellationToken).ConfigureAwait(false);
 
+                case GuardVerb.GetNativeActivationConfirmation:
+                    return await GetNativeActivationConfirmationAsync(authenticatedRole, request, cancellationToken).ConfigureAwait(false);
+
                 case GuardVerb.GetStatus:
                     return await GetStatusAsync(
                         request,
@@ -136,6 +139,27 @@ namespace Guard.Service
                         request,
                         GuardIpcResponseStatus.Unavailable);
             }
+        }
+
+        private async Task<GuardIpcResponse> GetNativeActivationConfirmationAsync(ClientRole role, GuardIpcRequest request,
+            CancellationToken token)
+        {
+            if (role != ClientRole.AdminSetup) return Response(request, GuardIpcResponseStatus.Forbidden);
+            if (request.PayloadLength != 0) return Response(request, GuardIpcResponseStatus.InvalidRequest);
+            if (_stateStore is not ServiceAuthoritativeStateBoundary boundary) return Response(request, GuardIpcResponseStatus.Unavailable);
+            try
+            {
+                var state = await boundary.LoadAsync(token).ConfigureAwait(false);
+                var proof = Guard.Windows.Cryptography.NativeActivationConfirmation.Create(state, boundary.Identity.Signing, _clock.UtcNow);
+                var after = await boundary.LoadAsync(token).ConfigureAwait(false);
+                if (after.Version != state.Version) return Response(request, GuardIpcResponseStatus.Conflict);
+                token.ThrowIfCancellationRequested();
+                proof.RequireCurrent(_clock.UtcNow);
+                return Response(request, GuardIpcResponseStatus.Success, proof.GetBytesCopy());
+            }
+            catch (InvalidOperationException) { return Response(request, GuardIpcResponseStatus.Conflict); }
+            catch (Exception error) when (error is InvalidDataException or System.Security.Cryptography.CryptographicException)
+            { return Response(request, GuardIpcResponseStatus.Unavailable); }
         }
 
         private async Task<GuardIpcResponse> GetDeviceProvisioningAsync(ClientRole role, GuardIpcRequest request,

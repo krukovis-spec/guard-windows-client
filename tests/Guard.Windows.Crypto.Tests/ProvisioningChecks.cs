@@ -52,6 +52,8 @@ internal static class ProvisioningChecks
             var serviceProtector = new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.Purpose, true);
             Reject(() => serviceProtector.Unprotect(saved));
             Reject(() => opProtector.Unprotect(serviceProtector.Protect(new byte[] { 1, 2, 3 })));
+            var mailboxJob = Path.Combine(root, "mailbox.job");
+            await MailboxChecks(mailboxJob, jobPath);
             var bodies = new List<byte[]>();
             var calls = 0;
             async Task<HttpResponseMessage> Send(HttpRequestMessage request, CancellationToken token)
@@ -74,7 +76,7 @@ internal static class ProvisioningChecks
                 ProvisioningJob.PublishAsync(origin, jobPath, target, Admin, now ?? Now, token, new Http(send));
             await RejectAsync(() => Publish(output, Send));
             Check(!File.Exists(output) && saved.SequenceEqual(File.ReadAllBytes(jobPath)), "ambiguous reply lost durable intent or exported");
-            await Publish(output, Send);
+            await MailboxProvisioningJob.PublishDeviceAsync(Origin, jobPath, mailboxJob, output, Now, default, new Http(Send));
             Check(calls == 2 && bodies[0].SequenceEqual(bodies[1]), "retry changed credential, scope or expiry");
             var envelope = File.ReadAllBytes(output);
             var open = new DeviceRelayProfileEnvelope(service.Identity.Encryption);
@@ -109,12 +111,18 @@ internal static class ProvisioningChecks
             await RejectAsync(() => Publish(output + "-other", noSend, "https://other.example.test"));
             await RejectAsync(() => Publish(output + "-past", noSend, now: Now.AddMilliseconds(-1)));
             await RejectAsync(() => Publish(output + "-expired", noSend, now: expires));
+            var otherMailbox = Path.Combine(root, "other-mailbox.job");
+            MailboxProvisioningJob.Prepare(Origin, "mailbox-other-test-0001", Admin, otherMailbox, Now);
+            await RejectAsync(() => MailboxProvisioningJob.PublishDeviceAsync(Origin, jobPath, otherMailbox,
+                output + "-wrong-mailbox", Now, default, new Http(noSend)));
             Check(calls == 2, "validation sent administrative credentials");
             var fileInfo = new FileInfo(jobPath); var originalAcl = fileInfo.GetAccessControl(); var broadAcl = fileInfo.GetAccessControl();
             broadAcl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null), FileSystemRights.Read, AccessControlType.Allow));
             fileInfo.SetAccessControl(broadAcl);
             await RejectAsync(() => Publish(output + "-acl", noSend));
+            originalAcl.SetSecurityDescriptorBinaryForm(originalAcl.GetSecurityDescriptorBinaryForm(), AccessControlSections.Access);
             fileInfo.SetAccessControl(originalAcl);
+            Check(ProvisioningJob.ReadBounded(jobPath, 16384, true).SequenceEqual(saved), "test did not restore private job ACL");
             File.WriteAllBytes(jobPath, saved[..^1]);
             await RejectAsync(() => Publish(output + "-corrupt", noSend));
             File.WriteAllBytes(jobPath, saved);
@@ -176,6 +184,76 @@ internal static class ProvisioningChecks
             Check(!File.Exists(gitJob), "operator secret saved inside Git");
         }
         finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static async Task MailboxChecks(string path, string deviceJob)
+    {
+        const string bootstrap = "synthetic-bootstrap-not-cloudflare-api-token";
+        MailboxProvisioningJob.Prepare(Origin, Mailbox, Admin, path, Now);
+        var saved = File.ReadAllBytes(path);
+        Reject(() => MailboxProvisioningJob.Prepare(Origin, Mailbox, Admin, path, Now));
+        Check(saved.SequenceEqual(File.ReadAllBytes(path)), "mailbox prepare overwrote durable credential");
+        Reject(() => LocalSystemDpapiDataProtector.ForOperatorProvisioning().Unprotect(saved));
+        Reject(() => LocalSystemDpapiDataProtector.ForOperatorMailbox().Unprotect(File.ReadAllBytes(deviceJob)));
+        var plaintext = LocalSystemDpapiDataProtector.ForOperatorMailbox().Unprotect(saved);
+        try
+        {
+            Check(Encoding.UTF8.GetString(plaintext).Contains(Admin) && !Encoding.UTF8.GetString(plaintext).Contains(bootstrap) &&
+                !Encoding.UTF8.GetString(saved).Contains(Admin), "mailbox secret boundary");
+        }
+        finally { CryptographicOperations.ZeroMemory(plaintext); }
+        var bodies = new List<byte[]>(); var calls = 0; var expires = Now.AddDays(365);
+        async Task<HttpResponseMessage> Send(HttpRequestMessage request, CancellationToken token)
+        {
+            calls++;
+            Check(request.Method == HttpMethod.Post && request.RequestUri!.AbsoluteUri == Origin + "/v1/admin/bootstrap" &&
+                request.Headers.Authorization?.Parameter == bootstrap, "mailbox endpoint/credential binding");
+            bodies.Add((await request.Content!.ReadAsByteArrayAsync(token)).ToArray());
+            using var doc = JsonDocument.Parse(bodies[^1]);
+            Check(doc.RootElement.EnumerateObject().Count() == 2 && doc.RootElement.GetProperty("mailboxId").GetString() == Mailbox &&
+                doc.RootElement.GetProperty("accessToken").GetString() == Admin, "mailbox exact saved intent");
+            if (calls == 1) throw new HttpRequestException("synthetic lost bootstrap reply");
+            return Reply("{\"role\":\"admin\",\"expiresAt\":" + expires.ToUnixTimeMilliseconds() + "}");
+        }
+        await RejectAsync(() => MailboxProvisioningJob.PublishAsync(Origin, path, bootstrap, Now, default, new Http(Send)));
+        Check(await MailboxProvisioningJob.PublishAsync(Origin, path, bootstrap, Now, default, new Http(Send)) == expires,
+            "mailbox confirmation expiry");
+        Check(calls == 2 && bodies[0].SequenceEqual(bodies[1]) && saved.SequenceEqual(File.ReadAllBytes(path)),
+            "bootstrap retry changed key or lost intent");
+        var noSend = new Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>((_, _) => {
+            calls++; throw new InvalidOperationException("must not send bootstrap credential"); });
+        await RejectAsync(() => MailboxProvisioningJob.PublishAsync("https://other.example.test", path, bootstrap, Now, default, new Http(noSend)));
+        await RejectAsync(() => MailboxProvisioningJob.PublishAsync(Origin, path, bootstrap, Now.AddMilliseconds(-1), default, new Http(noSend)));
+        await RejectAsync(() => MailboxProvisioningJob.PublishAsync(Origin, path, Admin, Now, default, new Http(noSend)));
+        await RejectAsync(() => MailboxProvisioningJob.PublishAsync(Origin, deviceJob, bootstrap, Now, default, new Http(noSend)));
+        var fileInfo = new FileInfo(path); var original = fileInfo.GetAccessControl(); var broad = fileInfo.GetAccessControl();
+        broad.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null), FileSystemRights.Read, AccessControlType.Allow));
+        fileInfo.SetAccessControl(broad);
+        try { await RejectAsync(() => MailboxProvisioningJob.PublishAsync(Origin, path, bootstrap, Now, default, new Http(noSend))); }
+        finally
+        {
+            original.SetSecurityDescriptorBinaryForm(original.GetSecurityDescriptorBinaryForm(), AccessControlSections.Access);
+            fileInfo.SetAccessControl(original);
+        }
+        Check(ProvisioningJob.ReadBounded(path, 8192, true).SequenceEqual(saved), "test did not restore mailbox ACL");
+        File.WriteAllBytes(path, saved[..^1]);
+        await RejectAsync(() => MailboxProvisioningJob.PublishAsync(Origin, path, bootstrap, Now, default, new Http(noSend)));
+        File.WriteAllBytes(path, saved);
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+        await RejectAsync(() => MailboxProvisioningJob.PublishAsync(Origin, path, bootstrap, Now, cancelled.Token, new Http(noSend)));
+        Check(calls == 2, "invalid mailbox intent leaked credential to network");
+        foreach (var json in new[] { "{\"role\":\"admin\"}", "{\"role\":\"device\",\"expiresAt\":1}",
+            "{\"role\":\"admin\",\"expiresAt\":" + Now.ToUnixTimeMilliseconds() + "}",
+            "{\"role\":\"admin\",\"expiresAt\":" + Now.AddDays(366).ToUnixTimeMilliseconds() + "}",
+            "{\"role\":\"admin\",\"expiresAt\":1,\"extra\":true}" })
+            await RejectAsync(() => MailboxProvisioningJob.PublishAsync(Origin, path, bootstrap, Now, default,
+                new Http((_, _) => Task.FromResult(Reply(json)))));
+        foreach (var status in new[] { HttpStatusCode.Redirect, HttpStatusCode.Conflict, HttpStatusCode.Unauthorized })
+            await RejectAsync(() => MailboxProvisioningJob.PublishAsync(Origin, path, bootstrap, Now, default,
+                new Http((_, _) => Task.FromResult(new HttpResponseMessage(status)))));
+        Check(saved.SequenceEqual(File.ReadAllBytes(path)), "failed bootstrap discarded durable intent");
+        Reject(() => MailboxProvisioningJob.Prepare(Origin, "guard:bff:auth:v1", Admin, path + "-reserved", Now));
+        Reject(() => MailboxProvisioningJob.Prepare(Origin, Mailbox, "123456", path + "-weak", Now));
     }
     private static HttpResponseMessage Reply(string value) => new(HttpStatusCode.Created) { Content = new StringContent(value, Encoding.UTF8, "application/json") };
     private sealed class Http(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler

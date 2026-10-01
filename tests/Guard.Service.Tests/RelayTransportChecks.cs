@@ -251,6 +251,12 @@ namespace Guard.Service.Tests
                 Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamOnlyContent(new SlowStream()) }),
                 TimeSpan.FromMilliseconds(50)))
                 await ThrowsCancellationAsync(() => timeoutTransport.PollAsync(0, CancellationToken.None)).ConfigureAwait(false);
+            using (var brokenTransport = Transport((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                { Content = new StreamOnlyContent(new BrokenStream()) })))
+            {
+                try { await brokenTransport.PollAsync(0, CancellationToken.None); throw new InvalidOperationException("Expected interrupted response."); }
+                catch (HttpRequestException) { } // Body disconnect must use network backoff, not a local-storage fatal path.
+            }
             using var canceled = new CancellationTokenSource();
             canceled.Cancel();
             using var canceledTransport = Transport(async (_, cancellationToken) =>
@@ -434,6 +440,11 @@ namespace Guard.Service.Tests
             protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => _stream.CopyToAsync(stream);
             protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult(_stream);
             protected override void Dispose(bool disposing) { if (disposing) _stream.Dispose(); base.Dispose(disposing); }
+        }
+        private sealed class BrokenStream : MemoryStream
+        {
+            public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+                ValueTask.FromException<int>(new IOException("Synthetic network stream disconnect."));
         }
         private sealed class SlowStream : Stream
         {

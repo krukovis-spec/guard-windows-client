@@ -33,6 +33,162 @@ function buildFrame(cursor: number, id: string, kind = 1, recipient = parentReci
 }
 
 describe("mailbox authorization and signing intent", () => {
+  const prepareNative = async (mailboxId: string) => {
+    const prefix = `/v1/mailboxes/${mailboxId}`;
+    const post = (path: string, body: unknown, token = adminToken, method = "POST") => request(path, {
+      method, headers: { ...bearer(token), "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    expect((await post("/v1/admin/bootstrap", { mailboxId, accessToken: adminToken }, bootstrapToken)).status).toBe(201);
+    const initial = { accessToken: deviceToken, role: "device", recipientKeyId: deviceRecipient,
+      publishRecipientKeyIds: [], expiresAt: Date.now() + 600000 };
+    expect((await post(prefix + "/tokens/initial", initial)).status).toBe(201);
+    const activation = { deviceAccessToken: deviceToken, deviceRecipientKeyId: deviceRecipient, approvalAccessToken: approvalToken,
+      approvalRecipientKeyId: parentRecipient, approvalKeyId: "approval-signing-0001", authorityEpoch: 1, expiresAt: initial.expiresAt };
+    return { prefix, post, initial, activation, stub: env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailboxId)) };
+  };
+
+  it("atomically activates only device-to-native transport and retries without rewriting it", async () => {
+    const mailboxId = "mailbox-native-activation-0001";
+    const { prefix, post, initial, activation, stub } = await prepareNative(mailboxId);
+    const activate = (body: unknown = activation, token = adminToken) => post(prefix + "/tokens/activate-native", body, token);
+    const publish = (token: string, cursor: number, id: string, kind: number, recipient: string) => request(prefix + "/frames", {
+      method: "POST", headers: bearer(token), body: buildFrame(cursor, id, kind, recipient, mailboxId),
+    });
+    expect((await publish(deviceToken, 1, "frame-before-native-001", 1, parentRecipient)).status).toBe(403);
+    expect((await activate(activation, deviceToken)).status).toBe(403);
+    for (const change of [{ authorityEpoch: 2 }, { expiresAt: Date.now() - 1 }, { expiresAt: 1.5 },
+      { expiresAt: Number.MAX_SAFE_INTEGER + 1 }, { approvalAccessToken: deviceToken }, { approvalAccessToken: "short" },
+      { deviceRecipientKeyId: undefined }, { approvalRecipientKeyId: deviceRecipient }, { approvalKeyId: parentRecipient },
+      { viewRecipientKeyIds: ["browser-recipient-0001"] }, { role: "admin" }])
+      expect((await activate({ ...activation, ...change })).status).toBe(400);
+    expect((await post(prefix + "/tokens/activate-native?extra=1", activation)).status).toBe(400);
+    expect((await post(prefix + "/tokens/activate-native", activation, adminToken, "DELETE")).status).toBe(404);
+    expect((await activate({ ...activation, expiresAt: initial.expiresAt + 1 })).status).toBe(409);
+    expect((await activate()).status).toBe(201); // Discarded reply: client does not know whether the transaction committed.
+    await runInDurableObject(stub, (_instance, state) => {
+      new DeviceMailbox(state, env);
+      // An exact retry must execute no token/marker writes, not merely write the same values again.
+      state.storage.sql.exec("CREATE TRIGGER activation_no_update BEFORE UPDATE ON tokens BEGIN SELECT RAISE(ABORT,'test-no-rewrite'); END");
+      state.storage.sql.exec("CREATE TRIGGER activation_no_insert BEFORE INSERT ON tokens BEGIN SELECT RAISE(ABORT,'test-no-rewrite'); END");
+      state.storage.sql.exec("CREATE TRIGGER activation_no_marker BEFORE INSERT ON native_token_activations BEGIN SELECT RAISE(ABORT,'test-no-rewrite'); END");
+    });
+    expect(await (await activate(Object.fromEntries(Object.entries(activation).reverse()))).json())
+      .toEqual({ role: "approval", expiresAt: initial.expiresAt });
+    expect((await activate({ ...activation, approvalKeyId: "different-signer-0001" })).status).toBe(409);
+    expect((await activate(activation, approvalToken)).status).toBe(403);
+    expect((await post(prefix + "/tokens/initial", initial)).status).toBe(409);
+    expect((await publish(deviceToken, 1, "frame-native-request-001", 1, parentRecipient)).status).toBe(201);
+    expect((await publish(approvalToken, 1, "frame-native-approval-01", 2, deviceRecipient)).status).toBe(201);
+    expect((await publish(deviceToken, 2, "frame-native-receipt-001", 3, parentRecipient)).status).toBe(201);
+    for (const [token, kind, recipient] of [[deviceToken, 2, parentRecipient], [deviceToken, 1, deviceRecipient],
+      [deviceToken, 1, "browser-recipient-0001"], [approvalToken, 1, deviceRecipient], [approvalToken, 2, parentRecipient]] as const)
+      expect((await publish(token, 3, "frame-forbidden-native-01", kind, recipient)).status).toBe(403);
+    expect((await request(prefix + `/poll?recipient=${parentRecipient}`, { headers: bearer(approvalToken) })).status).toBe(200);
+    expect((await request(prefix + `/poll?recipient=${deviceRecipient}`, { headers: bearer(approvalToken) })).status).toBe(403);
+    expect((await post(prefix + "/intents/reserve", { authorityEpoch: 1, keyId: activation.approvalKeyId,
+      intentId: "native-activation-intent-01" }, approvalToken)).status).toBe(201);
+    expect((await post(prefix + "/intents/reserve", { authorityEpoch: 2, keyId: activation.approvalKeyId,
+      intentId: "native-activation-intent-02" }, approvalToken)).status).toBe(403);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("DROP TRIGGER activation_no_update; DROP TRIGGER activation_no_insert; DROP TRIGGER activation_no_marker");
+      const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("A".repeat(43)));
+      state.storage.sql.exec("INSERT INTO parent_locators(locator_hash,request_id_hash,view_recipient_key_id,expires_at,created_at) VALUES(?,?,?,?,?)",
+        hash, new Uint8Array(32), parentRecipient, Date.now() + 60000, Date.now());
+    });
+    expect((await post(prefix + "/locators/redeem", { locator: "A".repeat(43) }, approvalToken)).status).toBe(410);
+    for (const viewRecipientKeyIds of [undefined, null, ["*"], [parentRecipient, parentRecipient]])
+      expect((await post(prefix + "/tokens", { accessToken: approvalToken, role: "approval", expiresAt: initial.expiresAt,
+        recipientKeyId: parentRecipient, publishRecipientKeyIds: [deviceRecipient], approvalKeyId: activation.approvalKeyId,
+        authorityEpoch: 1, viewRecipientKeyIds })).status).toBe(400);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM parent_locators")][0]!.n).toBe(1);
+      expect([...state.storage.sql.exec("SELECT role,recipient_key_id,publish_recipient_key_ids,approval_key_id,authority_epoch,view_recipient_key_ids FROM tokens WHERE role='approval'")])
+        .toEqual([{ role: "approval", recipient_key_id: parentRecipient, publish_recipient_key_ids: JSON.stringify([deviceRecipient]),
+          approval_key_id: activation.approvalKeyId, authority_epoch: 1, view_recipient_key_ids: "[]" }]);
+    });
+  });
+
+  it("never restores revoked or subsequently changed native transport rights", async () => {
+    const mutations = ["DELETE FROM tokens WHERE role='approval'", "DELETE FROM tokens WHERE role='device'",
+      "UPDATE tokens SET publish_recipient_key_ids='[]' WHERE role='device'",
+      "UPDATE tokens SET authority_epoch=2 WHERE role='approval'", "UPDATE tokens SET expires_at=0 WHERE role='approval'",
+      "UPDATE tokens SET expires_at=expires_at+1 WHERE role='device'",
+      "UPDATE tokens SET view_recipient_key_ids='[\"browser-recipient-0001\"]' WHERE role='approval'"];
+    for (const [index, mutation] of mutations.entries()) {
+      const { prefix, post, activation, stub } = await prepareNative(`mailbox-native-revoke-${index}-001`);
+      expect((await post(prefix + "/tokens/activate-native", activation)).status).toBe(201);
+      await runInDurableObject(stub, (_instance, state) => {
+        state.storage.sql.exec(mutation);
+        new DeviceMailbox(state, env);
+      });
+      expect((await post(prefix + "/tokens/activate-native", activation)).status).toBe(409);
+      expect((await post(prefix + "/tokens/activate-native", { ...activation, approvalAccessToken: "q".repeat(32) })).status).toBe(409);
+      await runInDurableObject(stub, (_instance, state) => {
+        expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM native_token_activations")][0]!.n).toBe(1);
+      });
+    }
+  });
+
+  it("rolls back partial native activation and allows just one competing intent", async () => {
+    const { prefix, post, activation, stub } = await prepareNative("mailbox-native-atomic-0001");
+    for (const table of ["tokens", "native_token_activations"]) {
+      await runInDurableObject(stub, (_instance, state) => {
+        state.storage.sql.exec(`CREATE TRIGGER fail_activation BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT,'test-only-fault'); END`);
+      });
+      expect((await post(prefix + "/tokens/activate-native", activation)).status).toBe(503);
+      await runInDurableObject(stub, (_instance, state) => {
+        expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n).toBe(2);
+        expect([...state.storage.sql.exec("SELECT publish_recipient_key_ids FROM tokens WHERE role='device'")])
+          .toEqual([{ publish_recipient_key_ids: "[]" }]);
+        expect([...state.storage.sql.exec("SELECT * FROM native_token_activations")]).toEqual([]);
+        state.storage.sql.exec("DROP TRIGGER fail_activation");
+      });
+    }
+    const competing = [activation, { ...activation, approvalAccessToken: "q".repeat(32), approvalRecipientKeyId: "different-phone-0001" }];
+    const results = await Promise.all(competing.map(body => post(prefix + "/tokens/activate-native", body)));
+    expect(results.map(x => x.status).sort()).toEqual([201, 409]);
+    expect((await post(prefix + "/tokens/activate-native", competing[results.findIndex(x => x.status === 201)])).status).toBe(201);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n).toBe(3);
+      expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM native_token_activations")][0]!.n).toBe(1);
+    });
+  });
+
+  it("refuses credential reuse, noninitial devices and quota overflow before native activation", async () => {
+    for (const mode of ["admin", "reader", "old-initial", "enrollment", "noninitial", "changed-device", "revoked-device", "quota"] as const) {
+      const { prefix, post, initial, activation, stub } = await prepareNative(`mailbox-native-preflight-${mode}`);
+      let body = activation;
+      if (mode === "admin") body = { ...body, approvalAccessToken: adminToken };
+      if (mode === "reader")
+        expect((await post(prefix + "/tokens", { ...initial, accessToken: approvalToken, role: "reader" })).status).toBe(201);
+      if (mode === "old-initial") {
+        expect((await post(prefix + "/tokens/initial", { ...initial, accessToken: approvalToken })).status).toBe(201);
+        expect((await post(prefix + "/tokens", { accessToken: approvalToken }, adminToken, "DELETE")).status).toBe(204);
+      }
+      if (mode === "enrollment") {
+        body = { ...body, approvalAccessToken: "e".repeat(64) };
+        expect((await post(prefix + "/enrollments/" + "f".repeat(64), { phoneToken: body.approvalAccessToken,
+          expiresAt: Date.now() + 60000 }, deviceToken)).status).toBe(201);
+      }
+      if (mode === "changed-device")
+        expect((await post(prefix + "/tokens", { ...initial, publishRecipientKeyIds: [parentRecipient] })).status).toBe(201);
+      if (mode === "revoked-device")
+        expect((await post(prefix + "/tokens", { accessToken: deviceToken }, adminToken, "DELETE")).status).toBe(204);
+      await runInDurableObject(stub, (_instance, state) => {
+        if (mode === "noninitial") state.storage.sql.exec("DELETE FROM initial_device_tokens");
+        if (mode === "quota") for (let i = 0; i < 254; i++)
+          state.storage.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,'reader',?)", new TextEncoder().encode(`quota-native-${i}`), initial.expiresAt);
+      });
+      expect((await post(prefix + "/tokens/activate-native", body)).status).toBe(mode === "quota" ? 429 : 409);
+      await runInDurableObject(stub, (_instance, state) => {
+        expect([...state.storage.sql.exec("SELECT * FROM native_token_activations")]).toEqual([]);
+        expect([...state.storage.sql.exec("SELECT 1 FROM tokens WHERE role='approval'")]).toEqual([]);
+        if (mode === "quota") state.storage.sql.exec("DELETE FROM tokens WHERE role='reader'");
+      });
+      if (mode === "quota") expect((await post(prefix + "/tokens/activate-native", body)).status).toBe(201);
+    }
+  });
+
   it("retries initial device provisioning without changing later rights or resurrecting revocation", async () => {
     const mailbox = "mailbox-initial-retry-0001", prefix = `/v1/mailboxes/${mailbox}`;
     const call = (path: string, body: unknown, token = adminToken, method = "POST") => request(path, {
@@ -157,12 +313,79 @@ describe("mailbox authorization and signing intent", () => {
     });
   });
 
+  it("retries mailbox bootstrap exactly without reviving expired, changed or revoked administrators", async () => {
+    for (const mutation of ["DELETE FROM tokens", "UPDATE tokens SET expires_at=0", "UPDATE tokens SET expires_at=expires_at+1",
+      "UPDATE tokens SET role='reader'"]) {
+      const mailbox = "mailbox-bootstrap-retry-" + crypto.randomUUID();
+      const call = (accessToken = adminToken, extra = {}) => request("/v1/admin/bootstrap", {
+        method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" },
+        body: JSON.stringify({ mailboxId: mailbox, accessToken, ...extra }),
+      });
+      const first = await call(); expect(first.status).toBe(201);
+      const expected = await first.json();
+      const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox));
+      await runInDurableObject(stub, (_instance, state) => { new DeviceMailbox(state, env); });
+      const retry = await call(); expect(retry.status).toBe(201); expect(await retry.json()).toEqual(expected);
+      expect((await call("z".repeat(32))).status).toBe(409);
+      expect((await call(adminToken, { ignored: true })).status).toBe(400);
+      if (mutation === "DELETE FROM tokens") {
+        expect((await request(`/v1/mailboxes/${mailbox}/tokens`, { method: "DELETE",
+          headers: { ...bearer(adminToken), "content-type": "application/json" }, body: JSON.stringify({ accessToken: adminToken }) })).status).toBe(204);
+      } else await runInDurableObject(stub, (_instance, state) => { state.storage.sql.exec(mutation); });
+      expect((await call()).status).toBe(409);
+      await runInDurableObject(stub, (_instance, state) => {
+        state.storage.sql.exec("DELETE FROM tokens"); new DeviceMailbox(state, env);
+      });
+      expect((await call("n".repeat(32))).status).toBe(409);
+      await runInDurableObject(stub, (_instance, state) => {
+        expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n).toBe(0);
+        expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM mailbox_bootstrap")][0]!.n).toBe(1);
+      });
+    }
+  });
+
+  it("atomically creates bootstrap history and seals legacy empty mailboxes without adopting credentials", async () => {
+    const mailbox = "mailbox-bootstrap-atomic-0001";
+    const call = (id: string) => request("/v1/admin/bootstrap", { method: "POST",
+      headers: { ...bearer(bootstrapToken), "content-type": "application/json" },
+      body: JSON.stringify({ mailboxId: id, accessToken: adminToken }) });
+    const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox));
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("CREATE TRIGGER fail_bootstrap BEFORE INSERT ON tokens BEGIN SELECT RAISE(ABORT,'test-only'); END");
+    });
+    expect((await call(mailbox)).status).toBe(503);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec("SELECT * FROM mailbox_bootstrap")]).toEqual([]);
+      expect([...state.storage.sql.exec("SELECT * FROM tokens")]).toEqual([]);
+      state.storage.sql.exec("DROP TRIGGER fail_bootstrap");
+    });
+    expect((await call(mailbox)).status).toBe(201);
+    for (const populated of [false, true]) {
+      const old = "mailbox-bootstrap-legacy-" + populated;
+      await runInDurableObject(env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(old)), (_instance, state) => {
+        state.storage.sql.exec("DROP TABLE mailbox_bootstrap");
+        if (populated) state.storage.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?, 'admin', ?)",
+          new Uint8Array(32).buffer, Date.now() + 10000);
+        new DeviceMailbox(state, env);
+      });
+      expect((await call(old)).status).toBe(409);
+      await runInDurableObject(env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(old)), (_instance, state) => {
+        expect([...state.storage.sql.exec("SELECT * FROM mailbox_bootstrap")]).toEqual([{ id: 1, hash: null, expires_at: null }]);
+        expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n).toBe(populated ? 1 : 0);
+        state.storage.sql.exec("DELETE FROM tokens"); new DeviceMailbox(state, env);
+      });
+      expect((await call(old)).status).toBe(409);
+    }
+  });
+
   it("rejects stale scope, role or lifetime after reading a slow mutating request", async () => {
     const cases = [
       ["frames", "POST", deviceToken, "UPDATE tokens SET publish_recipient_key_ids='[]' WHERE role='device'", 403],
       ["frames", "POST", deviceToken, "UPDATE tokens SET expires_at=0 WHERE role='device'", 401],
       ["tokens", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
       ["tokens/initial", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
+      ["tokens/activate-native", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
+      ["tokens/activate-native", "POST", adminToken, "UPDATE tokens SET expires_at=0 WHERE role='admin'", 401],
       ["tokens", "DELETE", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
       ["ack", "POST", deviceToken, "UPDATE tokens SET recipient_key_id='recipient-other-0001' WHERE role='device'", 403],
       ...["reserve", "finalize", "cancel"].map(operation => ["intents/" + operation, "POST", approvalToken,
@@ -182,7 +405,9 @@ describe("mailbox authorization and signing intent", () => {
           ...(role === "approval" ? { approvalKeyId: "approval-signing-0001", authorityEpoch: 1, viewRecipientKeyIds: [parentRecipient] } : {}),
         })).status).toBe(201);
       const payload = route === "frames" ? buildFrame(1, "frame-slow-scope-001", 1, parentRecipient, mailbox) : new TextEncoder().encode(JSON.stringify(
-        route === "tokens/initial" ? { accessToken: "x".repeat(32), role: "device", recipientKeyId: deviceRecipient,
+        route === "tokens/activate-native" ? { deviceAccessToken: deviceToken, deviceRecipientKeyId: deviceRecipient,
+          approvalAccessToken: "n".repeat(32), approvalRecipientKeyId: parentRecipient, approvalKeyId: "approval-signing-0001",
+          authorityEpoch: 1, expiresAt: Date.now() + 600000 } : route === "tokens/initial" ? { accessToken: "x".repeat(32), role: "device", recipientKeyId: deviceRecipient,
           publishRecipientKeyIds: [], expiresAt: Date.now() + 600000 } : route === "tokens" ? (method === "DELETE" ? { accessToken: deviceToken } : {
           accessToken: "x".repeat(32), role: "reader", recipientKeyId: parentRecipient, publishRecipientKeyIds: [], expiresAt: Date.now() + 600000,
         }) : route === "ack" ? { recipientKeyId: deviceRecipient, cursor: 0 } : route === "locators/redeem" ? { locator: "A".repeat(43) } :
@@ -197,7 +422,7 @@ describe("mailbox authorization and signing intent", () => {
         }));
         await reading;
         state.storage.sql.exec(mutation);
-        const capture = () => ["tokens", "initial_device_tokens", "frames", "acknowledgements", "intents", "sequence_floors", "parent_locators"]
+        const capture = () => ["tokens", "initial_device_tokens", "native_token_activations", "frames", "acknowledgements", "intents", "sequence_floors", "parent_locators"]
           .map(table => [...state.storage.sql.exec(`SELECT * FROM ${table} ORDER BY rowid`)]);
         const before = capture();
         controller.enqueue(payload); controller.close();
@@ -319,7 +544,7 @@ describe("mailbox authorization and signing intent", () => {
     let response = await request("/v1/admin/bootstrap", { method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" }, body: JSON.stringify({ mailboxId: mailbox, accessToken: adminToken }) });
     expect(response.status).toBe(201);
     response = await request("/v1/admin/bootstrap", { method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" }, body: JSON.stringify({ mailboxId: mailbox, accessToken: adminToken }) });
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(201);
     for (const [accessToken, role] of [[deviceToken, "device"], [approvalToken, "approval"], [readerToken, "reader"]] as const) {
       response = await request(`/v1/mailboxes/${mailbox}/tokens`, { method: "POST", headers: { ...bearer(adminToken), "content-type": "application/json" }, body: JSON.stringify({ accessToken, role, expiresAt: Date.now() + 600000,
         recipientKeyId: role === "device" ? deviceRecipient : parentRecipient,

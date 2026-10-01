@@ -76,6 +76,7 @@ namespace Guard.Contracts
         ConfirmNativeSetup = 36,
         CancelNativeSetup = 37,
         GetNativeSetupResult = 38,
+        GetNativeActivationConfirmation = 39,
         ApplyParentDecision = 40,
         ReconcilePolicy = 50
     }

@@ -43,8 +43,11 @@
                     FontFamily="Consolas" Padding="8" VerticalContentAlignment="Center"
                     Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
                     Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
-                    AutomationProperties.Name="Полный код SHA-256 сохранённого описания компьютера" />
+                    AutomationProperties.Name="Полный код SHA-256 сохранённого файла Guard" />
                 <TextBlock Text="Подключение телефона через QR и включение защиты ещё не доступны в этом окне. Не используйте этот комплект для защиты семейного компьютера." Margin="0,16,0,16" />
+                <TextBlock Text="Подтверждение уже выполненной привязки" FontSize="20" FontWeight="SemiBold" Margin="0,8,0,12" />
+                <TextBlock Text="После привязки можно сохранить подписанное подтверждение для доверенного компьютера оператора. Паролей в нём нет. Оператор должен сверить подпись с первоначальным описанием компьютера; сам файл не включает защиту и не выдаёт разрешений." />
+                <Button x:Name="ExportActivation" Content="Сохранить подтверждение привязки…" Click="ExportActivation_Click" IsEnabled="False" HorizontalAlignment="Left" />
             </StackPanel>
         </ScrollViewer>
         <WrapPanel Grid.Row="2" Margin="0,16,0,0">
