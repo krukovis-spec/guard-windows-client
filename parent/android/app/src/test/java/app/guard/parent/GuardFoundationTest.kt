@@ -64,7 +64,8 @@ class GuardFoundationTest {
         val store = FileApprovalOutbox(approvalDirectory); val queue = StopAndWaitApprovals(store)
         val one = PendingSignedEnvelope(approval.keyId, 1, GuardWire.encodeSignedApproval(approval))
         queue.persistBeforeSend(one); queue.persistBeforeSend(one)
-        val second = PendingSignedEnvelope(approval.keyId, 2, GuardWire.encodeSignedApproval(approval.copy(sequence = 2)))
+        val second = PendingSignedEnvelope(approval.keyId, 2, GuardWire.encodeSignedApproval(approval.copy(sequence = 2,
+            issuedUnixMillis = ExchangeVector.now + 2000)))
         assertThrows(IllegalArgumentException::class.java) { queue.persistBeforeSend(second) }
         val restarted = StopAndWaitApprovals(FileApprovalOutbox(approvalDirectory))
         assertArrayEquals(one.exactBytes, restarted.getPending(approval.keyId)!!.exactBytes)
@@ -75,7 +76,10 @@ class GuardFoundationTest {
         val afterReceipt = StopAndWaitApprovals(FileApprovalOutbox(approvalDirectory))
         assertNull(afterReceipt.getPending(approval.keyId)); assertEquals(2L, afterReceipt.nextSequence(approval.keyId))
         afterReceipt.persistBeforeSend(second)
-        assertThrows(IllegalArgumentException::class.java) { afterReceipt.acceptReceipt(ExchangeVector.bytes("applied.frame"), ExchangeVector.recipient, ExchangeVector.trust, ExchangeVector.now + 2000) }
+        // Exact historical duplicates cannot consume or alter a new pending decision.
+        afterReceipt.acceptReceipt(ExchangeVector.bytes("applied.frame"), ExchangeVector.recipient, ExchangeVector.trust, ExchangeVector.now + 2000)
+        assertArrayEquals(second.exactBytes, afterReceipt.getPending(approval.keyId)!!.exactBytes)
+        assertEquals(2L, afterReceipt.nextSequence(approval.keyId))
     }
 
     @Test fun `recovery kit has checksum and needs two copies`() {

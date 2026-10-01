@@ -17,7 +17,7 @@ namespace Guard.Storage.Relay
         private static readonly UTF8Encoding StrictUtf8 =
             new UTF8Encoding(false, true);
 
-        private const int SchemaVersion = 2;
+        private const int SchemaVersion = 3;
         private const int MaximumIdentifierBytes = 128;
         public const int MaximumPayloadBytes = 768 * 1024;
 
@@ -80,6 +80,10 @@ namespace Guard.Storage.Relay
                         WriteIdentifier(stream, request.ResolvedCommandId!);
                         WriteFixedBytes(stream, request.GetApprovalHashCopy());
                     }
+                    var snapshot = request.GetEncodedSnapshotCopy();
+                    stream.WriteByte(snapshot.Length == 0 ? (byte)0 : (byte)1);
+                    if (snapshot.Length != 0)
+                        WriteVariableBytes(stream, snapshot, RelayProtocol.MaximumFrameBytes);
                 }
 
                 WriteInt32(stream, state.PolicyLedger.Count);
@@ -171,7 +175,7 @@ namespace Guard.Storage.Relay
                 {
                     RequireBytes(stream, Magic, "relay state magic");
                     var schemaVersion = ReadInt32(stream);
-                    if (schemaVersion != 1 && schemaVersion != SchemaVersion)
+                    if (schemaVersion < 1 || schemaVersion > SchemaVersion)
                     {
                         throw new StateStoreCorruptionException(
                             "The relay state schema version is unsupported.");
@@ -196,7 +200,7 @@ namespace Guard.Storage.Relay
                         highestOutboundCursor != 0 || acknowledgedOutboundCursor != 0 || policyRevision != 0))
                         throw new StateStoreCorruptionException("Legacy relay history requires explicit migration; no reset was performed.");
                     var recipientCursors = new List<KeyValuePair<string, long>>();
-                    if (schemaVersion == SchemaVersion)
+                    if (schemaVersion >= 2)
                     {
                         var recipientCount = ReadBoundedCount(stream, RelayTransactionState.MaximumOutboundRecipients, "outbound recipient");
                         string? previousRecipient = null;
@@ -261,12 +265,6 @@ namespace Guard.Storage.Relay
                                 throw new StateStoreCorruptionException(
                                     "A pending request contains resolution evidence.");
                             }
-
-                            trackedRequests.Add(new RelayTrackedRequest(
-                                requestId,
-                                requestRevision,
-                                snapshotHash,
-                                challenge));
                         }
                         else
                         {
@@ -275,16 +273,13 @@ namespace Guard.Storage.Relay
                                 throw new StateStoreCorruptionException(
                                     "A resolved request is missing resolution evidence.");
                             }
-
-                            trackedRequests.Add(new RelayTrackedRequest(
-                                requestId,
-                                requestRevision,
-                                snapshotHash,
-                                challenge,
-                                resolution,
-                                ReadIdentifier(stream),
-                                ReadExact(stream, RelayProtocol.Sha256Bytes)));
                         }
+                        var commandId = hasResolution ? ReadIdentifier(stream) : null;
+                        var approvalHash = hasResolution ? ReadExact(stream, RelayProtocol.Sha256Bytes) : null;
+                        var snapshot = schemaVersion >= 3 && ReadBoolean(stream, "stored request snapshot")
+                            ? ReadVariableBytes(stream, RelayProtocol.MaximumFrameBytes) : null;
+                        trackedRequests.Add(new RelayTrackedRequest(requestId, requestRevision, snapshotHash, challenge,
+                            resolution, commandId, approvalHash, snapshot));
                     }
 
                     var policyLedgerCount = ReadBoundedCount(

@@ -29,8 +29,14 @@ namespace Guard.Windows.RelayCrypto.Tests
                 InteropExchange.VerifyAndroid(args[1]);
                 return 0;
             }
+            if (args.Length == 2 && args[0] == "--verify-android-approval-frame")
+            {
+                InteropExchange.VerifyAndroidApprovalFrame(args[1]);
+                return 0;
+            }
             var tests = new List<(string Name, Action Run)>
             {
+                ("native encrypted approval commits one bound pending-policy transaction", NativeApprovalTransactionChecks.Run),
                 ("enrollment canonical binding and hostile input", EnrollmentTranscriptChecks.Run),
                 ("shared encrypted request and receipt verify", InteropExchange.VerifyFixture),
                 ("RFC 9180 P-256/AES-256-GCM vector decrypts exactly", DecryptsRfcVector),

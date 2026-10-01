@@ -3,9 +3,11 @@ package app.guard.parent.enrollment
 import android.content.Context
 import app.guard.parent.BuildConfig
 import app.guard.parent.approval.NativeRequestInbox
+import app.guard.parent.approval.NativeApprovalDelivery
 import app.guard.parent.approval.ApprovalChoice
 import app.guard.parent.approval.ApprovalSigningOperation
 import app.guard.parent.approval.VerifiedNativeRequest
+import app.guard.parent.approval.VerifiedNativeReceipt
 import app.guard.parent.protocol.*
 import app.guard.parent.security.AndroidApprovalKeyStore
 import app.guard.parent.security.AndroidRelayEncryptionKey
@@ -42,7 +44,8 @@ class EnrollmentSigningOperation internal constructor(private val store: Pending
 class AndroidEnrollmentCeremony(context: Context) {
     private val store = PendingEnrollmentStore(File(context.noBackupFilesDir, "enrollment"))
     private val nativeProfiles = NativeRelayProfileStore(File(context.noBackupFilesDir, "native-transport"))
-    private val approvals = StopAndWaitApprovals(FileApprovalOutbox(File(context.noBackupFilesDir, "approvals")))
+    private val approvalStore = FileApprovalOutbox(File(context.noBackupFilesDir, "approvals"))
+    private val approvals = StopAndWaitApprovals(approvalStore)
     fun listPending() = store.list()
 
     fun prepare(transcript: EnrollmentTranscript): PendingEnrollment {
@@ -134,6 +137,7 @@ class AndroidEnrollmentCeremony(context: Context) {
 
     internal fun startApproval(offer: EnrollmentOffer, request: VerifiedNativeRequest, choice: ApprovalChoice): ApprovalSigningOperation {
         val state = nativeProfileOwner(offer)
+        lastApprovalReceipt(offer) // Revalidate historical receipt/time before opening a new biometric operation.
         val claim = requireNotNull(state.claim)
         val expiry = requireNotNull(nativeProfiles.open(offer, claim, AndroidRelayEncryptionKey.openExisting(state.encryptionAlias)))
             .use { it.expiryUnixMillis }
@@ -146,6 +150,65 @@ class AndroidEnrollmentCeremony(context: Context) {
     internal fun pendingApproval(offer: EnrollmentOffer): PendingSignedEnvelope? {
         val state = nativeProfileOwner(offer)
         return approvals.getPending(requireNotNull(state.claim).approvalKeyId)
+    }
+
+    /** Reuses the saved signature; no new biometric operation or caller-supplied destination. */
+    internal fun openApprovalDelivery(offer: EnrollmentOffer): NativeApprovalDelivery {
+        val state = nativeProfileOwner(offer)
+        val claim = requireNotNull(state.claim)
+        val pending = requireNotNull(approvals.getPending(claim.approvalKeyId)) { "pending approval required" }
+        val profile = requireNotNull(nativeProfiles.open(offer, claim, AndroidRelayEncryptionKey.openExisting(state.encryptionAlias)))
+        try {
+            return NativeApprovalDelivery(offer, claim, pending, approvalStore, profile, { nativeProfileOwner(offer); Unit })
+        } catch (error: Exception) { profile.close(); throw error }
+    }
+
+    /** Reverify durable historical evidence even after transport expiry; never report it as current access. */
+    internal fun lastApprovalReceipt(offer: EnrollmentOffer): Pair<PendingSignedEnvelope, CommandReceipt>? {
+        val state = nativeProfileOwner(offer); val claim = requireNotNull(state.claim)
+        val saved = approvalStore.lastReceipt(claim.approvalKeyId) ?: return null
+        val recipient = RelayRecipient(offer.mailboxId, claim.encryptionKeyId, offer.authorityEpoch,
+            AndroidRelayEncryptionKey.openExisting(state.encryptionAlias))
+        val trust = RelayDeviceTrust(offer.deviceId, offer.deviceEpoch, offer.authorityEpoch, offer.signingKeyId, offer.signingKey())
+        val receipt = saved.verify(recipient, trust, System.currentTimeMillis())
+        val owner = nativeProfileOwner(offer)
+        require(EnrollmentWire.claimHash(requireNotNull(owner.claim)).contentEquals(EnrollmentWire.claimHash(claim)) &&
+            System.currentTimeMillis() >= saved.observed)
+        return saved.pending to receipt
+    }
+
+    internal fun acceptNativeReceipts(offer: EnrollmentOffer, frames: List<VerifiedNativeReceipt>, beforeCommit: () -> Unit) {
+        val state = nativeProfileOwner(offer); val claim = requireNotNull(state.claim)
+        val key = AndroidRelayEncryptionKey.openExisting(state.encryptionAlias)
+        val recipient = RelayRecipient(offer.mailboxId, claim.encryptionKeyId, offer.authorityEpoch, key)
+        val trust = RelayDeviceTrust(offer.deviceId, offer.deviceEpoch, offer.authorityEpoch, offer.signingKeyId, offer.signingKey())
+        var observed = System.currentTimeMillis()
+        requireNotNull(nativeProfiles.open(offer, claim, key)).use { profile ->
+            fun guard(): Long {
+                beforeCommit()
+                val owner = nativeProfileOwner(offer)
+                require(EnrollmentWire.claimHash(requireNotNull(owner.claim)).contentEquals(EnrollmentWire.claimHash(claim)))
+                val now = System.currentTimeMillis(); require(now >= observed); profile.requireCurrent(now)
+                observed = now; beforeCommit(); return now
+            }
+            guard()
+            for (frame in frames) {
+                val receipt = frame.receipt
+                if (receipt.keyId != claim.approvalKeyId) continue // Another phone's signed receipt is not ours to consume.
+                val current = approvals.getPending(claim.approvalKeyId)
+                val previous = approvalStore.lastReceipt(claim.approvalKeyId)
+                if (receipt.sequence != current?.sequence && receipt.sequence != previous?.pending?.sequence) continue
+                val raw = frame.frameBytes()
+                approvals.acceptReceipt(raw, recipient, trust, guard()) {
+                    val now = guard()
+                    RelayReceive.receiveReceipt(raw, recipient, trust, now)
+                    guard() // Keys/crypto can be slow; no expired/cancelled late commit.
+                    require(now < RelayReceive.decodeFrame(raw).aad.expiryUnixMillis &&
+                        observed < RelayReceive.decodeFrame(raw).aad.expiryUnixMillis)
+                }
+            }
+            guard()
+        }
     }
 
     private fun nativeProfileOwner(offer: EnrollmentOffer): PendingEnrollment {

@@ -1050,6 +1050,9 @@ namespace Guard.Storage.Relay
                        left.GetSnapshotHashCopy(),
                        right.GetSnapshotHashCopy()) &&
                    CryptographicOperations.FixedTimeEquals(
+                       left.GetEncodedSnapshotCopy(),
+                       right.GetEncodedSnapshotCopy()) &&
+                   CryptographicOperations.FixedTimeEquals(
                        left.GetDecisionChallengeCopy(),
                        right.GetDecisionChallengeCopy()) &&
                    CryptographicOperations.FixedTimeEquals(

@@ -5,12 +5,15 @@ import app.guard.parent.protocol.*
 import app.guard.parent.protocol.Reader
 import app.guard.parent.protocol.Writer
 import app.guard.parent.security.EcdsaP1363
+import app.guard.parent.security.FileApprovalOutbox
+import app.guard.parent.security.PendingSignedEnvelope
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.*
 import java.net.URL
 import java.nio.ByteBuffer
@@ -28,6 +31,7 @@ import javax.net.ssl.HttpsURLConnection
 /** Controlled HTTP, real JCA signatures/HPKE and existing .NET ciphertext; no physical Keystore/biometry claims. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class NativeRequestInboxTest {
+    @TempDir lateinit var receiptDirectory: File
     private val now = ExchangeVector.now
     private fun pair() = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
     private fun point(pair: KeyPair) = pair.public.encoded.takeLast(65).toByteArray()
@@ -58,9 +62,9 @@ class NativeRequestInboxTest {
         return input + ByteBuffer.allocate(4).putInt(64).array() + EcdsaP1363.fromDer(signature)
     }
     private fun frame(cursor: Long = 1, request: RequestSnapshot = snapshot, receipt: Boolean = false,
-        wrongSigner: Boolean = false, end: Long = now + 60000): ByteArray {
+        wrongSigner: Boolean = false, end: Long = now + 60000, receiptOverride: CommandReceipt? = null): ByteArray {
         val inner = if (receipt) Writer("GRDC").apply {
-            val received = GuardWire.decodeCommandReceipt(ExchangeVector.bytes("applied.plaintext").let {
+            val received = receiptOverride ?: GuardWire.decodeCommandReceipt(ExchangeVector.bytes("applied.plaintext").let {
                 // GRDC wraps the existing GRRC receipt.
                 Reader(it, "GRDC").bytes(65536, false)
             }).copy(deviceEpoch = 1, authorityEpoch = 1, processedUnixMillis = now)
@@ -159,6 +163,46 @@ class NativeRequestInboxTest {
         assertEquals("report\\u{202E}exe.txt\\u{2066}\\u{200F}\\u{A}", requestDisplayText(input))
         assertEquals("Файл 📄", requestDisplayText("Файл 📄"))
         assertTrue(input.contains('\u202E'))
+    }
+
+    @Test fun `receipt-only pages skip expired requests but retain only immutable verified device receipts`() = runBlocking {
+        val expired = frame(request = snapshot.copy(createdUnixMillis = now - 2000, pendingExpiryUnixMillis = now - 1))
+        val signedReceipt = frame(2, receipt = true)
+        inbox { Connection(it, json(listOf(expired, signedReceipt), 2)) }.use { session ->
+            val page = session.readReceipts()
+            assertTrue(page.requests.isEmpty()); assertEquals(2, page.frameCount); assertEquals(2L, page.nextCursor)
+            val verified = page.receipts.single(); val canonical = GuardWire.encodeCommandReceipt(verified.receipt)
+            signedReceipt.fill(0); verified.frameBytes().fill(0); verified.receipt.approvalHash.fill(0)
+            assertArrayEquals(canonical, GuardWire.encodeCommandReceipt(verified.receipt))
+            assertTrue(verified.frameBytes().isNotEmpty())
+        }
+        // Normal request display still refuses this expired request; receipt lookup does not authorize it.
+        inbox { Connection(it, json(listOf(expired), 1)) }.use { assertRefused(it) }
+        inbox { Connection(it, json(listOf(frame(receipt = true, wrongSigner = true)), 1)) }.use { session ->
+            try { session.readReceipts(); fail("forged receipt accepted") } catch (_: IOException) { }
+        }
+    }
+
+    @Test fun `actual HTTPS page feeds verified receipts into durable queue and reopens terminal evidence`() = runBlocking {
+        val unsigned = ExchangeVector.approval().copy(keyId = claim.approvalKeyId, deviceEpoch = 1, authorityEpoch = 1,
+            snapshotHash = GuardWire.sha256(GuardWire.encodeRequestSnapshot(snapshot)))
+        val signature = Signature.getInstance("SHA256withECDSA").apply { initSign(approval.private); update(GuardWire.encodeApprovalSignatureInput(unsigned)) }.sign()
+        val signed = unsigned.copy(signatureP1363 = EcdsaP1363.fromDer(signature))
+        val pending = PendingSignedEnvelope(claim.approvalKeyId, 1, GuardWire.encodeSignedApproval(signed))
+        FileApprovalOutbox(receiptDirectory).save(pending)
+        val base = CommandReceipt(offer.deviceId, 1, 1, pending.keyId, 1, signed.commandId, signed.requestId, signed.requestRevision,
+            ReceiptStatus.ACCEPTED_PENDING_RECONCILIATION, now, GuardWire.sha256(GuardWire.encodeApprovalSignatureInput(signed)), 10, 2, "receipt-test-0001")
+        val first = frame(receipt = true, receiptOverride = base)
+        val last = frame(2, receipt = true, receiptOverride = base.copy(status = ReceiptStatus.APPLIED, reconciliation = 3))
+        val trust = RelayDeviceTrust(offer.deviceId, 1, 1, offer.signingKeyId, offer.signingKey())
+        inbox { Connection(it, json(listOf(first, last), 2)) }.use { session ->
+            for (verified in session.readReceipts().receipts)
+                FileApprovalOutbox(receiptDirectory).acceptReceipt(verified.frameBytes(), recipient, trust, now)
+        }
+        val reopened = FileApprovalOutbox(receiptDirectory)
+        assertNull(reopened.load(pending.keyId)); assertEquals(2L, reopened.nextSequence(pending.keyId))
+        assertEquals(ReceiptStatus.APPLIED, reopened.lastReceipt(pending.keyId)!!.verify(recipient, trust, now).status)
+        assertArrayEquals(pending.exactBytes, reopened.lastReceipt(pending.keyId)!!.pending.exactBytes)
     }
 
     @Test fun `cancellation while checking local keys cannot dispatch a late HTTP request`() = runBlocking {
