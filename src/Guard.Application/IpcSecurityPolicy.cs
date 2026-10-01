@@ -33,6 +33,7 @@ namespace Guard.Application
                            verb == GuardVerb.ConfirmNativeSetup ||
                            verb == GuardVerb.CancelNativeSetup ||
                            verb == GuardVerb.GetNativeSetupResult ||
+                           verb == GuardVerb.GetNativeActivationConfirmation ||
                            verb == GuardVerb.BindChildAccount;
 
                 case ClientRole.Proxy:

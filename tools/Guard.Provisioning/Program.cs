@@ -47,12 +47,20 @@ internal static class Program
                 Console.WriteLine("Доступ устройства подтверждён сервером. Зашифрованный профиль сохранён. Защита ещё не установлена.");
                 return 0;
             }
+            if (args.Length == 4 && args[0] == "verify-native")
+            {
+                var confirmed = ProvisioningJob.VerifyNativeConfirmation(args[1], args[2], args[3], DateTimeOffset.UtcNow);
+                Console.WriteLine("Подпись проверена по исходному ключу компьютера. Подтверждение действительно до " +
+                    confirmed.ExpiresAtUtc.ToString("u", CultureInfo.InvariantCulture) + ". Сеть и права доступа не изменены.");
+                return 0;
+            }
             Console.WriteLine("Guard.Provisioning — служебная утилита, только для родительского ПК.");
             Console.WriteLine("prepare-mailbox <доверенный-HTTPS-origin> <новый-mailboxId> <новый-файл-задания-ящика>");
             Console.WriteLine("publish-mailbox <тот-же-доверенный-origin> <файл-задания-ящика>");
             Console.WriteLine("prepare <доверенный-HTTPS-origin> <описание.json> <проверенный-SHA256> <mailboxId> <срок-UTC:2027-10-01T00:00:00Z> <новый-файл-задания>");
             Console.WriteLine("publish <тот-же-доверенный-origin> <файл-задания> <новый-файл-профиля>");
             Console.WriteLine("publish-with-mailbox <тот-же-доверенный-origin> <файл-задания-устройства> <файл-задания-ящика> <новый-файл-профиля>");
+            Console.WriteLine("verify-native <тот-же-доверенный-origin> <исходный-файл-задания-устройства> <подтверждение.guard-proof>");
             Console.WriteLine("Файлы задания и профиля — по абсолютным путям вне Git. Секреты не передавайте в аргументах.");
             return args.Length == 0 || args.SequenceEqual(new[] { "--help" }) ? 0 : 2;
         }

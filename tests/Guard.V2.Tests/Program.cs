@@ -73,7 +73,7 @@ namespace Guard.V2.Tests
             Assert(IpcSecurityPolicy.CanInvoke(ClientRole.AdminSetup, GuardVerb.BindChildAccount), "Admin child binding must be allowed.");
             foreach (ClientRole role in Enum.GetValues(typeof(ClientRole)))
                 foreach (var verb in new[] { GuardVerb.GetDeviceProvisioning, GuardVerb.BeginNativeSetup, GuardVerb.AdvanceNativeSetup,
-                    GuardVerb.ConfirmNativeSetup, GuardVerb.CancelNativeSetup, GuardVerb.GetNativeSetupResult })
+                    GuardVerb.ConfirmNativeSetup, GuardVerb.CancelNativeSetup, GuardVerb.GetNativeSetupResult, GuardVerb.GetNativeActivationConfirmation })
                     Assert(IpcSecurityPolicy.CanInvoke(role, verb) == (role == ClientRole.AdminSetup),
                         "Device provisioning and native setup must be admin-only.");
             Assert(!IpcSecurityPolicy.CanInvoke(ClientRole.AdminSetup, GuardVerb.ApplyParentDecision), "Admin IPC is not a parent-decision channel.");

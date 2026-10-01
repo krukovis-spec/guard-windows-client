@@ -13,7 +13,7 @@ namespace Guard.Windows.Cryptography;
 // (setup UI), or checking its exact digest AND an independently pinned origin (operator).
 public sealed class DeviceProvisioningDescriptor
 {
-    private readonly byte[] _bytes, _encryptionSpki;
+    private readonly byte[] _bytes, _signingSpki, _encryptionSpki;
     public string RelayOrigin { get; }
     public string DeviceId { get; }
     public string SigningKeyId { get; }
@@ -39,7 +39,7 @@ public sealed class DeviceProvisioningDescriptor
             throw new InvalidDataException("Device descriptor origin.");
         DeviceId = Id(Text(value, "deviceId"));
         SigningKeyId = Id(Text(value, "signingKeyId")); EncryptionKeyId = Id(Text(value, "encryptionKeyId"));
-        _ = PublicKey(Text(value, "signingPublicKeySpki"), SigningKeyId);
+        _signingSpki = PublicKey(Text(value, "signingPublicKeySpki"), SigningKeyId);
         _encryptionSpki = PublicKey(Text(value, "encryptionPublicKeySpki"), EncryptionKeyId);
         if (SigningKeyId == EncryptionKeyId) throw new InvalidDataException("Device key roles overlap.");
         Sha256 = Convert.ToHexString(SHA256.HashData(bytes));
@@ -53,11 +53,13 @@ public sealed class DeviceProvisioningDescriptor
     }
 
     public byte[] GetEncryptionKeyCopy() => (byte[])_encryptionSpki.Clone();
+    public byte[] GetSigningKeyCopy() => (byte[])_signingSpki.Clone();
     public byte[] GetBytesCopy() => (byte[])_bytes.Clone();
 
     // Never replace an existing file, including after a failed/partial write.
     // No shell, redirected folders, network paths, or alternate data streams.
-    public void SaveNew(string path)
+    public void SaveNew(string path) => SaveNewPublicFile(path, _bytes);
+    internal static void SaveNewPublicFile(string path, byte[] bytes)
     {
         if (!Path.IsPathFullyQualified(path)) throw new IOException("Absolute local file required.");
         // GetFullPath silently trims trailing dots/spaces on Windows; validate before normalization.
@@ -72,7 +74,7 @@ public sealed class DeviceProvisioningDescriptor
                 item.Exists && (item.Attributes & FileAttributes.ReparsePoint) != 0)
                 throw new IOException("Redirected or ambiguous export path.");
         using var output = new FileStream(full, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
-        output.Write(_bytes); output.Flush(flushToDisk: true);
+        output.Write(bytes); output.Flush(flushToDisk: true);
     }
 
     private static string Text(JsonElement value, string name) => value.GetProperty(name).GetString() ?? throw new InvalidDataException("Missing string.");

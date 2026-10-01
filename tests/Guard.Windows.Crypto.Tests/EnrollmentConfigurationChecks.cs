@@ -219,6 +219,7 @@ internal static class EnrollmentConfigurationChecks
             await ThrowsAsync(Import); // flag is one-shot; normal startup must not retain it
             var freshState = await freshBoundary.LoadAsync(default);
             var freshConfig = freshStore.Load(trust, freshBoundary.Identity, freshState, Now);
+            var activationDescriptor = await freshBoundary.ExportDeviceProvisioningAsync(trust, default);
             using var freshRuntime = ServiceNativeEnrollment.Create(freshBoundary.NativeEnrollmentStore, freshBoundary.Identity,
                 freshState, freshConfig, trust, new Clock());
             var begun = await freshRuntime.Coordinator.BeginAsync(ClientRole.AdminSetup,
@@ -229,7 +230,7 @@ internal static class EnrollmentConfigurationChecks
             await ThrowsAsync(Import); // even identical import is forbidden once setup has begun
             Check(File.Exists(freshPaths.DeviceRelayInstallFile) && installed.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile)),
                 "active setup accepted/replaced installer profile");
-            await CheckNativeConfirmIpcAsync(freshBoundary, freshConfig, trust, freshStart!);
+            await CheckNativeConfirmIpcAsync(freshBoundary, freshConfig, trust, freshStart!, activationDescriptor);
             CryptographicOperations.ZeroMemory(freshRaw);
         }
         finally { Directory.Delete(root, recursive: true); }
@@ -334,7 +335,7 @@ internal static class EnrollmentConfigurationChecks
     }
 
     private static async Task CheckNativeConfirmIpcAsync(ServiceAuthoritativeStateBoundary boundary, DeviceRelayConfiguration config,
-        EnrollmentDeploymentTrust trust, NativeEnrollmentStart start)
+        EnrollmentDeploymentTrust trust, NativeEnrollmentStart start, byte[] activationDescriptor)
     {
         // Real synthetic CA/phone keys, never a fake "verified" result or production trust override.
         using var phone = new AndroidAttestationChecks.Fixture();
@@ -374,6 +375,9 @@ internal static class EnrollmentConfigurationChecks
         Check(!await handler.DeliverConfirmedEnrollmentAsync(default) && network.Calls == 0,
             "background delivery polled/provisioned an unconfirmed phone");
         var dispatcher = new SecureIpcRequestDispatcher(handler);
+        var activationRequest = new GuardIpcRequest(1, Guid.NewGuid().ToString("D"), GuardVerb.GetNativeActivationConfirmation, Array.Empty<byte>());
+        Check((await dispatcher.DispatchAsync(ClientRole.AdminSetup, activationRequest, default)).Status == GuardIpcResponseStatus.Conflict,
+            "pending phone proof issued an owner activation confirmation");
         var capability = start.GetConfirmationSecretCopy();
         try
         {
@@ -395,6 +399,16 @@ internal static class EnrollmentConfigurationChecks
             Check((await Send(GuardVerb.ConfirmNativeSetup, correct)).Status == GuardIpcResponseStatus.Success &&
                 (await boundary.LoadAsync(default)).IsProvisioned, "actual attested owner commit through IPC failed");
             Check((await Send(GuardVerb.ConfirmNativeSetup, correct)).Status == GuardIpcResponseStatus.Forbidden, "spent confirmation capability was reused");
+            var callsBeforeExport = network.Calls;
+            var activated = await dispatcher.DispatchAsync(ClientRole.AdminSetup, activationRequest, default);
+            Check(activated.Status == GuardIpcResponseStatus.Success && activated.RequestId == activationRequest.RequestId && network.Calls == callsBeforeExport,
+                "confirmed activation export failed or performed unexpected networking");
+            await ActivationConfirmationChecks.RunAsync(activated, activationDescriptor, await boundary.LoadAsync(default), boundary.Identity.Signing, Now);
+            foreach (var role in Enum.GetValues<ClientRole>().Where(value => value != ClientRole.AdminSetup))
+                Check((await handler.HandleAsync(role, activationRequest, default)).Status == GuardIpcResponseStatus.Forbidden,
+                    "non-admin read native activation export");
+            Check((await Send(GuardVerb.GetNativeActivationConfirmation, new { chosenPhone = "not-allowed" })).Status == GuardIpcResponseStatus.InvalidRequest,
+                "activation export accepted a caller-selected identity");
             Check((await Send(GuardVerb.GetNativeSetupResult, new { version = 1, enrollmentId = offer.EnrollmentId,
                 claimHash = new string('0', 64) })).Status == GuardIpcResponseStatus.Rejected, "terminal query accepted another transcript");
             var terminal = await Send(GuardVerb.GetNativeSetupResult, new { version = 1, enrollmentId = offer.EnrollmentId,

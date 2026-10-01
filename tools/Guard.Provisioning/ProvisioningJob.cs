@@ -15,6 +15,7 @@ internal sealed class ProvisioningJob
 {
     private readonly string _origin, _deviceId, _signingId, _encryptionId, _mailbox, _token;
     private readonly byte[] _encryptionSpki;
+    private readonly DeviceProvisioningDescriptor _descriptor;
     private readonly long _issued, _expires;
 
     private ProvisioningJob(byte[] descriptor, string digest, string origin, string mailbox, string token,
@@ -24,7 +25,7 @@ internal sealed class ProvisioningJob
         if (descriptor.Length is < 1 or > 2048 || digest.Length != 64 || !digest.All(Uri.IsHexDigit) ||
             !CryptographicOperations.FixedTimeEquals(Convert.FromHexString(digest), SHA256.HashData(descriptor)))
             throw new InvalidDataException("Device descriptor commitment.");
-        var device = DeviceProvisioningDescriptor.Parse(descriptor);
+        var device = _descriptor = DeviceProvisioningDescriptor.Parse(descriptor);
         if (device.RelayOrigin != origin) throw new InvalidDataException("Device deployment.");
         _origin = origin; _mailbox = Id(mailbox); _deviceId = device.DeviceId;
         if (mailbox == "guard:bff:auth:v1") throw new InvalidDataException("Reserved mailbox.");
@@ -61,21 +62,7 @@ internal sealed class ProvisioningJob
         RequireOrigin(independentlyTrustedOrigin); RequireCredential(adminCredential);
         RequireOutputPath(outputPath);
         if (File.Exists(outputPath)) throw new IOException("Output already exists.");
-        var raw = LocalSystemDpapiDataProtector.ForOperatorProvisioning().Unprotect(ReadBounded(jobPath, 16384, requirePrivate: true));
-        ProvisioningJob job;
-        try
-        {
-            if (raw.Length > 8192) throw new InvalidDataException("Operator job size.");
-            using var doc = JsonDocument.Parse(raw, new JsonDocumentOptions { MaxDepth = 3 });
-            var value = doc.RootElement;
-            RequireObject(value, "version", "relayOrigin", "descriptor", "descriptorSha256", "mailboxId", "accessToken", "issuedAt", "expiresAt");
-            if (value.GetProperty("version").GetInt32() != 1 || String(value, "relayOrigin") != independentlyTrustedOrigin)
-                throw new InvalidDataException("Operator deployment mismatch.");
-            job = new ProvisioningJob(Convert.FromBase64String(String(value, "descriptor")), String(value, "descriptorSha256"),
-                independentlyTrustedOrigin, String(value, "mailboxId"), String(value, "accessToken"),
-                value.GetProperty("issuedAt").GetInt64(), value.GetProperty("expiresAt").GetInt64(), now);
-        }
-        finally { CryptographicOperations.ZeroMemory(raw); }
+        var job = Load(independentlyTrustedOrigin, jobPath, now);
         if (expectedMailbox != null && job._mailbox != expectedMailbox) throw new InvalidDataException("Mailbox credential binding.");
         var body = JsonSerializer.SerializeToUtf8Bytes(new { accessToken = job._token, role = "device", expiresAt = job._expires,
             recipientKeyId = job._encryptionId, publishRecipientKeyIds = Array.Empty<string>() });
@@ -87,6 +74,32 @@ internal sealed class ProvisioningJob
             deviceEpoch = 1, authorityEpoch = 1, accessToken = job._token, issuedAt = job._issued, expiresAt = job._expires });
         try { SaveNewPrivate(outputPath, DeviceRelayProfileEnvelope.Seal(job._encryptionSpki, profile)); }
         finally { CryptographicOperations.ZeroMemory(profile); }
+    }
+
+    internal static NativeActivationConfirmation VerifyNativeConfirmation(string origin, string jobPath, string proofPath, DateTimeOffset now)
+    {
+        var job = Load(origin, jobPath, now);
+        return NativeActivationConfirmation.Verify(ReadBounded(proofPath, NativeActivationConfirmation.MaximumBytes, requirePrivate: false),
+            job._descriptor, job._mailbox, now);
+    }
+
+    private static ProvisioningJob Load(string independentlyTrustedOrigin, string jobPath, DateTimeOffset now)
+    {
+        RequireOrigin(independentlyTrustedOrigin);
+        var raw = LocalSystemDpapiDataProtector.ForOperatorProvisioning().Unprotect(ReadBounded(jobPath, 16384, requirePrivate: true));
+        try
+        {
+            if (raw.Length > 8192) throw new InvalidDataException("Operator job size.");
+            using var doc = JsonDocument.Parse(raw, new JsonDocumentOptions { MaxDepth = 3 });
+            var value = doc.RootElement;
+            RequireObject(value, "version", "relayOrigin", "descriptor", "descriptorSha256", "mailboxId", "accessToken", "issuedAt", "expiresAt");
+            if (value.GetProperty("version").GetInt32() != 1 || String(value, "relayOrigin") != independentlyTrustedOrigin)
+                throw new InvalidDataException("Operator deployment mismatch.");
+            return new ProvisioningJob(Convert.FromBase64String(String(value, "descriptor")), String(value, "descriptorSha256"),
+                independentlyTrustedOrigin, String(value, "mailboxId"), String(value, "accessToken"),
+                value.GetProperty("issuedAt").GetInt64(), value.GetProperty("expiresAt").GetInt64(), now);
+        }
+        finally { CryptographicOperations.ZeroMemory(raw); }
     }
 
     // The two initial-issuance callers use the same bounded, non-redirecting HTTP path.
