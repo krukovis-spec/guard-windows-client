@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — coordinated native approval publication cursor
+
+- Added exact four-field approval-only `/frames/reserve`, native SQLite active-recipient uniqueness and atomic publication state. Lease max60s, immutable retry metadata/token hash, committed head+1, abandoned expiry without cursor consumption, bounded history. New kind-2 frames require exact live lease and ack=0; admin/other kinds cannot steal it. Existing exact-byte published retries survive lease expiry/ack. Signing sequences/intents/authority remain untouched; server status is never a device receipt.
+- 67 Worker tests on actual local runtime/SQLite, typecheck and dry-run PASS. Tests include two simultaneous phones/restart/lost reply/metadata and credential binding/current-auth race/expiry/partial-write rollback/10000 row quota/exhausted cursor. Initial typecheck rejected interface as SqlStorage generic; switched to concrete type alias, no any/cast weakening. Self-review and caller audit performed. No live deploy or Windows/phone action/new dependency; .NET/Android suites unchanged, not repeated this turn.
+- PROJECT_ONLY via wiki-memory/project-memory; Worker README/protocol/plan/capsule updated. Journal unchanged because external auth/endpoint/secret unchanged; production still `477f18f`. Ponytail reused existing SQLite transactions/publish tombstones; Android durable reservation/sealed-frame retry and verified receipt remain next. M1/full M4 and M7 Codex-style pass still open.
+
 ## 2026-10-01 — Android explicit bound biometric decision and durable outbox
 
 - Replaced unused parameter-after-biometry signing entry with one-shot operation bound before prompt to an immutable verified frame/snapshot, explicit choice/minutes, durable sequence and fixed command/nonce/deadline. Confirmed ceremony supplies existing keys/profile/trust; revalidation and cancellation after slow checks and before atomic commit. Deadline includes request/frame/profile expiry. Signed envelope copies bytes, late callback cannot replace a queued command; post-commit cancellation never deletes it.
