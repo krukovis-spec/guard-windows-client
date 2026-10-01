@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — safe initial relay credential retries
+
+- Traced the missing operator → device profile route. Existing `/tokens` is deliberately an admin upsert, so using it for an automatic initial retry could undo a later recipient grant or recreate a revoked credential. Added exact `/tokens/initial`, not an optional flag an older server could ignore; no fallback. Shared validation/auth remains in `provisionToken`, with one synchronous transaction and bounded hash-only initial markers retained through the original expiry.
+- New checks first failed on absent route (404), then passed through actual Worker HTTP/local SQLite. Covered exact retry/restart, changed intent/scope, revoke+retry, legacy credential collision, concurrent competing intents, SQL-trigger abort with rollback of both records, marker/token quota and expired-marker cleanup. Existing slow-body mutation test now also checks initial-route admin revocation and no marker write; old-schema migration recreates the table idempotently.
+- Final `npm test`: 57/57; `npm run typecheck`: PASS; installed Wrangler `deploy --dry-run`: bundle built, no deployment. Self-review checked both callers, no lower-role entry, fresh auth after awaits, bounds, atomicity and no retry-to-upsert downgrade. Dependencies/Windows code/system/VM/real credentials unchanged. PROJECT_ONLY: README, M3 and capsule retain the exact contract and next gap: operator utility/secure intent/encrypted handoff still NOT implemented; no installation/protection/readiness claim.
+
 ## 2026-10-01 — automatic foreground Android enrollment waiting
 
 - Replaced mandatory manual exchange clicks with one screen-owned coroutine using the existing persisted ceremony/HTTP adapter. Resume inspects saved evidence; pause/stop cancels polling, user actions cancel/join it before mutations and ordinary resume preserves the selected attempt. Live cadence 2s, query-only 10s, transient exchange/timeout backoff up to 30s; storage/key/crypto failures stop. Only a typed sanitized transport failure is retried, never arbitrary IOException from disk. No background worker, new dependency, automatic signature, new keys or Windows confirmation.
