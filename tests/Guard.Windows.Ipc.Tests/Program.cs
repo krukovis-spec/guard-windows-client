@@ -33,7 +33,8 @@ namespace Guard.Windows.Ipc.Tests
                 ("queries a real identification-only pipe token before reading", SetupClientChecks.ReadIdentificationToken),
                 ("binds setup to the exact running SYSTEM service", SetupClientChecks.RejectWrongServiceBinding),
                 ("bounds and correlates setup responses over a real test pipe", SetupClientChecks.CheckResponses),
-                ("keeps native setup capability, comparison and uncertain results separate", NativeSetupSessionChecks.Run)
+                ("keeps native setup capability, comparison and uncertain results separate", NativeSetupSessionChecks.Run),
+                ("keeps setup inspection observational and exports exact validated public bytes", SetupInspectionChecks.Run)
             };
             var failures = 0;
             foreach (var test in tests)

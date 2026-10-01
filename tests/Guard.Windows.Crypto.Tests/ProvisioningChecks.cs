@@ -168,6 +168,8 @@ internal static class ProvisioningChecks
             Reject(() => ProvisioningJob.Prepare(Origin, descriptorPath, new string('0', 64), Mailbox, expires, jobPath + "-wronghash", Now));
             Reject(() => ProvisioningJob.Prepare(Origin + "/path", descriptorPath, digest, Mailbox, expires, jobPath + "-path", Now));
             Reject(() => ProvisioningJob.Prepare(Origin, descriptorPath, digest, "guard:bff:auth:v1", expires, jobPath + "-reserved", Now));
+            Reject(() => ProvisioningJob.Prepare(Origin, descriptorPath, digest, Mailbox, expires, jobPath + "-ambiguous. ", Now));
+            Check(!File.Exists(jobPath + "-ambiguous"), "operator path silently trimmed trailing punctuation");
             Directory.CreateDirectory(Path.Combine(root, "repo", ".git"));
             var gitJob = Path.Combine(root, "repo", "operator.job");
             Reject(() => ProvisioningJob.Prepare(Origin, descriptorPath, digest, Mailbox, expires, gitJob, Now));

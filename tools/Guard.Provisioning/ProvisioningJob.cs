@@ -5,7 +5,6 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text.Json;
 using Guard.Contracts;
-using Guard.Domain;
 using Guard.Protocol.Relay;
 using Guard.Windows.Cryptography;
 
@@ -25,19 +24,12 @@ internal sealed class ProvisioningJob
         if (descriptor.Length is < 1 or > 2048 || digest.Length != 64 || !digest.All(Uri.IsHexDigit) ||
             !CryptographicOperations.FixedTimeEquals(Convert.FromHexString(digest), SHA256.HashData(descriptor)))
             throw new InvalidDataException("Device descriptor commitment.");
-        using var doc = JsonDocument.Parse(descriptor, new JsonDocumentOptions { MaxDepth = 3 });
-        var value = doc.RootElement;
-        RequireObject(value, "version", "relayOrigin", "deviceId", "signingKeyId", "signingPublicKeySpki",
-            "encryptionKeyId", "encryptionPublicKeySpki", "deviceEpoch", "authorityEpoch");
-        if (value.GetProperty("version").GetInt32() != 1 || value.GetProperty("relayOrigin").GetString() != origin ||
-            value.GetProperty("deviceEpoch").GetInt64() != 1 || value.GetProperty("authorityEpoch").GetInt64() != 1)
-            throw new InvalidDataException("Device deployment/epoch.");
-        _origin = origin; _mailbox = Id(mailbox); _deviceId = Id(String(value, "deviceId"));
+        var device = DeviceProvisioningDescriptor.Parse(descriptor);
+        if (device.RelayOrigin != origin) throw new InvalidDataException("Device deployment.");
+        _origin = origin; _mailbox = Id(mailbox); _deviceId = device.DeviceId;
         if (mailbox == "guard:bff:auth:v1") throw new InvalidDataException("Reserved mailbox.");
-        _signingId = Id(String(value, "signingKeyId")); _encryptionId = Id(String(value, "encryptionKeyId"));
-        _ = PublicKey(String(value, "signingPublicKeySpki"), _signingId);
-        _encryptionSpki = PublicKey(String(value, "encryptionPublicKeySpki"), _encryptionId);
-        if (_signingId == _encryptionId) throw new InvalidDataException("Device key roles overlap.");
+        _signingId = device.SigningKeyId; _encryptionId = device.EncryptionKeyId;
+        _encryptionSpki = device.GetEncryptionKeyCopy();
         if (token.Length != 64 || token.Any(c => !(c is >= '0' and <= '9' or >= 'A' and <= 'F')))
             throw new InvalidDataException("Generated device credential.");
         if (issued < 0 || issued > now.ToUnixTimeMilliseconds() || expires <= now.AddDays(1).AddMinutes(5).ToUnixTimeMilliseconds())
@@ -135,14 +127,6 @@ internal sealed class ProvisioningJob
     }
     private static string Id(string value) => GuardIdentifier.IsCanonicalToken(value) ? value : throw new InvalidDataException("Identifier.");
     private static string String(JsonElement value, string name) => value.GetProperty(name).GetString() ?? throw new InvalidDataException("Missing string.");
-    private static byte[] PublicKey(string encoded, string id)
-    {
-        var spki = Convert.FromBase64String(encoded);
-        var anchor = new ParentTrustAnchor(ParentKeyAlgorithm.EcdsaP256Sha256, spki);
-        if (Convert.ToBase64String(spki) != encoded || anchor.KeyId != id || !new EcdsaP256SignatureVerifier().IsValid(anchor))
-            throw new InvalidDataException("Public device key binding.");
-        return spki;
-    }
     private static void RequireObject(JsonElement value, params string[] names)
     {
         if (value.ValueKind != JsonValueKind.Object) throw new InvalidDataException("JSON object required.");
@@ -158,6 +142,8 @@ internal sealed class ProvisioningJob
     private static void RequireOutputPath(string path)
     {
         if (!Path.IsPathFullyQualified(path)) throw new IOException("Absolute local path required.");
+        foreach (var segment in path.Split('\\', '/'))
+            if (segment.EndsWith('.') || segment.EndsWith(' ')) throw new IOException("Ambiguous operator path.");
         var full = Path.GetFullPath(path);
         if (full.Length < 4 || full[1] != ':' || full[2] != '\\' || full[2..].Contains(':')) throw new IOException("Local file path required.");
         for (var item = new FileInfo(full) as FileSystemInfo; item != null;

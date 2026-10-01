@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-01 — Windows setup inspection and public device export
+
+- Added real `Guard.Setup` WPF executable with administrator manifest, defensive runtime privilege check, Russian status/readiness, cancellation, exact public descriptor export and full SHA256. Reuses authenticated IPC; no installer, service start, policy/account changes or network credential use. Origin from trusted service is displayed, never used to send admin credentials. Operator independently pins origin/hash.
+- Shared immutable descriptor validation covers exact schema/version/epochs/IDs/canonical distinct P-256 keys. Export is create-new, local-only, rejects detected reparse/ADS/ambiguous names. A regression check found `GetFullPath` trimming trailing dots/spaces before validation; fixed raw-segment checks in both UI and operator paths. Readiness/owner binding cannot display Protected, mismatched versions refuse, errors/cancellation clear stale results; raw exception/payload text is not shown.
+- Safe checks: focused IPC PASS after fixing the new filename test; fresh complete Release +29 v2 harnesses/45 legacy PASS including operator HPKE/DPAPI integration. No production-code changes during full run. Native UI/UAC/dialog/focus/screen reader/200%/SCM-SYSTEM acceptance still require VM and were NOT run on host. No cloud, VM, package or real-secret action. Independent M1 approval and QRCoder approval still pending; no fabricated ready state.
+- PROJECT_ONLY: updated capsule, canonical M3, root and operator README; added window usage/limits next to its source. `frontend-design` kept native, scalable high-contrast layout within the functional step; `ux-copy` kept observation/ownership/protection and next actions distinct. Full user-requested Codex styling remains M7 after functional completion.
+
 ## 2026-10-01 — off-PC provisioning utility and device-encrypted handoff
 
 - Added actual .NET 10 prepare/publish console utility, no new package: validate independently trusted origin/descriptor hash and public keys, generate one device credential, create a private DPAPI job before HTTP; hidden interactive mailbox-admin credential remains memory-only. Exact retry uses only `/tokens/initial`, bounded/cancellable HTTPS, no redirect/proxy/cookies/upsert fallback or overwrite. Secret-bearing exceptions are not printed; retained managed strings cannot be guaranteed erased.
