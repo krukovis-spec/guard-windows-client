@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — durable off-PC activation reaches the existing relay API
+
+- Connected original device/mailbox jobs and signed GNA1 to `prepare-native`/`activate-native`. Private immutable activation intent is saved before HTTP with a distinct DPAPI purpose; current proof must match exact offer/claim and not roll back state version. Saved historical proof only validates saved intent. Checks after file work/immediately before send and after response close stale-read/late-response paths. Exact retry preserves credentials/scopes/original expiry and all existing files; no `/tokens` fallback or phone export.
+- Actual temporary CurrentUser DPAPI/files + controlled HTTP PASS: lost reply/reload/exact bytes, renewed proof/higher version, correctly signed different offer/phone/lower version, wrong job/mailbox/origin, malformed saved schema/scope, ACL/purpose/tamper, expiry at dispatch and after response, cancellations and server refusals. Fresh full safe Release/29 v2/45 legacy, focused crypto and CLI help PASS. No Worker code changed/test rerun claimed; no cloud/host/VM/phone action. Self-review traced every shared HTTP caller and secret/file/clock boundary; no production secret entered.
+- PROJECT_ONLY via wiki-memory/project-memory, existing capsule/plan/protocol/operator README updated. Connection journal unchanged because no deployed endpoint/auth/secret changed; production remains `477f18f`. Next protected phone handoff/import/runtime; live service/phone and M1 gates remain open. Ponytail reused the existing operator loader, strict schema parser, DPAPI, ACL and HTTP path, without packages or another provisioning service.
+
 ## 2026-10-01 — independently verifiable committed-owner export
 
 - Connected persistent owner state/device signature to new admin-only read IPC 39, authenticated setup inspection/button/file export and off-PC `verify-native`. GNA1 signs raw bounded bytes with a distinct purpose; public transcript only, initial epochs, ten-minute lifetime within 24h retention. Operator uses the original private DPAPI job's descriptor/mailbox; no self-signed-file trust, network, new credentials or policy change. Reused file guards/job loader; no packages.
