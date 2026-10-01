@@ -89,6 +89,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Guard.RelayState.Tests", "t
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Guard.Windows.RelayCrypto.Tests", "tests\Guard.Windows.RelayCrypto.Tests\Guard.Windows.RelayCrypto.Tests.csproj", "{DEDAC89E-F150-45B2-B75C-FAE2D04B9C55}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Guard.Provisioning", "tools\Guard.Provisioning\Guard.Provisioning.csproj", "{AAFC2403-E688-46EE-A854-1FC855F1905E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -97,6 +99,14 @@ Global
 		Release|x64 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{AAFC2403-E688-46EE-A854-1FC855F1905E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AAFC2403-E688-46EE-A854-1FC855F1905E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AAFC2403-E688-46EE-A854-1FC855F1905E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{AAFC2403-E688-46EE-A854-1FC855F1905E}.Debug|x64.Build.0 = Debug|Any CPU
+		{AAFC2403-E688-46EE-A854-1FC855F1905E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AAFC2403-E688-46EE-A854-1FC855F1905E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AAFC2403-E688-46EE-A854-1FC855F1905E}.Release|x64.ActiveCfg = Release|Any CPU
+		{AAFC2403-E688-46EE-A854-1FC855F1905E}.Release|x64.Build.0 = Release|Any CPU
 		{FB71127F-3FA5-47D1-8BE7-CA076DA04D6D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{FB71127F-3FA5-47D1-8BE7-CA076DA04D6D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FB71127F-3FA5-47D1-8BE7-CA076DA04D6D}.Debug|x64.ActiveCfg = Debug|Any CPU

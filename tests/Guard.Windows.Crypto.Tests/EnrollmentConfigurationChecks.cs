@@ -185,12 +185,12 @@ internal static class EnrollmentConfigurationChecks
             await ThrowsAsync(() => freshStore.InstallNewAsync(freshRaw, trust, freshBoundary, Now, default));
             Check(!File.Exists(freshPaths.DeviceRelayConfigurationFile) && !File.Exists(freshPaths.DeviceRelayConfigurationPendingFile), "failed guard published profile");
             guard.Check = () => { };
-            var handoffProtector = new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.InstallPurpose, true);
+            var handoffProtector = new DeviceRelayProfileEnvelope(freshBoundary.Identity.Encryption);
             // Actual encrypted installer handoff, never plaintext/token in args, using only owned temporary files.
-            async Task Import() => await freshStore.ImportStagedAsync(trust, freshBoundary, handoffProtector, Now, default);
+            async Task Import() => await freshStore.ImportStagedAsync(trust, freshBoundary, Now, default);
             await ThrowsAsync(Import); // no staged file
             File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, protector.Protect(freshRaw));
-            await ThrowsAsync(Import); // storage purpose is not the installer purpose
+            await ThrowsAsync(Import); // DPAPI storage records are not transferable installer envelopes.
             Check(File.Exists(freshPaths.DeviceRelayInstallFile) && !File.Exists(freshPaths.DeviceRelayConfigurationFile), "bad handoff was consumed");
             File.WriteAllBytes(freshPaths.DeviceRelayInstallFile, new byte[8193]);
             await ThrowsAsync(Import);
@@ -200,7 +200,7 @@ internal static class EnrollmentConfigurationChecks
             File.WriteAllBytes(freshPaths.DeviceRelayInstallPendingFile, Array.Empty<byte>());
             await ThrowsAsync(Import);
             File.Delete(freshPaths.DeviceRelayInstallPendingFile);
-            await ThrowsAsync(() => freshStore.ImportStagedAsync(trust, freshBoundary, handoffProtector, Now, cancelled.Token));
+            await ThrowsAsync(() => freshStore.ImportStagedAsync(trust, freshBoundary, Now, cancelled.Token));
             Check(staged.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayInstallFile)), "cancel consumed handoff");
             guard.Check = () => { if (File.Exists(freshPaths.DeviceRelayConfigurationFile)) throw new UnauthorizedAccessException("synthetic interruption after commit"); };
             await ThrowsAsync(Import);
