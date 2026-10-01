@@ -70,7 +70,15 @@ internal static class NativeRelayCommitChecks
                 var published = await relay.LoadAsync(default);
                 Check(published.TrackedRequests.Single().GetEncodedSnapshotCopy().SequenceEqual(RelayCanonicalEncoding.EncodeRequestSnapshot(snapshot)),
                     "committed original mismatch");
-                Check(await relay.TryCommitAsync(published.Version, published.WithAcknowledgedOutboundCursor(1), default), "test delivery ack");
+                var first = published.Outbox.Single();
+                var modified = first.GetEncryptedFrameCopy(); modified[0] ^= 1;
+                foreach (var wrong in new[] {
+                    new RelayEncryptedOutboxItem(first.FrameId, first.OutboundCursor + 1, first.Kind, first.RecipientKeyId, first.RecipientCursor, first.GetEncryptedFrameCopy()),
+                    new RelayEncryptedOutboxItem(first.FrameId, first.OutboundCursor, first.Kind, first.RecipientKeyId, first.RecipientCursor, modified) })
+                    await ThrowsAsync(() => runtime.AcknowledgePublishedAsync(owner.Version, wrong, default));
+                Check((await relay.LoadAsync(default)).Version == published.Version &&
+                    !await runtime.AcknowledgePublishedAsync(owner.Version - 1, first, default), "wrong/stale ack changed outbox");
+                Check(await runtime.AcknowledgePublishedAsync(owner.Version, first, default), "guarded delivery ack");
 
                 byte[] ApprovalFrame(DateTimeOffset frameDeadline)
                 {
@@ -186,7 +194,7 @@ internal static class NativeRelayCommitChecks
     {
         try { await action(); }
         catch (Exception e) when (e is ArgumentException or InvalidDataException or InvalidOperationException or
-            OperationCanceledException or UnauthorizedAccessException or CryptographicException) { return; }
+            OperationCanceledException or UnauthorizedAccessException or CryptographicException or NativeApprovalRejectedException) { return; }
         throw new Exception("Expected native relay commit rejection.");
     }
 }

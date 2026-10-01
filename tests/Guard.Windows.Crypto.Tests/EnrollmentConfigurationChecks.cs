@@ -485,6 +485,7 @@ internal static class EnrollmentConfigurationChecks
                 "background delivery mutated owner or policy state");
             await NativeRelayCommitChecks.RunAsync(boundary.NativeEnrollmentStore, boundary.Identity, config, trust, phone.Sign, Now);
             await NativeRelayCommitChecks.CheckBoundaryRestartAsync(boundary, config, trust, Now);
+            await NativeRelayDeliveryChecks.RunAsync(boundary, config, trust, phone.Sign, Now);
         }
         finally { CryptographicOperations.ZeroMemory(capability); }
     }

@@ -153,6 +153,9 @@ internal static class DeviceIdentityChecks
         lab.Guard.Check = () => { };
         await boundary.AcquireAsync(default); await boundary.InitializeNewAsync(default);
         var ownerState = await boundary.LoadAsync(default);
+        Check(!await NativeRelayDelivery.DeliverConfirmedAsync(boundary,
+            new DeviceRelayConfigurationStore(lab.Paths, new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.Purpose, true), lab.Guard),
+            lab.Guard, default), "unprovisioned background delivery required profile/pins or network");
         var initial = await boundary.RelayTransactions.LoadAsync(default);
         Check(initial.DeviceId == ownerState.DeviceId && initial.DeviceEpoch == 1 && initial.AuthorityEpoch == 1 &&
             initial.Version == 0 && initial.Outbox.Count == 0, "initial queue binding");

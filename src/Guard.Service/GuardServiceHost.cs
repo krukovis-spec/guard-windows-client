@@ -34,6 +34,11 @@ namespace Guard.Service
                 provider.GetRequiredService<ServiceExecutionBoundary>(), startupOptions,
                 ((GuardServiceIpcOperationHandler)provider.GetRequiredService<IGuardIpcOperationHandler>()).DeliverConfirmedEnrollmentAsync,
                 provider.GetRequiredService<ServiceExitStatus>(), provider.GetRequiredService<IHostApplicationLifetime>()));
+            builder.Services.AddSingleton<IHostedService>(provider => new NativeEnrollmentDeliveryWorker(
+                provider.GetRequiredService<ServiceExecutionBoundary>(), startupOptions,
+                token => NativeRelayDelivery.DeliverConfirmedAsync(provider.GetRequiredService<ServiceAuthoritativeStateBoundary>(),
+                    provider.GetRequiredService<DeviceRelayConfigurationStore>(), provider.GetRequiredService<IServiceDataBoundaryGuard>(), token),
+                provider.GetRequiredService<ServiceExitStatus>(), provider.GetRequiredService<IHostApplicationLifetime>()));
             return builder.Build();
         }
 

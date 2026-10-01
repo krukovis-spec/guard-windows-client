@@ -6,7 +6,8 @@ using Microsoft.Extensions.Hosting;
 
 namespace Guard.Service;
 
-// Started after the authorized service boundary; stopped/drained before its keys and writer lease.
+// Reused for enrollment replies and native approvals. Each pass starts after the authorized
+// service boundary and is stopped/drained before its keys and writer leases.
 internal sealed class NativeEnrollmentDeliveryWorker(ServiceExecutionBoundary boundary, ServiceStartupOptions options,
     Func<CancellationToken, Task<bool>> deliver, ServiceExitStatus exitStatus, IHostApplicationLifetime lifetime,
     Func<TimeSpan, CancellationToken, Task>? delay = null) : IHostedService, IDisposable
@@ -20,7 +21,7 @@ internal sealed class NativeEnrollmentDeliveryWorker(ServiceExecutionBoundary bo
         cancellationToken.ThrowIfCancellationRequested();
         boundary.DemandAuthorizedServiceProcess();
         if (options.InitializeAuthoritativeState || options.ImportDeviceRelayProfile) return Task.CompletedTask;
-        if (_run != null) throw new InvalidOperationException("Enrollment delivery already started.");
+        if (_run != null) throw new InvalidOperationException("Relay delivery already started.");
         _run = Task.Run(() => RunAsync(_stop.Token));
         return Task.CompletedTask;
     }

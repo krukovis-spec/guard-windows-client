@@ -118,10 +118,14 @@ namespace Guard.Service
             content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
             using var result = await SendAsync(HttpMethod.Post, "frames", content, 512,
                 cancellationToken, HttpStatusCode.OK, HttpStatusCode.Created).ConfigureAwait(false);
-            RequireObject(result.Document.RootElement, "frameId", "duplicate");
-            if (result.Document.RootElement.GetProperty("frameId").GetString() != item.FrameId ||
-                result.Document.RootElement.GetProperty("duplicate").GetBoolean() != (result.Status == HttpStatusCode.OK))
-                throw new InvalidDataException("Relay publication response does not match the submitted frame.");
+            ReadRemoteResponse(() =>
+            {
+                RequireObject(result.Document.RootElement, "frameId", "duplicate");
+                if (result.Document.RootElement.GetProperty("frameId").GetString() != item.FrameId ||
+                    result.Document.RootElement.GetProperty("duplicate").GetBoolean() != (result.Status == HttpStatusCode.OK))
+                    throw new InvalidDataException("Relay publication response does not match the submitted frame.");
+                return true;
+            });
         }
 
         /// <summary>
@@ -135,7 +139,11 @@ namespace Guard.Service
                 "&limit=" + PageSize.ToString(CultureInfo.InvariantCulture);
             using var result = await SendAsync(HttpMethod.Get, path, null, MaximumPollResponseBytes,
                 cancellationToken, HttpStatusCode.OK).ConfigureAwait(false);
-            var root = result.Document.RootElement;
+            return ReadRemoteResponse(() => ReadInboxPage(result.Document.RootElement, after));
+        }
+
+        private IReadOnlyList<byte[]> ReadInboxPage(JsonElement root, long after)
+        {
             RequireObject(root, "frames", "nextCursor");
             var encodedFrames = root.GetProperty("frames");
             if (encodedFrames.ValueKind != JsonValueKind.Array || encodedFrames.GetArrayLength() > PageSize)
@@ -175,11 +183,14 @@ namespace Guard.Service
             content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
             using var result = await SendAsync(HttpMethod.Post, "ack", content, 512,
                 cancellationToken, HttpStatusCode.OK).ConfigureAwait(false);
-            RequireObject(result.Document.RootElement, "cursor", "duplicate");
-            var hint = result.Document.RootElement.GetProperty("cursor").GetInt64();
-            RequireCursor(hint);
-            if (hint < committedCursor) throw new InvalidDataException("Relay did not acknowledge the committed cursor.");
-            _ = result.Document.RootElement.GetProperty("duplicate").GetBoolean();
+            ReadRemoteResponse(() =>
+            {
+                RequireObject(result.Document.RootElement, "cursor", "duplicate");
+                var hint = result.Document.RootElement.GetProperty("cursor").GetInt64();
+                RequireCursor(hint);
+                if (hint < committedCursor) throw new InvalidDataException("Relay did not acknowledge the committed cursor.");
+                return result.Document.RootElement.GetProperty("duplicate").GetBoolean();
+            });
             // Even a higher relay hint must never be written into authoritative local state.
         }
 
@@ -255,7 +266,17 @@ namespace Guard.Service
             int maximumBytes, CancellationToken cancellationToken, params HttpStatusCode[] expectedStatuses)
         {
             var result = await SendRawAsync(method, path, content, maximumBytes, "application/json", cancellationToken, expectedStatuses).ConfigureAwait(false);
-            return new ResponseDocument(result.Status, JsonDocument.Parse(result.Bytes, new JsonDocumentOptions { MaxDepth = 4 }));
+            return new ResponseDocument(result.Status,
+                ReadRemoteResponse(() => JsonDocument.Parse(result.Bytes, new JsonDocumentOptions { MaxDepth = 4 })));
+        }
+
+        // Only untrusted response parsing belongs here; never wrap store reads, profile checks or durable commits.
+        private static T ReadRemoteResponse<T>(Func<T> read)
+        {
+            try { return read(); }
+            catch (Exception e) when (e is InvalidDataException or JsonException or ArgumentException or FormatException or
+                OverflowException || e is InvalidOperationException and not ObjectDisposedException)
+            { throw new HttpRequestException("Relay returned an invalid response."); }
         }
 
         private async Task<(HttpStatusCode Status, byte[] Bytes)> SendRawAsync(HttpMethod method, string path, HttpContent? content,
@@ -273,12 +294,12 @@ namespace Guard.Service
             if (response.StatusCode == HttpStatusCode.NoContent)
             {
                 if (response.Content.Headers.ContentLength > 0 || response.Content.Headers.ContentEncoding.Count != 0)
-                    throw new InvalidDataException("Unexpected enrollment response body.");
+                    throw new HttpRequestException("Unexpected relay response body.");
                 return (response.StatusCode, Array.Empty<byte>());
             }
             if (response.Content.Headers.ContentType?.MediaType != mediaType ||
                 response.Content.Headers.ContentEncoding.Count != 0 || response.Content.Headers.ContentLength > maximumBytes)
-                throw new InvalidDataException("Invalid relay response headers or size.");
+                throw new HttpRequestException("Invalid relay response headers or size.");
             try
             {
                 await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);

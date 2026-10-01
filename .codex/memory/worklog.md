@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — native approval delivery wired into the service
+
+- Added one bounded HTTP pass over the existing authoritative stores and crypto pipeline: drain exact committed bytes, retry durable ack, poll/verify/commit one approval, publish stored receipt, ack durable input. Guarded exact-first-item delivery ack reuses owner → relay CAS and post-flush profile/time/ACL checks. Production reuses existing hosted worker, skips bootstrap/import/unconfirmed owner and drains before key release; no HTTP under writer locks or new dependencies.
+- Fresh Release/29 v2/45 legacy PASS; final focused Crypto PASS after exact-head ack regression additions. Reused actual synthetic-attestation owner, temporary CurrentUser DPAPI and controlled HTTP for lost request/receipt/ack responses, restart, owner change during POST, expired profile during poll, corrupt/replayed payloads, malicious high/low hints and cancellation. Self-review separated remote/pure-preparation refusal (bounded retry, no cursor advance) from local state/profile/ACL failure (fatal); local-corruption classification is tested. Unchanged Android/Worker/interop not rerun, no live host/VM/phone/cloud action.
+- PROJECT_ONLY via wiki-memory/project-memory; capsule/plan/protocol updated, connection journal unchanged. Pending receipt is not Applied. Remaining: trusted observations, new-cursor duplicates/poison/gap/expired-outbox recovery and actual enforcement/terminal receipt; M1/admin/TTL/live phone gates and Codex-like M7 remain open. Persistent bad input currently blocks delivery safely rather than being skipped.
+
 ## 2026-10-01 — service-owned relay storage lifetime
 
 - Existing authoritative boundary now owns both writers and validates relay ACL paths, separate DPAPI purposes, device/epoch/history binding before IPC. Failed second acquisition/post-open guard releases resources; keys survive store drain. Explicit bootstrap persists identity → initial relay → owner and resumes only exact initial queue/journal without owner artifacts. Ordinary restart refuses missing/corrupt/mismatched history; missing keys with relay artifacts cannot regenerate.
