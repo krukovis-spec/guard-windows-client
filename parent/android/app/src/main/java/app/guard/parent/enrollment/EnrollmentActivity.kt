@@ -25,7 +25,10 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.withResumed
 import app.guard.parent.BuildConfig
 import app.guard.parent.R
+import app.guard.parent.approval.NativeInboxPageCodec
+import app.guard.parent.approval.requestDisplayText
 import app.guard.parent.protocol.EnrollmentOffer
+import app.guard.parent.protocol.TargetKind
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -202,6 +205,7 @@ class EnrollmentActivity : FragmentActivity() {
         }
         if (stage == EnrollmentStage.BIOMETRIC) button(R.string.enrollment_sign) { authenticate(state.offer) }
         if (stage == EnrollmentStage.CONFIRMED) button(R.string.native_profile_open) { showNativeProfile(state.offer) }
+        if (stage == EnrollmentStage.CONFIRMED) button(R.string.native_inbox_open) { showRequests(state.offer) }
         if (stage.canSynchronize) button(R.string.enrollment_update) { showOffer(state.offer) }
         if (!state.abandoned && stage != EnrollmentStage.CONFIRMED) button(R.string.enrollment_stop) {
             AlertDialog.Builder(this).setMessage(R.string.enrollment_stop_warning)
@@ -219,6 +223,31 @@ class EnrollmentActivity : FragmentActivity() {
 
     private fun showNativeProfile(offer: EnrollmentOffer) = work(R.string.native_profile_loading,
         failure = R.string.native_profile_failed) { renderNativeProfile(offer) }
+
+    private fun showRequests(offer: EnrollmentOffer, after: Long = 0): Unit = work(R.string.native_inbox_loading,
+        success = R.string.native_inbox_loaded, failure = R.string.native_inbox_failed) {
+        // Clear old evidence before a new read; a failed refresh must not leave a stale request looking current.
+        content.removeAllViews(); device(offer); label(R.string.native_inbox_unverified)
+        button(R.string.native_inbox_refresh) { showRequests(offer) }
+        button(R.string.native_profile_back) { showOffer(offer) }
+        val page = withContext(Dispatchers.IO) { ceremony.openNativeInbox(offer).use { it.read(after) } }
+        content.removeAllViews(); device(offer); label(R.string.native_inbox_title, 22f)
+        label(R.string.native_inbox_scope)
+        if (page.requests.isEmpty()) label(R.string.native_inbox_empty_page)
+        for (request in page.requests) {
+            label(if (request.targetKind == TargetKind.APPLICATION) R.string.native_inbox_application else R.string.native_inbox_website, 20f)
+            text(getString(R.string.native_inbox_identity, requestDisplayText(request.targetIdentity)))
+            text(getString(R.string.native_inbox_request_id, request.requestId, request.requestRevision))
+            for (field in request.evidence) text(getString(R.string.native_inbox_evidence,
+                requestDisplayText(field.name), requestDisplayText(field.value)))
+            if (request.reason.isNotEmpty()) text(getString(R.string.native_inbox_reason, requestDisplayText(request.reason)))
+            text(getString(R.string.native_inbox_expiry, DateFormat.getDateTimeInstance().format(Date(request.pendingExpiryUnixMillis))))
+        }
+        if (page.frameCount == NativeInboxPageCodec.PAGE_SIZE)
+            button(R.string.native_inbox_next) { showRequests(offer, page.nextCursor) }
+        button(R.string.native_inbox_refresh) { showRequests(offer) }
+        button(R.string.native_profile_back) { showOffer(offer) }
+    }
 
     private suspend fun renderNativeProfile(offer: EnrollmentOffer) {
         val expiry = withContext(Dispatchers.IO) { ceremony.openNativeProfile(offer)?.use { it.expiryUnixMillis } }

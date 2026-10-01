@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Guard — родитель</string>
-    <string name="waiting_for_request">Guard: ожидание проверенного запроса</string>
-    <string name="development_notice">Версия для разработки. Привязка открывается отдельно. Разрешения для приложений и сайтов с этого экрана пока не выдаются.</string>
+    <string name="waiting_for_request">Guard — родитель</string>
+    <string name="development_notice">Версия для разработки. Откройте привязанный компьютер, чтобы настроить обмен и прочитать проверенные запросы. Выдача разрешений пока не подключена.</string>
     <string name="invalid_locator">Ссылка на запрос недействительна.</string>
     <string name="locator_received">Ссылка получена, но сам запрос ещё не проверен. Разрешение не выдано.</string>
     <string name="enrollment_open">Привязка компьютера</string>
@@ -65,4 +65,21 @@
     <string name="native_profile_scope">Это не проверка связи с сервером или текущих прав телефона. Сохранённый профиль не означает, что защита включена, и не разрешает запуск приложений.</string>
     <string name="native_profile_check">Проверить сохранённый профиль</string>
     <string name="native_profile_back">К привязке компьютера</string>
+    <string name="native_inbox_open">Посмотреть запросы компьютера</string>
+    <string name="native_inbox_title">Полученные запросы</string>
+    <string name="native_inbox_loading">Получаем и проверяем сообщения компьютера…</string>
+    <string name="native_inbox_unverified">Запросы появятся после проверки подписи компьютера.</string>
+    <string name="native_inbox_scope">Пока доступен только просмотр. Подписи проверены, но запрос мог уже измениться на компьютере. Название и комментарий могли быть введены ребёнком — проверяйте полный идентификатор. Получение запроса не даёт разрешения и не подтверждает работу защиты.</string>
+    <string name="native_inbox_loaded">Проверка этой порции сообщений завершена. Разрешения не выдавались.</string>
+    <string name="native_inbox_failed">Не удалось проверить сообщения. Проверьте интернет, дату телефона и сохранённый профиль в разделе «Настроить обмен с компьютером», затем повторите. Ключи не сброшены, разрешения не выдавались.</string>
+    <string name="native_inbox_empty_page">В этой порции нет запросов для отображения. Это не означает, что всё разрешено или защита включена.</string>
+    <string name="native_inbox_refresh">Проверить с начала</string>
+    <string name="native_inbox_next">Следующая порция сообщений</string>
+    <string name="native_inbox_application">Запрос приложения</string>
+    <string name="native_inbox_website">Запрос сайта</string>
+    <string name="native_inbox_identity">Полный идентификатор: %1$s</string>
+    <string name="native_inbox_request_id">Запрос: %1$s · версия %2$d</string>
+    <string name="native_inbox_evidence">Данные компьютера — %1$s: %2$s</string>
+    <string name="native_inbox_reason">Комментарий к запросу: %1$s</string>
+    <string name="native_inbox_expiry">Указанный срок запроса: до %1$s</string>
 </resources>

@@ -2,6 +2,7 @@ package app.guard.parent.enrollment
 
 import android.content.Context
 import app.guard.parent.BuildConfig
+import app.guard.parent.approval.NativeRequestInbox
 import app.guard.parent.protocol.*
 import app.guard.parent.security.AndroidApprovalKeyStore
 import app.guard.parent.security.AndroidRelayEncryptionKey
@@ -102,6 +103,17 @@ class AndroidEnrollmentCeremony(context: Context) {
     fun openNativeProfile(offer: EnrollmentOffer): NativeRelayProfile? {
         val state = nativeProfileOwner(offer)
         return nativeProfiles.open(offer, requireNotNull(state.claim), AndroidRelayEncryptionKey.openExisting(state.encryptionAlias))
+    }
+
+    /** No locator or caller-supplied endpoint/key. Keep this session only for one explicit bounded foreground read. */
+    internal fun openNativeInbox(offer: EnrollmentOffer): NativeRequestInbox {
+        val state = nativeProfileOwner(offer)
+        val claim = requireNotNull(state.claim)
+        val key = AndroidRelayEncryptionKey.openExisting(state.encryptionAlias)
+        val profile = requireNotNull(nativeProfiles.open(offer, claim, key)) { "native profile required" }
+        try {
+            return NativeRequestInbox(offer, claim, key, profile, { nativeProfileOwner(offer); Unit })
+        } catch (error: Exception) { profile.close(); throw error }
     }
 
     private fun nativeProfileOwner(offer: EnrollmentOffer): PendingEnrollment {
