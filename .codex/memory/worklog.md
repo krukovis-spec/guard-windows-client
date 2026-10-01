@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — deliver committed enrollment without an open setup window
+
+- Reused the existing native handler/coordinator/store/relay for service-owned polling of confirmed results only. Added one hosted worker, no queue/table/framework/dependency. Startup is after authorized boundary, no one-time bootstrap/import networking; sequential stop cancels/drains before writer/key release. Pending ceremonies cannot be advanced or confirmed by this worker.
+- Safe checks exercise real temporary protected state, synthetic attested phone/device keys, a reconstructed handler, signed encrypted confirmed response, lost reply acknowledgment→poll, no owner/version change, busy foreground exclusion, before/after/during retention boundary, bounded retry/reset and cancellation drain. Shared HTTP body disconnects become sanitized network failures; integrity/storage faults remain fatal, not successful offline delivery.
+- Focused service and crypto checks + fresh complete Release/29 v2/45 legacy PASS; self-review/diff/UTF-8 checked before push. No Guard/policy/SCM/cloud/VM/phone action, real installed-service restart not proven. PROJECT_ONLY via wiki-memory/project-memory: capsule/plan/protocol record the integration and remaining acceptance. Ponytail reused the existing serializer, endpoint and authoritative transaction, adding only lifecycle ownership.
+
 ## 2026-10-01 — connect existing SCM observation to production readiness
 
 - Replaced the production always-Unknown service query with the already implemented query-only Windows adapter; removed the stub. No new probe framework/dependency (Ponytail reuse). Existing SYSTEM execution, IPC authentication and policy-bearing-state refusal remain unchanged.

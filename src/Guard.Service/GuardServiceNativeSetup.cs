@@ -23,6 +23,30 @@ internal sealed partial class GuardServiceIpcOperationHandler
     private NativeEnrollmentStart? _nativeStart;
     private string? _nativeStartId;
 
+    // Service-owned delivery only: no capability, provisioning, candidate staging or local confirmation.
+    internal async Task<bool> DeliverConfirmedEnrollmentAsync(CancellationToken token)
+    {
+        if (_stateStore is not ServiceAuthoritativeStateBoundary boundary)
+            throw new InvalidOperationException("Authoritative service boundary required.");
+        // An active setup action owns this gate. Background polling must not queue ahead of the UI.
+        if (!await _nativeSetupGate.WaitAsync(0, token).ConfigureAwait(false)) return false;
+        try
+        {
+            var state = await boundary.LoadAsync(token).ConfigureAwait(false);
+            if (!state.IsProvisioned || state.Enrollment is not { Confirmed: true, Candidate: not null } session ||
+                _clock.UtcNow < session.Offer.CreatedAtUtc || _clock.UtcNow >= session.Offer.ExpiresAtUtc.AddDays(1))
+                return false;
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+            budget.CancelAfter(TimeSpan.FromSeconds(25));
+            var runtime = await OpenNativeAsync(boundary, budget.Token).ConfigureAwait(false);
+            try { return await runtime.Relay.ProcessNextAsync(budget.Token, confirmedOnly: true).ConfigureAwait(false); }
+            catch (InvalidDataException) when (_clock.UtcNow < session.Offer.CreatedAtUtc ||
+                _clock.UtcNow >= session.Offer.ExpiresAtUtc.AddDays(1))
+            { return false; } // Retention can end while an HTTP poll is in flight; no reply is published.
+        }
+        finally { _nativeSetupGate.Release(); }
+    }
+
     private async Task<GuardIpcResponse> NativeSetupAsync(ClientRole role, GuardIpcRequest request, CancellationToken token)
     {
         if (role != ClientRole.AdminSetup) return Response(request, GuardIpcResponseStatus.Forbidden);

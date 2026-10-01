@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -370,6 +371,8 @@ internal static class EnrollmentConfigurationChecks
         var runtime = new ServiceNativeEnrollment(new GoogleAndroidAttestationSource(), transport, coordinator,
             new NativeEnrollmentRelay(boundary.NativeEnrollmentStore, exchange, transport, new Clock()), config, trust, boundary.Identity);
         using var handler = Handler(boundary, trust, _ => Task.FromResult(runtime));
+        Check(!await handler.DeliverConfirmedEnrollmentAsync(default) && network.Calls == 0,
+            "background delivery polled/provisioned an unconfirmed phone");
         var dispatcher = new SecureIpcRequestDispatcher(handler);
         var capability = start.GetConfirmationSecretCopy();
         try
@@ -409,6 +412,61 @@ internal static class EnrollmentConfigurationChecks
             Check((await Send(GuardVerb.CancelNativeSetup, new { version = 1, confirmationSecret = secret,
                 expectedVersion = owner.Version })).Status == GuardIpcResponseStatus.Forbidden &&
                 (await boundary.LoadAsync(default)).Version == owner.Version, "cancel removed confirmed owner");
+
+            network.Fail = false;
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            network.BeforePoll = async token => { entered.TrySetResult(true); await release.Task.WaitAsync(token); };
+            var foreground = Send(GuardVerb.GetNativeSetupResult, new { version = 1, enrollmentId = offer.EnrollmentId,
+                claimHash = Convert.ToHexStringLower(hash) });
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var calls = network.Calls;
+                Check(!await handler.DeliverConfirmedEnrollmentAsync(default) && network.Calls == calls,
+                    "background delivery queued over the originating setup action");
+            }
+            finally { release.TrySetResult(true); await foreground; network.BeforePoll = null; }
+
+            // A new handler has no originating window/capability/runtime; reconstruct from durable owner + keys.
+            var backgroundNetwork = new EnrollmentSetupHttp();
+            var backgroundClock = new Clock();
+            using var resumed = Handler(boundary, trust, async token => ServiceNativeEnrollment.Create(boundary.NativeEnrollmentStore,
+                boundary.Identity, await boundary.LoadAsync(token), config, trust, backgroundClock, backgroundNetwork), backgroundClock);
+            var query = EnrollmentExchange.Seal(EnrollmentExchange.Header(EnrollmentExchange.Query,
+                RelayCanonicalEncoding.ComputeEnrollmentOfferHash(offer), hash, RandomNumberGenerator.GetBytes(32)),
+                Array.Empty<byte>(), offer.GetEncryptionKeyCopy());
+            backgroundNetwork.Pending = query; backgroundNetwork.LoseReply = true;
+            try { await resumed.DeliverConfirmedEnrollmentAsync(default); throw new InvalidOperationException("Expected lost reply."); }
+            catch (HttpRequestException) { }
+            Check(backgroundNetwork.Reply != null && backgroundNetwork.Pending == null, "confirmed reply was not published before lost acknowledgment");
+            NativeEnrollmentExchange.RequireReplyBinding(backgroundNetwork.Reply!, query, offer);
+            var message = EnrollmentExchange.Decode(backgroundNetwork.Reply!);
+            var plaintext = EnrollmentExchange.Open(message, phoneEncryption);
+            try
+            {
+                Check(BinaryPrimitives.ReadInt32BigEndian(plaintext.AsSpan(8, 4)) == EnrollmentExchange.Confirmed &&
+                    boundary.Identity.Signing.VerifyData(EnrollmentExchange.SignatureInput(message.Header, plaintext[..^64]),
+                        plaintext[^64..], HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation),
+                    "background response did not prove committed owner to the exact phone");
+            }
+            finally { CryptographicOperations.ZeroMemory(plaintext); }
+            var savedReply = backgroundNetwork.Reply;
+            Check(!await resumed.DeliverConfirmedEnrollmentAsync(default) && ReferenceEquals(savedReply, backgroundNetwork.Reply),
+                "retry blindly republished a confirmed nonce instead of polling");
+            foreach (var unavailableAt in new[] { offer.CreatedAtUtc.AddMilliseconds(-1), offer.ExpiresAtUtc.AddDays(1) })
+            {
+                backgroundClock.NowValue = unavailableAt;
+                var calls = backgroundNetwork.Calls;
+                Check(!await resumed.DeliverConfirmedEnrollmentAsync(default) && backgroundNetwork.Calls == calls,
+                    "clock rollback/retention expiry reached background network");
+            }
+            backgroundClock.NowValue = offer.ExpiresAtUtc.AddDays(1).AddMilliseconds(-1);
+            backgroundNetwork.BeforePoll = _ => { backgroundClock.NowValue = offer.ExpiresAtUtc.AddDays(1); return Task.CompletedTask; };
+            Check(!await resumed.DeliverConfirmedEnrollmentAsync(default) && ReferenceEquals(savedReply, backgroundNetwork.Reply),
+                "retention crossing during HTTP was fatal or published a late result");
+            Check((await boundary.LoadAsync(default)).Version == owner.Version,
+                "background delivery mutated owner or policy state");
         }
         finally { CryptographicOperations.ZeroMemory(capability); }
     }
@@ -417,13 +475,31 @@ internal static class EnrollmentConfigurationChecks
     {
         internal bool Fail;
         internal int Calls;
+        internal byte[]? Pending;
+        internal byte[]? Reply;
+        internal bool LoseReply;
+        internal Func<CancellationToken, Task>? BeforePoll;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             Calls++;
             Check(request.RequestUri!.Host == "relay.example.test" && request.Headers.Authorization?.Parameter == Credential,
                 "native setup used unexpected endpoint or credentials");
             if (Fail) return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
-            if (request.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NoContent);
+            if (request.Method == HttpMethod.Get)
+            {
+                if (BeforePoll != null) await BeforePoll(token);
+                if (Pending == null) return new HttpResponseMessage(HttpStatusCode.NoContent);
+                var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Pending) };
+                response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                return response;
+            }
+            if (request.RequestUri.AbsolutePath.EndsWith("/replies", StringComparison.Ordinal))
+            {
+                Check(Pending != null, "blind background publication");
+                Reply = await request.Content!.ReadAsByteArrayAsync(token); Pending = null;
+                if (LoseReply) { LoseReply = false; throw new HttpRequestException("Synthetic lost reply acknowledgment."); }
+                return new HttpResponseMessage(HttpStatusCode.Created) { Content = new StringContent("{\"duplicate\":false}", Encoding.UTF8, "application/json") };
+            }
             using var body = JsonDocument.Parse(await request.Content!.ReadAsByteArrayAsync(token));
             var expiry = body.RootElement.GetProperty("expiresAt").GetInt64();
             return new HttpResponseMessage(HttpStatusCode.Created) { Content = new StringContent(
@@ -433,11 +509,11 @@ internal static class EnrollmentConfigurationChecks
 
     private sealed class TestGuard : IServiceDataBoundaryGuard { internal Action Check = () => { }; public void DemandReady() => Check(); }
     private static GuardServiceIpcOperationHandler Handler(ServiceAuthoritativeStateBoundary boundary, EnrollmentDeploymentTrust? trust,
-        Func<CancellationToken, Task<ServiceNativeEnrollment>>? open = null)
+        Func<CancellationToken, Task<ServiceNativeEnrollment>>? open = null, IServiceUtcClock? clock = null)
     {
         var unused = new UnusedSetupDependencies();
         return new GuardServiceIpcOperationHandler(boundary,
-            new ChildAccountBindingCoordinator(boundary, unused), new GuardReadinessCoordinator(boundary, unused), unused, trust,
+            new ChildAccountBindingCoordinator(boundary, unused), new GuardReadinessCoordinator(boundary, unused), clock ?? unused, trust,
             openNativeEnrollment: open);
     }
     private sealed class UnusedSetupDependencies : IManagedChildAccountValidator, IDeviceReadinessFactsProvider, IServiceUtcClock
@@ -447,7 +523,12 @@ internal static class EnrollmentConfigurationChecks
         public ReadinessProbeFacts Probe(DeviceSecurityState state, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("Export must not probe/change platform readiness.");
     }
-    private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
+    private sealed class Clock : TimeProvider, IServiceUtcClock
+    {
+        internal DateTimeOffset NowValue = Now;
+        public DateTimeOffset UtcNow => NowValue;
+        public override DateTimeOffset GetUtcNow() => NowValue;
+    }
     private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
     private static void Throws(Action action)
     { try { action(); } catch (Exception e) when (e is ArgumentException or InvalidDataException or InvalidOperationException or JsonException or CryptographicException or IOException) { return; }

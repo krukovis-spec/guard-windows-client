@@ -30,6 +30,10 @@ namespace Guard.Service
             builder.Services.AddSingleton<IServiceProcessContext, WindowsServiceProcessContext>();
             AddProductionBoundary(builder.Services);
             AddServiceBoundary(builder.Services);
+            builder.Services.AddSingleton<IHostedService>(provider => new NativeEnrollmentDeliveryWorker(
+                provider.GetRequiredService<ServiceExecutionBoundary>(), startupOptions,
+                ((GuardServiceIpcOperationHandler)provider.GetRequiredService<IGuardIpcOperationHandler>()).DeliverConfirmedEnrollmentAsync,
+                provider.GetRequiredService<ServiceExitStatus>(), provider.GetRequiredService<IHostApplicationLifetime>()));
             return builder.Build();
         }
 
@@ -52,6 +56,8 @@ namespace Guard.Service
             services.Configure<HostOptions>(options =>
             {
                 options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost;
+                options.ServicesStartConcurrently = false;
+                options.ServicesStopConcurrently = false;
             });
             services.AddSingleton<ServiceExecutionBoundary>();
             services.AddSingleton<ServiceExitStatus>();

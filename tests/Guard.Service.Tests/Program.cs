@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
 using System.Security;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +13,7 @@ using Guard.Domain;
 using Guard.Windows.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Guard.Service.Tests
 {
@@ -33,6 +37,7 @@ namespace Guard.Service.Tests
                 ("exposes only role-fixed pipe endpoints with exact SIDs", BuildsRestrictedPipeCatalogAsync),
                 ("registers the Windows service worker", RegistersWindowsServiceWorkerAsync),
                 ("composes one lazy authoritative production boundary", ComposesLazyProductionBoundaryAsync),
+                ("bounds background enrollment delivery and drains before shutdown", ChecksNativeDeliveryLifecycleAsync),
                 ("refuses policy-bearing state before enforcement exists", RejectsPolicyStateWithoutEnforcementAsync),
                 ("parses only the explicit one-time bootstrap argument", BootstrapAndIpcChecks.ParsesExplicitBootstrapArgumentAsync),
                 ("rejects bootstrap outside the service execution boundary", BootstrapAndIpcChecks.RejectsBootstrapOutsideServiceBoundaryAsync),
@@ -268,6 +273,12 @@ namespace Guard.Service.Tests
                 }
 
                 Assert(found, "Guard service worker was not registered.");
+                var ordered = workers.ToArray();
+                Assert(ordered[^2] is GuardServiceWorker && ordered[^1] is NativeEnrollmentDeliveryWorker,
+                    "Delivery must start after, and stop before, the authoritative boundary.");
+                var options = host.Services.GetRequiredService<IOptions<HostOptions>>().Value;
+                Assert(!options.ServicesStartConcurrently && !options.ServicesStopConcurrently,
+                    "Concurrent hosted lifecycle could release keys while delivery is running.");
             }
 
             return Task.CompletedTask;
@@ -297,6 +308,68 @@ namespace Guard.Service.Tests
             }
 
             return Task.CompletedTask;
+        }
+
+        private static async Task ChecksNativeDeliveryLifecycleAsync()
+        {
+            var calls = 0;
+            Task<bool> NeverCalled(CancellationToken _) { calls++; throw new InvalidOperationException("Unexpected delivery."); }
+            foreach (var context in new[] { new FakeProcessContext(false, true), new FakeProcessContext(true, false) })
+            {
+                using var refused = new NativeEnrollmentDeliveryWorker(new ServiceExecutionBoundary(context),
+                    ServiceStartupOptions.Normal, NeverCalled, new ServiceExitStatus(), new FakeApplicationLifetime());
+                await AssertThrowsAsync<SecurityException>(() => refused.StartAsync(default));
+            }
+            var authorized = new ServiceExecutionBoundary(new FakeProcessContext(true, true));
+            foreach (var argument in new[] { ServiceStartupOptions.InitializeAuthoritativeStateArgument, ServiceStartupOptions.ImportDeviceRelayProfileArgument })
+            {
+                using var oneTime = new NativeEnrollmentDeliveryWorker(authorized,
+                    ServiceStartupOptions.Parse(new[] { argument }, out _), NeverCalled, new ServiceExitStatus(), new FakeApplicationLifetime());
+                await oneTime.StartAsync(default);
+                await oneTime.StopAsync(default);
+            }
+            Assert(calls == 0, "Unauthorized or one-time startup reached background delivery.");
+
+            var delays = new List<double>();
+            var lifetime = new FakeApplicationLifetime();
+            var status = new ServiceExitStatus();
+            using (var worker = new NativeEnrollmentDeliveryWorker(authorized, ServiceStartupOptions.Normal, _ => {
+                calls++;
+                if (calls <= 6) throw new HttpRequestException("Synthetic network loss.");
+                if (calls == 7) return Task.FromResult(false);
+                if (calls == 8) return Task.FromResult(true);
+                if (calls == 9) throw new OperationCanceledException("Synthetic pass timeout.");
+                throw new InvalidDataException("Synthetic integrity failure.");
+            }, status, lifetime, (wait, _) => { delays.Add(wait.TotalSeconds); return Task.CompletedTask; }))
+            {
+                await worker.StartAsync(default);
+                await lifetime.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await worker.StopAsync(default);
+                Assert(delays.SequenceEqual(new double[] { 2, 4, 8, 16, 30, 30, 10, 2, 2 }) && calls == 10,
+                    "Delivery retry cap, idle cadence, recovery reset or fatal stop changed.");
+                Assert(status.ExitCode == ServiceExitStatus.FatalRuntimeFailure, "Integrity failure became background success.");
+            }
+
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var stopStatus = new ServiceExitStatus();
+            using var draining = new NativeEnrollmentDeliveryWorker(authorized, ServiceStartupOptions.Normal, async token => {
+                entered.TrySetResult(true);
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+                catch (OperationCanceledException) { cancelled.TrySetResult(true); await release.Task; throw; }
+                return false;
+            }, stopStatus, new FakeApplicationLifetime());
+            await draining.StartAsync(default);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var stopping = draining.StopAsync(new CancellationToken(true));
+            try
+            {
+                await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert(!stopping.IsCompleted, "Shutdown abandoned an in-flight pass before writer/key release.");
+            }
+            finally { release.TrySetResult(true); await stopping.WaitAsync(TimeSpan.FromSeconds(5)); }
+            Assert(stopStatus.ExitCode == ServiceExitStatus.Success, "Normal cancellation triggered fatal recovery.");
         }
 
         private static async Task RejectsPolicyStateWithoutEnforcementAsync()

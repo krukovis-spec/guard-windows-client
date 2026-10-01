@@ -15,7 +15,7 @@ internal sealed class NativeEnrollmentRelay(FileAuthoritativeStateStore store, N
     HttpRelayTransport transport, TimeProvider? clock = null) : IDisposable
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
-    // ponytail: one service-owned ceremony; serialize button/retry calls, no additional queue or scheduler.
+    // ponytail: one service-owned ceremony; serialize foreground/background passes, no additional queue.
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     // UI retains NativeEnrollmentStart; show its QR only after this succeeds. HTTP failure never resets setup.
@@ -40,26 +40,26 @@ internal sealed class NativeEnrollmentRelay(FileAuthoritativeStateStore store, N
     }
 
     /// <returns>True if one message was answered/rejected; false for an empty queue. Neither means owner/Applied.</returns>
-    public async Task<bool> ProcessNextAsync(CancellationToken cancellationToken)
+    public async Task<bool> ProcessNextAsync(CancellationToken cancellationToken, bool confirmedOnly = false)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var before = await store.LoadAsync(cancellationToken).ConfigureAwait(false);
-            RequireCurrent(before, confirmedAllowed: true);
+            RequireCurrent(before, confirmedAllowed: true, confirmedOnly);
             var offer = before.Enrollment!.Offer;
             var request = await transport.PollEnrollmentAsync(offer, cancellationToken).ConfigureAwait(false);
-            RequireSameOffer(before, await store.LoadAsync(cancellationToken).ConfigureAwait(false), confirmedAllowed: true);
+            RequireSameOffer(before, await store.LoadAsync(cancellationToken).ConfigureAwait(false), confirmedAllowed: true, confirmedOnly);
             if (request == null) return false;
             byte[] reply;
             try { reply = await exchange.HandleAsync(request, cancellationToken).ConfigureAwait(false); }
             catch (EnrollmentRequestRejectedException)
             {
-                RequireSameOffer(before, await store.LoadAsync(cancellationToken).ConfigureAwait(false), confirmedAllowed: true);
+                RequireSameOffer(before, await store.LoadAsync(cancellationToken).ConfigureAwait(false), confirmedAllowed: true, confirmedOnly);
                 await transport.RejectEnrollmentRequestAsync(offer, request, cancellationToken).ConfigureAwait(false);
                 return true;
             }
-            RequireSameOffer(before, await store.LoadAsync(cancellationToken).ConfigureAwait(false), confirmedAllowed: true);
+            RequireSameOffer(before, await store.LoadAsync(cancellationToken).ConfigureAwait(false), confirmedAllowed: true, confirmedOnly);
             await transport.PublishEnrollmentReplyAsync(offer, request, reply, cancellationToken).ConfigureAwait(false);
             // After a lost POST response/restart, POLL again: the relay excludes already answered requests.
             // No new ciphertext is blindly retried against an already committed nonce.
@@ -68,19 +68,19 @@ internal sealed class NativeEnrollmentRelay(FileAuthoritativeStateStore store, N
         finally { _gate.Release(); }
     }
 
-    private void RequireCurrent(DeviceSecurityState state, bool confirmedAllowed)
+    private void RequireCurrent(DeviceSecurityState state, bool confirmedAllowed, bool confirmedOnly = false)
     {
         var session = state.Enrollment ?? throw new InvalidDataException("No native enrollment.");
         var now = _clock.GetUtcNow();
-        if (now < session.Offer.CreatedAtUtc || now >= session.Offer.ExpiresAtUtc.AddDays(1) ||
+        if ((confirmedOnly && !session.Confirmed) || now < session.Offer.CreatedAtUtc || now >= session.Offer.ExpiresAtUtc.AddDays(1) ||
             (session.Confirmed ? !confirmedAllowed || !state.IsProvisioned :
                 state.IsProvisioned || state.SetupChallenge?.IsActive(now) != true || now >= session.Offer.ExpiresAtUtc))
             throw new InvalidDataException("Enrollment is unavailable for relay exchange.");
     }
 
-    private void RequireSameOffer(DeviceSecurityState before, DeviceSecurityState after, bool confirmedAllowed)
+    private void RequireSameOffer(DeviceSecurityState before, DeviceSecurityState after, bool confirmedAllowed, bool confirmedOnly = false)
     {
-        RequireCurrent(after, confirmedAllowed);
+        RequireCurrent(after, confirmedAllowed, confirmedOnly);
         if (!RelayCanonicalEncoding.EncodeEnrollmentOffer(before.Enrollment!.Offer).AsSpan().SequenceEqual(
             RelayCanonicalEncoding.EncodeEnrollmentOffer(after.Enrollment!.Offer)) ||
             (!before.Enrollment.Confirmed && !after.Enrollment.Confirmed &&
