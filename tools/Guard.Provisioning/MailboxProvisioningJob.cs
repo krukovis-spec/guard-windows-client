@@ -67,13 +67,13 @@ internal sealed class MailboxProvisioningJob
         return ProvisioningJob.PublishAsync(origin, deviceJobPath, outputPath, job._credential, now, cancellationToken, handler, job._mailbox);
     }
 
-    internal static Task ActivateNativeAsync(string origin, string deviceJobPath, string activationJobPath, string currentProofPath,
-        string mailboxJobPath, CancellationToken cancellationToken, TimeProvider? clock = null, HttpMessageHandler? handler = null)
+    internal static Task<string?> ActivateNativeAsync(string origin, string deviceJobPath, string activationJobPath, string currentProofPath,
+        string mailboxJobPath, CancellationToken cancellationToken, TimeProvider? clock = null, HttpMessageHandler? handler = null, string? outputPath = null)
     {
         clock ??= TimeProvider.System;
         cancellationToken.ThrowIfCancellationRequested();
         var job = Load(origin, mailboxJobPath, clock.GetUtcNow());
         return ProvisioningJob.ActivateNativeAsync(origin, deviceJobPath, activationJobPath, currentProofPath, job._credential,
-            cancellationToken, clock, handler, job._mailbox);
+            cancellationToken, clock, handler, job._mailbox, outputPath);
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -12,8 +13,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Guard.Contracts.Relay;
 using Guard.Domain;
 using Guard.Provisioning;
+using Guard.Protocol.Relay;
 using Guard.Windows.Cryptography;
 
 namespace Guard.Windows.Crypto.Tests;
@@ -22,7 +25,7 @@ namespace Guard.Windows.Crypto.Tests;
 internal static class NativeActivationJobChecks
 {
     internal static async Task RunAsync(string root, string descriptorPath, string deviceJob, string proofPath,
-        DeviceSecurityState owner, ECDsa signing, DateTimeOffset now)
+        DeviceSecurityState owner, ECDsa signing, ECDiffieHellman phoneEncryption, DateTimeOffset now)
     {
         var origin = owner.Enrollment!.Offer.RelayEndpoint; var mailbox = owner.Enrollment.Offer.MailboxId;
         var clock = new Clock(now); var job = Path.Combine(root, "activation.job"); var mailboxJob = Path.Combine(root, "mailbox.job");
@@ -94,6 +97,28 @@ internal static class NativeActivationJobChecks
         clock.Now = now.AddMilliseconds(-1);
         await RejectAsync(() => Activate(noSend));
         clock.Now = now;
+        var original = owner.Enrollment; var offer = original.Offer; var claim = original.Candidate!;
+        DeviceSecurityState Owner(EnrollmentOffer chosenOffer, EnrollmentKeyClaim chosenClaim, long version) => new(owner.DeviceId,
+            version, owner.HighestAcceptedSequence, owner.DesiredPolicyRevision, owner.RecentCommandIds, trustedParentKeys: owner.TrustedParentKeys,
+            childAccountSid: owner.ChildAccountSid, enrollment: new DeviceEnrollmentState(chosenOffer, Array.Empty<byte>(), chosenClaim,
+                original.GetCertificatesCopy(), original.GetSignatureCopy(), original.GetMacCopy(), original.GetEncapsulatedKeyCopy(),
+                original.GetEncryptedChallengeCopy(), Array.Empty<byte>(), phoneKeyConfirmed: true, confirmed: true));
+        var changedOffer = new EnrollmentOffer(offer.RelayEndpoint, offer.EnrollmentId, offer.DeviceId, "Changed device label",
+            offer.DeviceEpoch, offer.AuthorityEpoch, offer.MailboxId, offer.SigningKeyId, offer.GetSigningKeyCopy(), offer.EncryptionKeyId,
+            offer.GetEncryptionKeyCopy(), offer.CreatedAtUtc, offer.ExpiresAtUtc, offer.GetChallengeCopy());
+        var changedOfferClaim = new EnrollmentKeyClaim(RelayCanonicalEncoding.ComputeEnrollmentOfferHash(changedOffer), claim.ApprovalKeyId,
+            claim.GetApprovalKeyCopy(), claim.EncryptionKeyId, claim.GetEncryptionKeyCopy());
+        using var otherEncryption = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+        var changedClaim = new EnrollmentKeyClaim(claim.GetOfferHashCopy(), claim.ApprovalKeyId, claim.GetApprovalKeyCopy(),
+            "other-native-encryption-0001", otherEncryption.ExportSubjectPublicKeyInfo()[26..]);
+        // Deliberately sign altered persisted transcripts with the real fixture device key.
+        // Valid signatures alone must not switch a saved intent to another offer/phone or earlier state.
+        foreach (var altered in new[] { Owner(offer, claim, owner.Version - 1), Owner(changedOffer, changedOfferClaim, owner.Version), Owner(offer, changedClaim, owner.Version) })
+        {
+            var alteredProof = Path.Combine(root, Guid.NewGuid().ToString("N") + ".guard-proof");
+            NativeActivationConfirmation.Create(altered, signing, now).SaveNew(alteredProof, now);
+            await RejectAsync(() => Activate(noSend, currentProof: alteredProof));
+        }
         // Advance time after the last file/intent validation, at the actual HTTP dispatch boundary.
         await RejectAsync(() => Activate(noSend, time: new DispatchClock(now)));
 
@@ -146,6 +171,14 @@ internal static class NativeActivationJobChecks
             {
                 Change(alter); await RejectAsync(() => Activate(noSend));
             }
+            foreach (var invalidToken in new[] { "short", new string('g', 64), JsonNode.Parse(expected)!["deviceAccessToken"]!.GetValue<string>() })
+            {
+                Change(document => {
+                    var body = JsonNode.Parse(expected)!.AsObject(); body["approvalAccessToken"] = invalidToken;
+                    document["body"] = Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(body));
+                });
+                await RejectAsync(() => Activate(noSend));
+            }
         }
         finally { File.WriteAllBytes(job, saved); }
         Check(calls == 2, "rejected activation reached network");
@@ -153,9 +186,34 @@ internal static class NativeActivationJobChecks
         // A fresh signed proof for the SAME owner renews evidence, never the credential/intent/expiry.
         clock.Now = now.AddMinutes(11);
         var freshProof = Path.Combine(root, "fresh.guard-proof");
-        NativeActivationConfirmation.Create(owner, signing, clock.Now).SaveNew(freshProof, clock.Now);
+        NativeActivationConfirmation.Create(Owner(offer, claim, owner.Version + 1), signing, clock.Now).SaveNew(freshProof, clock.Now);
         await Activate(Send, currentProof: freshProof);
         Check(calls == 3 && bodies[^1].SequenceEqual(expected), "fresh proof changed the durable activation intent");
+        var output = Path.Combine(root, "phone.guard-native");
+        var digest = await MailboxProvisioningJob.ActivateNativeAsync(origin, deviceJob, job, freshProof, mailboxJob, default, clock, new Http(Send), output);
+        var envelope = File.ReadAllBytes(output);
+        Check(envelope.Length == NativeRelayProfileEnvelope.FileBytes && digest == Convert.ToHexString(SHA256.HashData(envelope)), "native export commitment/size");
+        var key = phoneEncryption.ExportParameters(true);
+        byte[] Open(byte[] input) => RelayCryptography.Decrypt(key.D!, claim.GetEncryptionKeyCopy(), input[68..133], input[133..], input[..68],
+            Encoding.ASCII.GetBytes("Guard.v2.native-relay.install.hpke.v1").Concat(input[..68]).ToArray());
+        var profile = Open(envelope);
+        try
+        {
+            using var intent = JsonDocument.Parse(expected); var approval = intent.RootElement.GetProperty("approvalAccessToken").GetString()!;
+            Check(profile.Length == 84 && profile.AsSpan(0, 4).SequenceEqual("GNP1"u8) &&
+                BinaryPrimitives.ReadInt64BigEndian(profile.AsSpan(4, 8)) == now.ToUnixTimeMilliseconds() &&
+                BinaryPrimitives.ReadInt64BigEndian(profile.AsSpan(12, 8)) == now.AddDays(3).ToUnixTimeMilliseconds() &&
+                Encoding.ASCII.GetString(profile[20..]) == approval && !Encoding.ASCII.GetString(envelope).Contains(approval) &&
+                !Encoding.ASCII.GetString(profile).Contains(admin) && !Encoding.ASCII.GetString(profile).Contains(intent.RootElement.GetProperty("deviceAccessToken").GetString()!),
+                "native profile contained wrong scope/secret/lifetime");
+            foreach (var at in new[] { 0, 35, 67, 80, 180, envelope.Length - 1 })
+            { var changed = (byte[])envelope.Clone(); changed[at] ^= 1; Reject(() => Open(changed)); }
+        }
+        finally { CryptographicOperations.ZeroMemory(profile); CryptographicOperations.ZeroMemory(key.D!); }
+        await RejectAsync(() => MailboxProvisioningJob.ActivateNativeAsync(origin, deviceJob, job, freshProof, mailboxJob, default, clock, new Http(noSend), output));
+        await RejectAsync(() => MailboxProvisioningJob.ActivateNativeAsync(origin, deviceJob, job, freshProof, mailboxJob, default, clock,
+            new Http((_, _) => throw new HttpRequestException("lost export response")), output + ".failed"));
+        Check(calls == 4 && File.ReadAllBytes(output).SequenceEqual(envelope) && !File.Exists(output + ".failed"), "failed native export wrote or replaced output");
         foreach (var status in new[] { HttpStatusCode.Redirect, HttpStatusCode.NotFound, HttpStatusCode.Conflict, HttpStatusCode.Unauthorized })
             await RejectAsync(() => Activate((_, _) => Task.FromResult(new HttpResponseMessage(status)), currentProof: freshProof));
         foreach (var expiry in new[] { now.AddDays(4), now.AddDays(3).AddMilliseconds(-1) })
@@ -168,6 +226,7 @@ internal static class NativeActivationJobChecks
             "native activation modified existing jobs or created rejected output");
         CryptographicOperations.ZeroMemory(expected);
         foreach (var body in bodies) CryptographicOperations.ZeroMemory(body);
+        Console.WriteLine("PASS native activation operator: durable DPAPI intent, exact HTTP retry, renewed signed proof, scope/lineage/clock/ACL/response rejection; no live relay");
     }
 
     private static HttpResponseMessage Reply(DateTimeOffset expiry) => new(HttpStatusCode.Created) {
@@ -193,6 +252,7 @@ internal static class NativeActivationJobChecks
     }
     private static void Reject(Action action) => RejectAsync(() => { action(); return Task.CompletedTask; }).GetAwaiter().GetResult();
     private static bool Expected(Exception error) => error is ArgumentException or FormatException or InvalidDataException or JsonException
-        or CryptographicException or IOException or UnauthorizedAccessException or HttpRequestException or OperationCanceledException;
+        or CryptographicException or IOException or UnauthorizedAccessException or HttpRequestException or OperationCanceledException
+        or PlatformNotSupportedException { InnerException: CryptographicException };
     private static void Check(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
 }

@@ -20,13 +20,13 @@ class FileApprovalOutbox(private val directory: File) : ApprovalOutbox {
     override fun load(keyId: String): PendingSignedEnvelope? = synchronized(storageLock) { read(keyId).pending }
     override fun nextSequence(keyId: String): Long = synchronized(storageLock) { read(keyId).next }
 
-    override fun save(envelope: PendingSignedEnvelope): Unit = synchronized(storageLock) {
+    override fun save(envelope: PendingSignedEnvelope, beforeCommit: () -> Unit): Unit = synchronized(storageLock) {
         val state = read(envelope.keyId)
         require(envelope.sequence == state.next && envelope.sequence < Long.MAX_VALUE) { "sequence" }
         val decoded = GuardWire.decodeSignedApproval(envelope.exactBytes)
         require(decoded.keyId == envelope.keyId && decoded.sequence == envelope.sequence) { "envelope metadata" }
         require(state.pending == null || state.pending.exactBytes.contentEquals(envelope.exactBytes)) { "pending approval differs" }
-        if (state.pending == null) write(envelope.keyId, State(state.next, envelope))
+        if (state.pending == null) write(envelope.keyId, State(state.next, envelope), beforeCommit) else beforeCommit()
     }
 
     override fun complete(envelope: PendingSignedEnvelope): Unit = synchronized(storageLock) {
@@ -62,7 +62,7 @@ class FileApprovalOutbox(private val directory: File) : ApprovalOutbox {
         }
     }
 
-    private fun write(keyId: String, state: State) {
+    private fun write(keyId: String, state: State, beforeCommit: () -> Unit = {}) {
         val bytes = ByteArrayOutputStream().apply {
             DataOutputStream(this).apply {
                 writeInt(0x474f4231); writeLong(state.next)
@@ -74,6 +74,7 @@ class FileApprovalOutbox(private val directory: File) : ApprovalOutbox {
         val temporary = File.createTempFile("pending-", ".tmp", directory)
         try {
             FileOutputStream(temporary).use { it.write(bytes); it.write(GuardWire.sha256(bytes)); it.fd.sync() }
+            beforeCommit()
             // No non-atomic fallback: a storage failure must not reset the signing sequence.
             Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         } finally { temporary.delete() }

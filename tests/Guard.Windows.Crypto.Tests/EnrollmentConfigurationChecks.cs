@@ -403,7 +403,7 @@ internal static class EnrollmentConfigurationChecks
             var activated = await dispatcher.DispatchAsync(ClientRole.AdminSetup, activationRequest, default);
             Check(activated.Status == GuardIpcResponseStatus.Success && activated.RequestId == activationRequest.RequestId && network.Calls == callsBeforeExport,
                 "confirmed activation export failed or performed unexpected networking");
-            await ActivationConfirmationChecks.RunAsync(activated, activationDescriptor, await boundary.LoadAsync(default), boundary.Identity.Signing, Now);
+            await ActivationConfirmationChecks.RunAsync(activated, activationDescriptor, await boundary.LoadAsync(default), boundary.Identity.Signing, phoneEncryption, Now);
             foreach (var role in Enum.GetValues<ClientRole>().Where(value => value != ClientRole.AdminSetup))
                 Check((await handler.HandleAsync(role, activationRequest, default)).Status == GuardIpcResponseStatus.Forbidden,
                     "non-admin read native activation export");

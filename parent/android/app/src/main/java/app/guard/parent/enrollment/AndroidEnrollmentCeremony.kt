@@ -1,10 +1,18 @@
 package app.guard.parent.enrollment
 
 import android.content.Context
+import app.guard.parent.BuildConfig
+import app.guard.parent.approval.NativeRequestInbox
+import app.guard.parent.approval.ApprovalChoice
+import app.guard.parent.approval.ApprovalSigningOperation
+import app.guard.parent.approval.VerifiedNativeRequest
 import app.guard.parent.protocol.*
 import app.guard.parent.security.AndroidApprovalKeyStore
 import app.guard.parent.security.AndroidRelayEncryptionKey
 import app.guard.parent.security.EcdsaP1363
+import app.guard.parent.security.FileApprovalOutbox
+import app.guard.parent.security.StopAndWaitApprovals
+import app.guard.parent.security.PendingSignedEnvelope
 import java.io.File
 import java.security.Signature
 import java.util.Base64
@@ -33,6 +41,8 @@ class EnrollmentSigningOperation internal constructor(private val store: Pending
 /** Windows alone performs attestation/final owner CAS; this client retains its signed acknowledgment. */
 class AndroidEnrollmentCeremony(context: Context) {
     private val store = PendingEnrollmentStore(File(context.noBackupFilesDir, "enrollment"))
+    private val nativeProfiles = NativeRelayProfileStore(File(context.noBackupFilesDir, "native-transport"))
+    private val approvals = StopAndWaitApprovals(FileApprovalOutbox(File(context.noBackupFilesDir, "approvals")))
     fun listPending() = store.list()
 
     fun prepare(transcript: EnrollmentTranscript): PendingEnrollment {
@@ -85,6 +95,62 @@ class AndroidEnrollmentCeremony(context: Context) {
     fun confirmedEnrollment(offer: EnrollmentOffer): PendingEnrollment? {
         val (state, result) = inspect(offer)
         return if (result?.outcome == EnrollmentExchange.CONFIRMED) state else null
+    }
+
+    /** Caller must get the checksum independently from the trusted off-PC operator, not from the imported file/relay. */
+    fun importNativeProfile(offer: EnrollmentOffer, envelope: ByteArray, independentlyTrustedSha256: String, beforeCommit: () -> Unit = {}) {
+        beforeCommit()
+        val state = nativeProfileOwner(offer)
+        nativeProfiles.install(offer, requireNotNull(state.claim), AndroidRelayEncryptionKey.openExisting(state.encryptionAlias),
+            envelope, independentlyTrustedSha256, beforeCommit)
+        nativeProfileOwner(offer) // Do not report success if local enrollment/keys changed during storage.
+    }
+
+    /** No creation or trust from a profile. Caller owns/clears the short-lived decrypted credential. */
+    fun openNativeProfile(offer: EnrollmentOffer): NativeRelayProfile? {
+        val state = nativeProfileOwner(offer)
+        return nativeProfiles.open(offer, requireNotNull(state.claim), AndroidRelayEncryptionKey.openExisting(state.encryptionAlias))
+    }
+
+    /** No locator or caller-supplied endpoint/key. Keep this session only for one explicit bounded foreground read. */
+    internal fun openNativeInbox(offer: EnrollmentOffer): NativeRequestInbox {
+        val state = nativeProfileOwner(offer)
+        val claim = requireNotNull(state.claim)
+        val key = AndroidRelayEncryptionKey.openExisting(state.encryptionAlias)
+        val profile = requireNotNull(nativeProfiles.open(offer, claim, key)) { "native profile required" }
+        try {
+            return NativeRequestInbox(offer, claim, key, profile, { nativeProfileOwner(offer); Unit })
+        } catch (error: Exception) { profile.close(); throw error }
+    }
+
+    internal fun verifyRequest(offer: EnrollmentOffer, request: VerifiedNativeRequest, now: Long = System.currentTimeMillis()) {
+        val state = nativeProfileOwner(offer)
+        val claim = requireNotNull(state.claim)
+        val key = AndroidRelayEncryptionKey.openExisting(state.encryptionAlias)
+        requireNotNull(nativeProfiles.open(offer, claim, key)).use { it.requireCurrent(now) }
+        request.reverify(RelayRecipient(offer.mailboxId, claim.encryptionKeyId, offer.authorityEpoch, key),
+            RelayDeviceTrust(offer.deviceId, offer.deviceEpoch, offer.authorityEpoch, offer.signingKeyId, offer.signingKey()), now)
+    }
+
+    internal fun startApproval(offer: EnrollmentOffer, request: VerifiedNativeRequest, choice: ApprovalChoice): ApprovalSigningOperation {
+        val state = nativeProfileOwner(offer)
+        val claim = requireNotNull(state.claim)
+        val expiry = requireNotNull(nativeProfiles.open(offer, claim, AndroidRelayEncryptionKey.openExisting(state.encryptionAlias)))
+            .use { it.expiryUnixMillis }
+        return ApprovalSigningOperation(request, claim.approvalKeyId, choice, expiry, approvals,
+            { AndroidApprovalKeyStore(state.approvalAlias).biometricSignature() },
+            { now -> verifyRequest(offer, request, now) })
+    }
+
+    /** Available even after transport expiry: show the exact saved command, never silently reset its sequence. */
+    internal fun pendingApproval(offer: EnrollmentOffer): PendingSignedEnvelope? {
+        val state = nativeProfileOwner(offer)
+        return approvals.getPending(requireNotNull(state.claim).approvalKeyId)
+    }
+
+    private fun nativeProfileOwner(offer: EnrollmentOffer): PendingEnrollment {
+        require(offer.relayEndpoint == EnrollmentRelayBinding(BuildConfig.ENROLLMENT_RELAY).canonicalRelayEndpoint) { "unbound deployment" }
+        return requireNotNull(confirmedEnrollment(offer)) { "confirmed enrollment required" }.also { check(!it.abandoned) { "abandoned enrollment" } }
     }
 
     /** UI reads only locally reverified evidence. A stored flag or an HTTP status is not confirmation. */

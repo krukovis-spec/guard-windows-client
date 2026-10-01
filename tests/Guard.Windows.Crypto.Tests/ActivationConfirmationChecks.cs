@@ -15,7 +15,7 @@ namespace Guard.Windows.Crypto.Tests;
 
 internal static class ActivationConfirmationChecks
 {
-    internal static async Task RunAsync(GuardIpcResponse response, byte[] originalDescriptor, DeviceSecurityState owner, ECDsa signing, DateTimeOffset now)
+    internal static async Task RunAsync(GuardIpcResponse response, byte[] originalDescriptor, DeviceSecurityState owner, ECDsa signing, ECDiffieHellman phoneEncryption, DateTimeOffset now)
     {
         var raw = response.GetPayloadCopy();
         var descriptor = DeviceProvisioningDescriptor.Parse(originalDescriptor);
@@ -81,7 +81,7 @@ internal static class ActivationConfirmationChecks
             ProvisioningJob.Prepare(descriptor.RelayOrigin, descriptorPath, descriptor.Sha256, "different-mailbox-0001", now.AddDays(3), otherJob, now);
             Reject(() => ProvisioningJob.VerifyNativeConfirmation(descriptor.RelayOrigin, otherJob, proofPath, now));
             Check(Directory.GetFiles(root).Length == 4, "refused proof export created an unexpected file");
-            await NativeActivationJobChecks.RunAsync(root, descriptorPath, job, proofPath, owner, signing, now);
+            await NativeActivationJobChecks.RunAsync(root, descriptorPath, job, proofPath, owner, signing, phoneEncryption, now);
         }
         finally { Directory.Delete(root, recursive: true); }
     }

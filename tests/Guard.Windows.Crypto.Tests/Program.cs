@@ -15,6 +15,11 @@ namespace Guard.Windows.Crypto.Tests
 
         private static int Main(string[] args)
         {
+            if (args.Length == 1 && args[0] == "--export-native-profile")
+            {
+                NativeProfileInterop.Export();
+                return 0;
+            }
             if (args.Length == 1 && args[0] == "--export-enrollment-exchange")
             {
                 Console.Write(NativeEnrollmentChecks.ExportExchange());

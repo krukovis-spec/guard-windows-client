@@ -32,12 +32,17 @@ internal sealed partial class ProvisioningJob
         finally { CryptographicOperations.ZeroMemory(raw); CryptographicOperations.ZeroMemory(body); }
     }
 
-    internal static async Task ActivateNativeAsync(string origin, string deviceJobPath, string activationJobPath,
+    internal static async Task<string?> ActivateNativeAsync(string origin, string deviceJobPath, string activationJobPath,
         string currentProofPath, string adminCredential, CancellationToken cancellationToken,
-        TimeProvider? clock = null, HttpMessageHandler? handler = null, string? expectedMailbox = null)
+        TimeProvider? clock = null, HttpMessageHandler? handler = null, string? expectedMailbox = null, string? outputPath = null)
     {
         clock ??= TimeProvider.System;
         cancellationToken.ThrowIfCancellationRequested(); RequireCredential(adminCredential);
+        if (outputPath != null)
+        {
+            RequireOutputPath(outputPath);
+            if (File.Exists(outputPath)) throw new IOException("Native output already exists.");
+        }
         var device = Load(origin, deviceJobPath, clock.GetUtcNow());
         if (expectedMailbox != null && expectedMailbox != device._mailbox) throw new InvalidDataException("Mailbox credential binding.");
         var bytes = ReadBounded(currentProofPath, NativeActivationConfirmation.MaximumBytes, requirePrivate: false);
@@ -53,10 +58,17 @@ internal sealed partial class ProvisioningJob
         }
         try
         {
+            using var payload = JsonDocument.Parse(body);
+            var approval = String(payload.RootElement, "approvalAccessToken");
             // Recheck AFTER all file/decryption/validation work, immediately before the only network call.
             await PostIssuanceAsync(origin + "/v1/mailboxes/" + device._mailbox + "/tokens/activate-native", adminCredential,
                 body, "approval", device._expires, cancellationToken, handler, CheckCurrent);
             CheckCurrent(); // A late/ambiguous response is not success. Preserve the original job for exact retry.
+            if (outputPath == null) return null;
+            var envelope = NativeRelayProfileEnvelope.Seal(proof.Offer, proof.Claim, approval, prepared, DateTimeOffset.FromUnixTimeMilliseconds(device._expires));
+            CheckCurrent();
+            SaveNewPrivate(outputPath, envelope);
+            return Convert.ToHexString(SHA256.HashData(envelope)); // Independent parent-channel commitment, no credential.
         }
         finally { CryptographicOperations.ZeroMemory(body); }
     }
