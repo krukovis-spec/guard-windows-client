@@ -24,6 +24,7 @@ import javax.net.ssl.HttpsURLConnection
 class NativeApprovalDeliveryTest {
     @TempDir lateinit var directory: File
     private val now = ExchangeVector.now
+    private val profileExpiry = now + 14 * 86400000L
     private val clock = TestClock(now)
     private fun pair() = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
     private val phone = pair(); private val approvalKey = pair(); private val deviceSigning = pair()
@@ -42,7 +43,7 @@ class NativeApprovalDeliveryTest {
     }
     private val pending = PendingSignedEnvelope(claim.approvalKeyId, 1, GuardWire.encodeSignedApproval(signed))
     private fun store() = FileApprovalOutbox(directory)
-    private fun prepared() = NativeApprovalAttempt.prepare(pending, offer, claim, clock.time, now + 86400000)
+    private fun prepared() = NativeApprovalAttempt.prepare(pending, offer, claim, clock.time, profileExpiry)
     private fun reservation(attempt: NativeApprovalAttempt, cursor: Long = 7) =
         "{\"frameId\":\"${attempt.frameId}\",\"recipientKeyId\":\"${offer.encryptionKeyId}\",\"cursor\":$cursor,\"createdAt\":${attempt.created},\"expiresAt\":${attempt.expiry},\"leaseExpiresAt\":${clock.time + 60000},\"status\":\"reserved\",\"nonAuthoritative\":true}".toByteArray()
     private fun publication(attempt: NativeApprovalAttempt, duplicate: Boolean = false) =
@@ -54,7 +55,7 @@ class NativeApprovalDeliveryTest {
             override fun privateKey() = phone.private
         }
         val header = "GNI1".toByteArray() + EnrollmentWire.offerHash(offer) + EnrollmentWire.claimHash(claim)
-        val plain = "GNP1".toByteArray() + ByteBuffer.allocate(16).putLong(now).putLong(now + 86400000).array() + "A".repeat(64).toByteArray()
+        val plain = "GNP1".toByteArray() + ByteBuffer.allocate(16).putLong(now).putLong(profileExpiry).array() + "A".repeat(64).toByteArray()
         val (enc, cipher) = HpkeP256.encrypt(key.publicKeySec1(), plain, header, "Guard.v2.native-relay.install.hpke.v1".toByteArray() + header)
         val raw = header + enc + cipher
         return NativeRelayProfile.open(raw, offer, claim, key, GuardWire.sha256(raw).hex(), now)
@@ -94,12 +95,7 @@ class NativeApprovalDeliveryTest {
         val frame = RelayReceive.decodeFrame(saved.frameBytes()); val aad = GuardWire.encodeRelayFrameAssociatedData(frame.aad)
         assertArrayEquals(pending.exactBytes, HpkeP256.decrypt(ExchangeVector.key, frame.encapsulatedKey, frame.ciphertext, aad,
             "guard-relay-approval-hpke-v1".toByteArray() + aad))
-        val root = File(System.getProperty("user.dir"), "build/test-interop").apply { mkdirs() }
-        File(root, "android-approval-frame.txt").writeText(listOf(
-            "offer=" + EnrollmentWire.encodeOffer(offer).hex(), "claim=" + EnrollmentWire.encodeClaimForSignature(claim).hex(),
-            "snapshot=" + GuardWire.encodeRequestSnapshot(snapshot).hex(), "approval=" + pending.exactBytes.hex(), "frame=" + saved.frameBytes().hex(),
-            // Ephemeral JVM TEST key only, under ignored build/. Never a phone/Keystore/production key.
-            "testDeviceSigningPkcs8=" + deviceSigning.private.encoded.hex()).joinToString("\n"))
+        writeInterop("android-approval-frame.txt", saved)
     }
 
     @Test fun `lost reservation and publication replies retry exact bytes after process reconstruction`() = runBlocking {
@@ -158,6 +154,62 @@ class NativeApprovalDeliveryTest {
         assertEquals(2, calls); unchanged()
     }
 
+    @Test fun `expired outer attempts recover the same signed command even after confirmed publication`() = runBlocking {
+        val root = directory
+        for (phase in 0..2) {
+            directory = File(root, "phase-$phase").apply { mkdirs() }; clock.time = now
+            store().save(pending)
+            val original = prepared().let { if (phase == 0) it else it.seal(pending, offer, claim, reservation(it), 201, now) }
+                .let { if (phase == 2) it.markPublished(publication(it), 201, now) else it }
+            store().saveDelivery(pending, null, original) {}
+            clock.time = original.expiry // Exclusive expiry, with a still-current profile.
+            var calls = 0
+            session { url ->
+                calls++; val saved = store().delivery(pending)!!
+                assertNotEquals(original.frameId, saved.frameId); assertEquals(clock.time, saved.created)
+                Connection(url, if (url.path.endsWith("reserve")) reservation(saved, 8) else publication(saved)).apply {
+                    failRead = !url.path.endsWith("reserve") // New ciphertext survives an ambiguous successful POST.
+                }
+            }.use { refused(it) }
+            assertEquals(2, calls)
+            val sealed = store().delivery(pending)!!; assertFalse(sealed.published)
+            session { url ->
+                assertFalse(url.path.endsWith("reserve"))
+                Connection(url, publication(sealed, true), 200).apply { onWrite = { assertArrayEquals(sealed.frameBytes(), it) } }
+            }.use { it.publish() }
+            val recovered = store().delivery(pending)!!; assertTrue(recovered.published); unchanged()
+            val frame = RelayReceive.decodeFrame(recovered.frameBytes()); val aad = GuardWire.encodeRelayFrameAssociatedData(frame.aad)
+            assertArrayEquals(pending.exactBytes, HpkeP256.decrypt(ExchangeVector.key, frame.encapsulatedKey, frame.ciphertext, aad,
+                "guard-relay-approval-hpke-v1".toByteArray() + aad))
+            assertNull(store().lastReceipt(pending.keyId)) // Transport recovery is never a terminal receipt.
+            if (phase == 2) writeInterop("android-recovered-approval-frame.txt", recovered)
+        }
+    }
+
+    @Test fun `expired attempt replacement remains guarded atomic and bounded`() = runBlocking {
+        store().save(pending); val original = prepared(); store().saveDelivery(pending, null, original) {}
+        clock.time = original.expiry
+        var calls = 0
+        for (failure in listOf("owner", "cancel", "clock", "profile")) {
+            clock.time = original.expiry
+            session({
+                if (failure == "owner") throw IllegalStateException("owner changed")
+                if (directory.listFiles()!!.any { it.extension == "tmp" }) when (failure) {
+                    "cancel" -> throw CancellationException()
+                    "clock" -> clock.time--
+                    "profile" -> clock.time = profileExpiry
+                }
+            }) { calls++; Connection(it, byteArrayOf()) }.use { refused(it) }
+            assertArrayEquals(original.encode(), store().delivery(pending)!!.encode()); unchanged()
+        }
+        assertEquals(0, calls)
+        clock.time = original.expiry
+        // A new outer attempt does not get another replacement in the same foreground pass.
+        session { url -> calls++; Connection(url, error("frame_reservation_expired"), 410) }.use { refused(it) }
+        assertEquals(1, calls); unchanged()
+        assertNotEquals(original.frameId, store().delivery(pending)!!.frameId)
+    }
+
     @Test fun `codec rejects changed binding signatures noncanonical receipts and mutable callers`() {
         val prepared = prepared()
         for (raw in listOf(reservation(prepared).toString(Charsets.UTF_8).replace("\"reserved\"", "\"published\"").toByteArray(),
@@ -205,7 +257,7 @@ class NativeApprovalDeliveryTest {
         session { calls++; Connection(it, byteArrayOf()) }.use { refused(it) }
         assertEquals(0, calls)
         clock.time = now
-        session { url -> Connection(url, reservation(store().delivery(pending)!!)).apply { onRead = { clock.time = now + 86400000 } } }.use { refused(it) }
+        session { url -> Connection(url, reservation(store().delivery(pending)!!)).apply { onRead = { clock.time = profileExpiry } } }.use { refused(it) }
         assertTrue(store().delivery(pending)!!.frameBytes().isEmpty()); unchanged()
         clock.time = now
         var writes = 0
@@ -272,6 +324,14 @@ class NativeApprovalDeliveryTest {
         assertTrue(store().delivery(pending)!!.frameBytes().isEmpty()); unchanged()
     }
 
+    private fun writeInterop(name: String, saved: NativeApprovalAttempt) {
+        val root = File(System.getProperty("user.dir"), "build/test-interop").apply { mkdirs() }
+        File(root, name).writeText(listOf(
+            "offer=" + EnrollmentWire.encodeOffer(offer).hex(), "claim=" + EnrollmentWire.encodeClaimForSignature(claim).hex(),
+            "snapshot=" + GuardWire.encodeRequestSnapshot(snapshot).hex(), "approval=" + pending.exactBytes.hex(), "frame=" + saved.frameBytes().hex(),
+            // Ephemeral JVM TEST key only, under ignored build/. Never a phone/Keystore/production key.
+            "testDeviceSigningPkcs8=" + deviceSigning.private.encoded.hex()).joinToString("\n"))
+    }
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
     private class TestClock(var time: Long) : Clock() {
         override fun millis() = time

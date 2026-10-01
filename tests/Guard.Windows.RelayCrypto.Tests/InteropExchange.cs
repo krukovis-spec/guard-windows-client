@@ -107,11 +107,12 @@ internal static class InteropExchange
         var claim = RelayCanonicalEncoding.DecodeEnrollmentClaimForSignature(Hex(values["claim"]));
         var snapshot = RelayCanonicalEncoding.DecodeRequestSnapshot(Hex(values["snapshot"]));
         var frame = RelayCanonicalEncoding.DecodeRelayFrame(Hex(values["frame"]));
+        var recovered = frame.CreatedAtUtc == Now.AddDays(7);
         Require(offer.GetEncryptionKeyCopy().SequenceEqual(Hex(RecipientPublic)) &&
             claim.GetOfferHashCopy().SequenceEqual(RelayCanonicalEncoding.ComputeEnrollmentOfferHash(offer)));
         Require(frame.Kind == RelayFrameKind.Approval && frame.MailboxId == offer.MailboxId &&
-            frame.RecipientKeyId == offer.EncryptionKeyId && frame.Cursor == 7 && frame.AckCursor == 0 &&
-            frame.CreatedAtUtc == Now && frame.ExpiresAtUtc == Now.AddDays(1));
+            frame.RecipientKeyId == offer.EncryptionKeyId && frame.Cursor == (recovered ? 8 : 7) && frame.AckCursor == 0 &&
+            frame.CreatedAtUtc == (recovered ? Now.AddDays(7) : Now) && frame.ExpiresAtUtc == Now.AddDays(recovered ? 14 : 7));
         var aad = RelayCanonicalEncoding.EncodeRelayFrameAssociatedData(frame);
         var info = Encoding.ASCII.GetBytes("guard-relay-approval-hpke-v1").Concat(aad).ToArray();
         var plaintext = RelayCryptography.Decrypt(Hex(RecipientPrivate), Hex(RecipientPublic),
@@ -140,21 +141,25 @@ internal static class InteropExchange
         var enrollment = new DeviceEnrollmentState(offer, Array.Empty<byte>(), claim, new[] { new byte[1], new byte[1] },
             new byte[64], new byte[32], new byte[65], new byte[48], Array.Empty<byte>(), true, true);
         var owner = new DeviceSecurityState(offer.DeviceId, 3, 0, 0, trustedParentKeys: new[] { anchor }, enrollment: enrollment);
-        var current = new RelayTransactionState(offer.DeviceId, 8, 1, 1, 6, 1, 1, snapshot.PolicyRevision,
+        var current = new RelayTransactionState(offer.DeviceId, 8, 1, 1, 0, 1, 1, snapshot.PolicyRevision,
             trackedRequests: new[] { new RelayTrackedRequest(snapshot.RequestId, snapshot.RequestRevision,
                 RelayCanonicalEncoding.ComputeRequestSnapshotHash(snapshot), snapshot.GetDecisionChallengeCopy(),
                 encodedSnapshot: RelayCanonicalEncoding.EncodeRequestSnapshot(snapshot)) },
             policyLedger: new[] { new RelayPolicyLedgerEntry(snapshot.PolicyRevision, "other-request-001", "other-command-001",
                 RelayTargetKind.Application, "other.exe", ParentDecisionKind.AllowAlways, 0, new byte[32]) },
             recipientOutboundCursors: new[] { new KeyValuePair<string, long>(claim.EncryptionKeyId, 1) });
-        var next = NativeApprovalTransaction.Prepare(owner, current, Hex(values["frame"]), deviceEncryption, deviceSigning, Now);
+        var next = NativeApprovalTransaction.Prepare(owner, current, Hex(values["frame"]), deviceEncryption, deviceSigning, frame.CreatedAtUtc);
         var response = RelayCanonicalEncoding.DecodeDeviceReceiptEnvelope(next.SignedReceipts.Single().GetSignedReceiptCopy());
-        Require(next.CommittedInboundCursor == 7 && next.ReplayFloors.Single().HighestAcceptedSequence == 1 &&
-            next.PolicyRevision == snapshot.PolicyRevision + 1 && next.PolicyLedger.Last().CanonicalTargetIdentity == snapshot.CanonicalTargetIdentity &&
-            response.Receipt.Status == CommandReceiptStatus.AcceptedPendingReconciliation &&
+        Require(next.CommittedInboundCursor == frame.Cursor && next.ReplayFloors.Single().HighestAcceptedSequence == 1 &&
             response.Receipt.GetApprovalHashCopy().SequenceEqual(RelayCanonicalEncoding.ComputeApprovalHash(approval)) &&
             deviceSigning.VerifyHash(RelayCanonicalEncoding.ComputeDeviceReceiptHash(response), response.GetSignatureP1363Copy(),
                 DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
+        if (recovered)
+            Require(response.Receipt.Status == CommandReceiptStatus.Expired && next.PolicyRevision == current.PolicyRevision &&
+                next.PolicyLedger.SequenceEqual(current.PolicyLedger) && next.ReconcileIntents.Count == 0 && next.TrackedRequests.Single().IsPending);
+        else
+            Require(next.PolicyRevision == snapshot.PolicyRevision + 1 && next.PolicyLedger.Last().CanonicalTargetIdentity == snapshot.CanonicalTargetIdentity &&
+                response.Receipt.Status == CommandReceiptStatus.AcceptedPendingReconciliation);
         // A different message kind/domain cannot decrypt the same ciphertext.
         try
         {
@@ -163,7 +168,7 @@ internal static class InteropExchange
             throw new InvalidOperationException("Wrong approval domain accepted.");
         }
         catch (CryptographicException) { }
-        Console.WriteLine("PASS Android reserved GRF1 enters production Windows transaction preparation; exact GRAP/trust/request, pending intent and signed receipt verified.");
+        Console.WriteLine("PASS Android GRF1 crosses missing transport positions with exact GRAP/trust/request; verified Windows receipt: " + response.Receipt.Status);
     }
 
     private static byte[] Seal(RelayFrameKind kind, byte[] plaintext, long cursor)

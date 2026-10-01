@@ -812,9 +812,8 @@ namespace Guard.Storage.Relay
                 if (next.SignedReceipts.Count == current.SignedReceipts.Count && next.Outbox.Count == current.Outbox.Count + 1)
                     return SameState(current.WithRedeliveredReceipt(next.CommittedInboundCursor, next.Outbox[next.Outbox.Count - 1]), next);
 
-                if (current.CommittedInboundCursor == long.MaxValue ||
-                    next.CommittedInboundCursor !=
-                        current.CommittedInboundCursor + 1 ||
+                if (next.CommittedInboundCursor <= current.CommittedInboundCursor ||
+                    next.CommittedInboundCursor > RelayTransactionState.MaximumRecipientCursor ||
                     next.TrackedRequests.Count !=
                         current.TrackedRequests.Count ||
                     next.SignedReceipts.Count !=

@@ -58,7 +58,8 @@ public static class NativeApprovalTransaction
         if (frame.Kind != RelayFrameKind.Approval || frame.MailboxId != offer.MailboxId ||
             frame.RecipientKeyId != offer.EncryptionKeyId || frame.AckCursor != 0 ||
             current.CommittedInboundCursor >= RelayTransactionState.MaximumRecipientCursor ||
-            frame.Cursor != current.CommittedInboundCursor + 1 || now < frame.CreatedAtUtc || now >= frame.ExpiresAtUtc ||
+            frame.Cursor <= current.CommittedInboundCursor || frame.Cursor > RelayTransactionState.MaximumRecipientCursor ||
+            now < frame.CreatedAtUtc || now >= frame.ExpiresAtUtc ||
             frame.CreatedAtUtc < offer.CreatedAtUtc)
             throw new InvalidDataException("Approval transport binding, ordering or time.");
 
@@ -116,6 +117,8 @@ public static class NativeApprovalTransaction
             return current.WithRedeliveredReceipt(frame.Cursor, Seal(current, offer, claim, RelayFrameKind.Receipt,
                 saved.GetSignedReceiptCopy(), now, now.AddDays(1)));
         }
+        // Relay TTL can remove transport positions. Only a fully verified command (or exact signed
+        // history above) advances the cursor; the authoritative per-key sequence stays gap-free.
         var nextSequence = floor != null ? checked(floor.HighestAcceptedSequence + 1) : 1;
         if (approval.Sequence != nextSequence)
             throw new InvalidDataException("Approval replay or sequence gap.");

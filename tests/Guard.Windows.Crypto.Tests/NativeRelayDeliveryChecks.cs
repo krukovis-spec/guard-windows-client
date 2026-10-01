@@ -42,7 +42,7 @@ internal static class NativeRelayDeliveryChecks
                 aad, "guard-relay-approval-hpke-v1"u8.ToArray().Concat(aad).ToArray(), out var encapsulated);
             return RelayCanonicalEncoding.EncodeRelayFrame(Frame(encapsulated, ciphertext));
         }
-        long inboundCursor = 1;
+        long inboundCursor = 7; // Earlier transport frames expired without consuming signed decision sequence 1.
         var frame = Seal(signed, inboundCursor);
         var published = new Dictionary<string, byte[]>();
         var clock = new Clock { Now = now }; var guard = new Boundary();
@@ -131,13 +131,13 @@ internal static class NativeRelayDeliveryChecks
         Check((await service.RelayTransactions.LoadAsync(default)).PolicyRevision == 0 && acks == 0, "profile expiry during HTTP authorized");
         loseReceipt = true; await Reject(() => Pass());
         var committed = await service.RelayTransactions.LoadAsync(default);
-        Check(committed.PolicyRevision == 1 && committed.CommittedInboundCursor == 1 && committed.Outbox.Count == 1 && acks == 0,
+        Check(committed.PolicyRevision == 1 && committed.CommittedInboundCursor == 7 && committed.Outbox.Count == 1 && acks == 0,
             "lost receipt delivery lost or prematurely acknowledged approval");
         await Reopen(); loseAck = true; await Reject(() => Pass());
         Check((await service.RelayTransactions.LoadAsync(default)).Outbox.Count == 0 && acks == 1, "receipt retry/ack order");
         await Reopen(); Check(!await Pass(), "empty page reported a new decision");
         var restored = await service.RelayTransactions.LoadAsync(default);
-        Check(restored.PolicyRevision == 1 && restored.CommittedInboundCursor == 1 && restored.PolicyLedger.Count == 1 &&
+        Check(restored.PolicyRevision == 1 && restored.CommittedInboundCursor == 7 && restored.PolicyLedger.Count == 1 &&
             restored.SignedReceipts.Count == 1 && restored.AcknowledgedOutboundCursor == 2 && published.Count == 2,
             "restart/remote hint duplicated grant or lost state");
         replay = true; await Reject(() => Pass(), typeof(HttpRequestException)); replay = false;
@@ -161,18 +161,18 @@ internal static class NativeRelayDeliveryChecks
         }
         finally { File.WriteAllBytes(path, durable); }
         // Same signed command at a fresh transport cursor resends history, not another grant.
-        inboundCursor = 2; frame = Seal(signed, inboundCursor); loseReceipt = true;
+        inboundCursor = 10; frame = Seal(signed, inboundCursor); loseReceipt = true;
         await Reject(() => Pass(), typeof(HttpRequestException));
         var repeated = await service.RelayTransactions.LoadAsync(default);
-        Check(repeated.CommittedInboundCursor == 2 && repeated.PolicyRevision == 1 && repeated.Outbox.Count == 1 &&
+        Check(repeated.CommittedInboundCursor == 10 && repeated.PolicyRevision == 1 && repeated.Outbox.Count == 1 &&
             repeated.SignedReceipts.Single().GetSignedReceiptCopy().SequenceEqual(restored.SignedReceipts.Single().GetSignedReceiptCopy()) &&
             repeated.ReconcileIntents.Count == 1 && repeated.PolicyLedger.Count == 1, "redelivery changed authority or receipt time");
         await Reopen(); Check(await Pass(), "redelivery outbox did not retry after restart");
         var delivered = await service.RelayTransactions.LoadAsync(default);
-        Check(delivered.CommittedInboundCursor == 2 && delivered.AcknowledgedOutboundCursor == 3 && delivered.Outbox.Count == 0 &&
+        Check(delivered.CommittedInboundCursor == 10 && delivered.AcknowledgedOutboundCursor == 3 && delivered.Outbox.Count == 0 &&
             delivered.ReplayFloors.Single().HighestAcceptedSequence == 1 && published.Count == 3, "redelivery retry changed bytes/floor or lost ack");
         var conflicting = Approval(sign(RelayCanonicalEncoding.ComputeApprovalHash(Approval(new byte[64], ParentDecisionKind.Deny))), ParentDecisionKind.Deny);
-        inboundCursor = 3; frame = Seal(conflicting, inboundCursor);
+        inboundCursor = 11; frame = Seal(conflicting, inboundCursor);
         await Reject(() => Pass(), typeof(HttpRequestException));
         Check((await service.RelayTransactions.LoadAsync(default)).Version == delivered.Version, "conflicting repeated command changed state");
         frame = Seal(signed, inboundCursor); loseReceipt = true;
@@ -193,7 +193,7 @@ internal static class NativeRelayDeliveryChecks
         clock.Now = now.AddDays(1).AddSeconds(1);
         await Reopen(); Check(await Pass(), "expired outbox did not retire after restart");
         var retired = await service.RelayTransactions.LoadAsync(default);
-        Check(retired.Outbox.Count == 0 && retired.AcknowledgedOutboundCursor == 4 && retired.CommittedInboundCursor == 3 &&
+        Check(retired.Outbox.Count == 0 && retired.AcknowledgedOutboundCursor == 4 && retired.CommittedInboundCursor == 11 &&
             retired.SignedReceipts.Single().GetSignedReceiptCopy().SequenceEqual(waiting.SignedReceipts.Single().GetSignedReceiptCopy()) &&
             retired.PolicyRevision == 1 && retired.PolicyLedger.Count == 1 && retired.ReconcileIntents.Count == 1 &&
             retired.ReplayFloors.Single().HighestAcceptedSequence == 1, "retirement changed permission, history or inbound cursor");

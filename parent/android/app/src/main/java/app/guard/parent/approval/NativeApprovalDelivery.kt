@@ -37,22 +37,25 @@ internal class NativeApprovalDelivery(
                 try {
                     var attempt = outbox.delivery(pending)
                     fun checkActive() { check(continuation.isActive) { "delivery cancelled" } }
-                    fun guard(): Long {
+                    fun guard(allowExpiredAttempt: Boolean = false): Long {
                         checkActive(); beforeUse(); checkActive()
                         val now = clock.millis()
                         require(now >= maxOf(observed, attempt?.observed ?: 0)) { "delivery clock rollback" }
                         profile.requireCurrent(now); observed = now
-                        attempt?.let { require(now < it.expiry); it.requireBinding(pending, offer, claim) }
+                        attempt?.let { require(allowExpiredAttempt || now < it.expiry); it.requireBinding(pending, offer, claim) }
                         require(outbox.delivery(pending)?.encode().let { current ->
                             if (attempt == null) current == null else current?.contentEquals(attempt!!.encode()) == true
                         }) { "delivery changed" }
                         val afterValidation = clock.millis()
-                        require(afterValidation >= observed && (attempt == null || afterValidation < attempt!!.expiry))
+                        require(afterValidation >= observed && (allowExpiredAttempt || attempt == null || afterValidation < attempt!!.expiry))
                         profile.requireCurrent(afterValidation); observed = afterValidation
                         checkActive(); return afterValidation
                     }
-                    fun save(next: NativeApprovalAttempt) {
-                        outbox.saveDelivery(pending, attempt, next) { guard() }
+                    fun save(next: NativeApprovalAttempt, allowExpiredAttempt: Boolean = false) {
+                        outbox.saveDelivery(pending, attempt, next) {
+                            val commitTime = guard(allowExpiredAttempt)
+                            require(commitTime >= next.observed && commitTime < next.expiry)
+                        }
                         attempt = next
                     }
                     fun call(reserve: Boolean): Pair<Int, ByteArray> {
@@ -93,10 +96,13 @@ internal class NativeApprovalDelivery(
                             guard(); return status to raw
                         } finally { active.compareAndSet(connection, null); connection.disconnect() }
                     }
-                    val now = guard()
-                    if (attempt == null) save(NativeApprovalAttempt.prepare(pending, offer, claim, now, profile.expiryUnixMillis))
-                    // At most one lease replacement per user action. A failed/ambiguous request preserves exact saved bytes.
-                    var replaced = false
+                    val now = guard(allowExpiredAttempt = true)
+                    // Once the outer frame expires it cannot be accepted, even if an earlier POST succeeded.
+                    // Keep the exact signed command: Windows alone decides Expired or returns its signed history.
+                    var replaced = attempt?.let { now >= it.expiry } == true
+                    if (attempt == null || replaced)
+                        save(NativeApprovalAttempt.prepare(pending, offer, claim, now, profile.expiryUnixMillis), replaced)
+                    // At most one outer replacement per user action. Ambiguous live attempts retain exact bytes.
                     while (true) {
                         val saved = requireNotNull(attempt)
                         val reserve = saved.frameBytes().isEmpty()
