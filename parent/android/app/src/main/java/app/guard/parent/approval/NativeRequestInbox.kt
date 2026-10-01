@@ -16,7 +16,19 @@ import javax.net.ssl.HttpsURLConnection
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-internal data class NativeRequestPage(val requests: List<VerifiedNativeRequest>, val nextCursor: Long, val frameCount: Int)
+internal data class NativeRequestPage(val requests: List<VerifiedNativeRequest>, val nextCursor: Long, val frameCount: Int,
+    val receipts: List<VerifiedNativeReceipt>)
+
+internal class VerifiedNativeReceipt private constructor(private val frame: ByteArray, private val canonical: ByteArray) {
+    val receipt: CommandReceipt get() = GuardWire.decodeCommandReceipt(canonical)
+    fun frameBytes() = frame.copyOf()
+    companion object {
+        fun verify(raw: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long): VerifiedNativeReceipt {
+            val frozen = raw.copyOf()
+            return VerifiedNativeReceipt(frozen, GuardWire.encodeCommandReceipt(RelayReceive.receiveReceipt(frozen, recipient, trust, now).receipt))
+        }
+    }
+}
 
 /** Retain the exact authenticated frame, not caller-mutable display data, for a later explicit decision. */
 internal class VerifiedNativeRequest private constructor(private val frame: ByteArray, private val canonical: ByteArray) {
@@ -71,7 +83,11 @@ internal class NativeRequestInbox(
         return now
     }
 
-    suspend fun read(after: Long = 0): NativeRequestPage = withTimeout(20_000) {
+    suspend fun read(after: Long = 0): NativeRequestPage = readPage(after, false)
+    // Receipt lookup must not be blocked by an already expired request inside a still-live transport frame.
+    suspend fun readReceipts(after: Long = 0): NativeRequestPage = readPage(after, true)
+
+    private suspend fun readPage(after: Long, receiptsOnly: Boolean): NativeRequestPage = withTimeout(20_000) {
         require(after in 0..NativeInboxPageCodec.MAX_CURSOR)
         check(started.compareAndSet(false, true)) { "one inbox read per session" }
         suspendCancellableCoroutine { continuation ->
@@ -110,20 +126,21 @@ internal class NativeRequestInbox(
                         }
                         checkActive()
                         val decoded = NativeInboxPageCodec.decode(raw, recipient, after)
+                        val receipts = ArrayList<VerifiedNativeReceipt>()
                         val requests = decoded.first.mapNotNull { bytes ->
                             checkActive(); val now = requireCurrent()
                             if (RelayReceive.decodeFrame(bytes).aad.kind == 1)
-                                VerifiedNativeRequest.verify(bytes, recipient, trust, now)
+                                if (receiptsOnly) null else VerifiedNativeRequest.verify(bytes, recipient, trust, now)
                             else {
-                                // Verify receipts too, but never turn an unmatched receipt into "applied" or consume the outbox.
-                                RelayReceive.receiveReceipt(bytes, recipient, trust, now); null
+                                receipts += VerifiedNativeReceipt.verify(bytes, recipient, trust, now); null
                             }
                         }
                         checkActive(); beforeUse(); val now = requireCurrent(); checkActive()
                         require(requests.all { val snapshot = it.snapshot; now in snapshot.createdUnixMillis until snapshot.pendingExpiryUnixMillis }) { "request expired during verification" }
-                        require(decoded.first.all { val aad = RelayReceive.decodeFrame(it).aad; now in aad.createdUnixMillis until aad.expiryUnixMillis }) { "frame expired during verification" }
+                        require(decoded.first.all { val aad = RelayReceive.decodeFrame(it).aad
+                            receiptsOnly && aad.kind == 1 || now in aad.createdUnixMillis until aad.expiryUnixMillis }) { "frame expired during verification" }
                         checkActive()
-                        NativeRequestPage(requests, decoded.second, decoded.first.size)
+                        NativeRequestPage(requests, decoded.second, decoded.first.size, receipts)
                     } finally { active.compareAndSet(connection, null); connection.disconnect() }
                     continuation.resume(page)
                 } catch (_: Exception) {

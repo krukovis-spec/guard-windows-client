@@ -15,6 +15,8 @@ import app.guard.parent.protocol.RelayDeviceTrust
 import app.guard.parent.protocol.RelayRecipient
 import app.guard.parent.protocol.RelayReceive
 import app.guard.parent.protocol.ReceiptStatus
+import app.guard.parent.protocol.Reader
+import app.guard.parent.protocol.Writer
 import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
@@ -140,7 +142,46 @@ interface ApprovalOutbox {
     fun load(keyId: String): PendingSignedEnvelope?
     fun nextSequence(keyId: String): Long
     fun save(envelope: PendingSignedEnvelope, beforeCommit: () -> Unit = {})
-    fun complete(envelope: PendingSignedEnvelope)
+    fun lastReceipt(keyId: String): SavedApprovalReceipt?
+    fun acceptReceipt(rawFrame: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long,
+        beforeCommit: () -> Unit = {}): CommandReceipt
+}
+
+/** Historical evidence only. Reopen with existing enrollment keys; never treat a stored status as current access. */
+class SavedApprovalReceipt private constructor(val pending: PendingSignedEnvelope, private val frame: ByteArray, val observed: Long) {
+    fun verify(recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long): CommandReceipt {
+        require(now >= observed) { "receipt clock rollback" }
+        return verifyBoundReceipt(frame, pending, recipient, trust, observed)
+    }
+    internal fun encode(): ByteArray = Writer("GAR1").apply {
+        i64(observed); bytes(pending.exactBytes, 65536, false); bytes(frame, 65536, false)
+    }.finish()
+    companion object {
+        internal fun receive(raw: ByteArray, pending: PendingSignedEnvelope, recipient: RelayRecipient,
+            trust: RelayDeviceTrust, now: Long): SavedApprovalReceipt {
+            val frozen = raw.copyOf()
+            verifyBoundReceipt(frozen, pending, recipient, trust, now)
+            return SavedApprovalReceipt(pending, frozen, now).also { it.encode() }
+        }
+        internal fun decode(raw: ByteArray): SavedApprovalReceipt = Reader(raw, "GAR1").run {
+            val observed = nonNegative(); val approval = bytes(65536, false); val frame = bytes(65536, false); done()
+            val decoded = GuardWire.decodeSignedApproval(approval)
+            SavedApprovalReceipt(PendingSignedEnvelope(decoded.keyId, decoded.sequence, approval), frame, observed)
+                .also { require(it.encode().contentEquals(raw)); RelayReceive.decodeFrame(frame) }
+        }
+    }
+}
+
+private fun verifyBoundReceipt(rawFrame: ByteArray, pending: PendingSignedEnvelope, recipient: RelayRecipient,
+    trust: RelayDeviceTrust, now: Long): CommandReceipt {
+    val receipt = RelayReceive.receiveReceipt(rawFrame, recipient, trust, now).receipt
+    val approval = GuardWire.decodeSignedApproval(pending.exactBytes)
+    require(receipt.keyId == pending.keyId && receipt.keyId == approval.keyId && receipt.sequence == pending.sequence &&
+        receipt.sequence == approval.sequence && receipt.commandId == approval.commandId && receipt.requestId == approval.requestId &&
+        receipt.requestRevision == approval.requestRevision && receipt.deviceId == approval.deviceId && receipt.deviceEpoch == approval.deviceEpoch &&
+        receipt.authorityEpoch == approval.authorityEpoch && receipt.processedUnixMillis >= approval.issuedUnixMillis &&
+        java.security.MessageDigest.isEqual(receipt.approvalHash, GuardWire.sha256(GuardWire.encodeApprovalSignatureInput(approval)))) { "receipt does not bind pending approval" }
+    return receipt
 }
 class StopAndWaitApprovals(private val outbox: ApprovalOutbox) {
     fun getPending(keyId: String): PendingSignedEnvelope? = outbox.load(keyId)
@@ -152,17 +193,8 @@ class StopAndWaitApprovals(private val outbox: ApprovalOutbox) {
         require(existing == null || existing.sequence == value.sequence && existing.exactBytes.contentEquals(value.exactBytes)) { "receipt required before next approval" }
         if (existing == null) outbox.save(value, beforeCommit) else beforeCommit()
     }
-    fun acceptReceipt(rawFrame: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long): CommandReceipt {
-        val receipt = RelayReceive.receiveReceipt(rawFrame, recipient, trust, now).receipt
-        val pending = requireNotNull(outbox.load(receipt.keyId)) { "no pending approval" }
-        val approval = GuardWire.decodeSignedApproval(pending.exactBytes)
-        require(receipt.sequence == pending.sequence && receipt.commandId == approval.commandId && receipt.requestId == approval.requestId &&
-            receipt.requestRevision == approval.requestRevision && receipt.deviceId == approval.deviceId && receipt.deviceEpoch == approval.deviceEpoch &&
-            receipt.authorityEpoch == approval.authorityEpoch && receipt.processedUnixMillis >= approval.issuedUnixMillis &&
-            java.security.MessageDigest.isEqual(receipt.approvalHash, GuardWire.sha256(GuardWire.encodeApprovalSignatureInput(approval)))) { "receipt does not bind pending approval" }
-        if (receipt.status != ReceiptStatus.ACCEPTED_PENDING_RECONCILIATION) outbox.complete(pending)
-        return receipt
-    }
+    fun acceptReceipt(rawFrame: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long,
+        beforeCommit: () -> Unit = {}): CommandReceipt = outbox.acceptReceipt(rawFrame, recipient, trust, now, beforeCommit)
 }
 
 data class RecoveryKit(val bytes: ByteArray, val printable: String)

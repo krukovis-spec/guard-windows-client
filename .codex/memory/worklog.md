@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — Android verified receipt consumption and durable historical result
+
+- Connected existing inbox→immutable verified receipt→confirmed native ceremony→atomic outbox→Russian pending/history UI. Receipt-only paging ignores request payloads without authorizing/displaying them. GOB3 stores original GRAP+encrypted receipt with the terminal sequence transition; GOB1/GOB2 compatibility, no unsafe complete/reset. Exact identity/hash/signature/time/context, duplicate terminal, interim→terminal, old interim after restart, conflicting terminal and newer pending handled; historical evidence re-verifies with existing keys and cannot claim current access.
+- 88 JVM/debug+instrumentation APK/lint 0 errors/13 prior warnings and all four Kotlin→.NET interop PASS. Real .NET frames/JCA/HPKE/temp files/controlled HTTPS cover page→queue→reopen, all statuses, forged/mismatched/expired/future data, cancellation before vs lost result after commit, migration/corruption/clock regression, parallel receipt commit. Initial Writer import collision fixed; self-review found and fixed stale interim blocking later terminal on re-poll. Windows/Worker source unchanged; their full suites not repeated. No live phone/VM/host/cloud/dependency changes.
+- PROJECT_ONLY via wiki-memory/project-memory; capsule/plan/protocol/Android README updated, service journal unchanged. Ponytail reused original inbox and atomic outbox, no second store or framework. `ux-copy` distinguishes interim/applied/rejected/historical states and tells user to reopen durable state after an uncertain error. Production Windows approval runtime/effect, M1, real M4 and Codex-style M7 remain next/open.
+
 ## 2026-10-01 — Android durable reserved approval publication
 
 - Connected confirmed ceremony + pending UI to a bounded foreground publisher: persist reservation input, reserve shared device cursor, persist HPKE/GRF1, send exact bytes. Existing outbox owns both records (GOB2, GOB1 read/migrate); CAS blocks stale senders, failures preserve signed GRAP. One outer-lease renewal only after exact known error; no new biometric/signature/sequence or ack. Russian status distinguishes saved/server-stored from device Applied.

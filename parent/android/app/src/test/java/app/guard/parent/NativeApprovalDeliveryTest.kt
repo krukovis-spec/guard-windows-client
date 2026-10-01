@@ -172,7 +172,7 @@ class NativeApprovalDeliveryTest {
         assertThrows(Exception::class.java) { sealed.markPublished(publication(sealed), 201, sealed.expiry) }
     }
 
-    @Test fun `GOB1 migrates atomically while cancellation corruption stale writers and terminal receipt cannot reset it`() {
+    @Test fun `GOB1 migrates atomically while cancellation corruption and stale writers cannot reset it`() {
         val path = File(directory, GuardWire.sha256(pending.keyId.toByteArray()).hex() + ".bin")
         val legacy = ByteArrayOutputStream().apply { DataOutputStream(this).apply {
             writeInt(0x474f4231); writeLong(1); writeInt(pending.exactBytes.size); write(pending.exactBytes)
@@ -183,15 +183,13 @@ class NativeApprovalDeliveryTest {
         assertThrows(CancellationException::class.java) { store().saveDelivery(pending, null, prepared) { throw CancellationException() } }
         assertArrayEquals(legacy + GuardWire.sha256(legacy), path.readBytes())
         store().saveDelivery(pending, null, prepared) {}
-        assertEquals(0x474f4232, ByteBuffer.wrap(path.readBytes()).int)
+        assertEquals(0x474f4233, ByteBuffer.wrap(path.readBytes()).int)
         assertThrows(Exception::class.java) { store().saveDelivery(pending, null, prepared()) {} }
         assertArrayEquals(prepared.encode(), store().delivery(pending)!!.encode())
         val clean = path.readBytes(); path.writeBytes(clean.apply { this[lastIndex] = (this[lastIndex].toInt() xor 1).toByte() })
         assertThrows(Exception::class.java) { store().nextSequence(pending.keyId) }
         path.writeBytes(legacy + GuardWire.sha256(legacy)); store().saveDelivery(pending, null, prepared) {}
-        store().complete(pending) // Only the existing verified-receipt path calls this in production.
-        assertNull(store().load(pending.keyId)); assertEquals(2L, store().nextSequence(pending.keyId))
-        assertThrows(Exception::class.java) { store().saveDelivery(pending, prepared, prepared) {} }
+        unchanged(); assertNull(store().lastReceipt(pending.keyId))
     }
 
     @Test fun `stale ownership clock cancellation and expiry guard prevent dispatch or publication commit`() = runBlocking {

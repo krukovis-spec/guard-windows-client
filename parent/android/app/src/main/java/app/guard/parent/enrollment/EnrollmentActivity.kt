@@ -35,6 +35,7 @@ import app.guard.parent.approval.VerifiedNativeRequest
 import app.guard.parent.protocol.ApprovalDecision
 import app.guard.parent.protocol.GuardWire
 import app.guard.parent.protocol.RequestSnapshot
+import app.guard.parent.protocol.ReceiptStatus
 import app.guard.parent.security.PendingSignedEnvelope
 import app.guard.parent.protocol.EnrollmentOffer
 import app.guard.parent.protocol.TargetKind
@@ -330,7 +331,8 @@ class EnrollmentActivity : FragmentActivity() {
         renderPendingApproval(offer, pending)
     }
 
-    private fun renderPendingApproval(offer: EnrollmentOffer, pending: PendingSignedEnvelope?) {
+    private suspend fun renderPendingApproval(offer: EnrollmentOffer, pending: PendingSignedEnvelope?) {
+        val savedReceipt = withContext(Dispatchers.IO) { ceremony.lastApprovalReceipt(offer) }
         content.removeAllViews(); device(offer)
         if (pending == null) label(R.string.approval_pending_empty) else {
             val approval = GuardWire.decodeSignedApproval(pending.exactBytes)
@@ -347,8 +349,41 @@ class EnrollmentActivity : FragmentActivity() {
                     renderPendingApproval(offer, withContext(Dispatchers.IO) { ceremony.pendingApproval(offer) })
                 }
             }
+            button(R.string.approval_receipt_check) { checkApprovalReceipts(offer) }
+        }
+        if (savedReceipt != null) {
+            val (envelope, receipt) = savedReceipt
+            val decision = GuardWire.decodeSignedApproval(envelope.exactBytes)
+            label(R.string.approval_receipt_title, 22f)
+            text(getString(R.string.native_inbox_identity, requestDisplayText(decision.targetIdentity)))
+            text(getString(R.string.native_inbox_request_id, decision.requestId, decision.requestRevision))
+            text(decisionText(ApprovalChoice(decision.decision, decision.minutes)), 20f)
+            label(when (receipt.status) {
+                ReceiptStatus.APPLIED -> R.string.approval_receipt_applied
+                ReceiptStatus.ALREADY_RESOLVED -> R.string.approval_receipt_resolved
+                ReceiptStatus.REJECTED -> R.string.approval_receipt_rejected
+                ReceiptStatus.EXPIRED -> R.string.approval_receipt_expired
+                ReceiptStatus.ACCEPTED_PENDING_RECONCILIATION -> R.string.approval_receipt_pending
+            })
+            text(getString(R.string.approval_receipt_time, DateFormat.getDateTimeInstance().format(Date(receipt.processedUnixMillis))))
+            label(R.string.approval_receipt_historical)
         }
         button(R.string.native_profile_back) { showOffer(offer) }
+    }
+
+    private fun checkApprovalReceipts(offer: EnrollmentOffer, after: Long = 0): Unit = work(R.string.approval_receipt_loading,
+        success = R.string.approval_receipt_checked, failure = R.string.approval_receipt_failed) {
+        content.removeAllViews(); device(offer); label(R.string.approval_receipt_loading)
+        button(R.string.approval_pending_open) { showPendingApproval(offer) }
+        val page = withContext(Dispatchers.IO) { ceremony.openNativeInbox(offer).use { it.readReceipts(after) } }
+        withContext(Dispatchers.IO) {
+            val active = coroutineContext
+            ceremony.acceptNativeReceipts(offer, page.receipts) { active.ensureActive() }
+        }
+        val pending = withContext(Dispatchers.IO) { ceremony.pendingApproval(offer) }
+        renderPendingApproval(offer, pending)
+        if (pending != null && page.frameCount == NativeInboxPageCodec.PAGE_SIZE)
+            button(R.string.approval_receipt_next) { checkApprovalReceipts(offer, page.nextCursor) }
     }
 
     private fun authenticateApproval(offer: EnrollmentOffer, request: VerifiedNativeRequest, choice: ApprovalChoice) {
