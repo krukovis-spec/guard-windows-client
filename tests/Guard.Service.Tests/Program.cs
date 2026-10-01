@@ -47,6 +47,7 @@ namespace Guard.Service.Tests
                 ("handles bounded status setup and child binding operations", BootstrapAndIpcChecks.HandlesBoundedSetupStatusAndBindingAsync),
                 ("returns an admin-only fail-closed readiness snapshot", BootstrapAndIpcChecks.ReturnsAdminOnlyReadinessSnapshotAsync),
                 ("keeps unobserved production readiness facts blocking", BootstrapAndIpcChecks.UsesOnlyObservedProductionReadinessFactsAsync),
+                ("binds blocked EXE observations to local policy account event and flat hash", BlockedApplicationObservationChecks.RunAsync),
                 ("retains exact relay outbox bytes across HTTP and CAS failures", RelayTransportChecks.PreservesDurableOutboxAsync),
                 ("validates bounded recipient-bound relay inbox pages", RelayTransportChecks.ValidatesBoundedInboxAsync),
                 ("preserves native key fingerprints and canonical IDs through HTTP", RelayTransportChecks.PreservesCanonicalIdentifiersAsync),

@@ -40,8 +40,8 @@ internal sealed class NativeRelayDelivery(ServiceAuthoritativeStateBoundary serv
         var owner = await RequireReadyAsync(token).ConfigureAwait(false);
         var current = await service.RelayTransactions.LoadAsync(token).ConfigureAwait(false);
         var scanAfter = current.CommittedInboundCursor;
-        // ponytail: scan at most 64 pages (covers the Worker's 1000-frame quota), within this pass's
-        // pass deadline. This is only a read bookmark, never a durable cursor or acknowledgment.
+        // ponytail: scan at most 64 pages (covers the Worker's 1000-frame quota) within 25 seconds.
+        // This is only a read bookmark, never a durable cursor or acknowledgment.
         for (var pageIndex = 0; pageIndex < 64; pageIndex++)
         {
             await RequireReadyAsync(token).ConfigureAwait(false);
