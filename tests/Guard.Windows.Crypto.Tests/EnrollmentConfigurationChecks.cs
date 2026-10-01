@@ -481,6 +481,7 @@ internal static class EnrollmentConfigurationChecks
                 "retention crossing during HTTP was fatal or published a late result");
             Check((await boundary.LoadAsync(default)).Version == owner.Version,
                 "background delivery mutated owner or policy state");
+            await NativeRelayCommitChecks.RunAsync(boundary.NativeEnrollmentStore, boundary.Identity, config, trust, phone.Sign, Now);
         }
         finally { CryptographicOperations.ZeroMemory(capability); }
     }

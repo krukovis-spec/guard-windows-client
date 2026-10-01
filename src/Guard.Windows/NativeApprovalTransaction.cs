@@ -44,6 +44,11 @@ public static class NativeApprovalTransaction
 
     public static RelayTransactionState Prepare(DeviceSecurityState owner, RelayTransactionState current,
         byte[] encodedFrame, ECDiffieHellman decryptionKey, ECDsa signingKey, DateTimeOffset now)
+        => Prepare(owner, current, encodedFrame, decryptionKey, signingKey, now, out _);
+
+    // The caller must recheck this exclusive deadline at the actual durable commit.
+    public static RelayTransactionState Prepare(DeviceSecurityState owner, RelayTransactionState current,
+        byte[] encodedFrame, ECDiffieHellman decryptionKey, ECDsa signingKey, DateTimeOffset now, out DateTimeOffset validUntilUtc)
     {
         ArgumentNullException.ThrowIfNull(current);
         var session = RequireOwner(owner, current, decryptionKey, signingKey);
@@ -110,6 +115,12 @@ public static class NativeApprovalTransaction
             now >= approval.ExpiresAtUtc || now >= snapshot.PendingExpiresAtUtc ? RelayApprovalDisposition.Expired :
             approval.PolicyRevision != current.PolicyRevision ? RelayApprovalDisposition.Rejected :
             approval.Decision == ParentDecisionKind.Deny ? RelayApprovalDisposition.Denied : RelayApprovalDisposition.Allowed;
+        validUntilUtc = frame.ExpiresAtUtc;
+        if (disposition is RelayApprovalDisposition.Allowed or RelayApprovalDisposition.Denied)
+        {
+            if (approval.ExpiresAtUtc < validUntilUtc) validUntilUtc = approval.ExpiresAtUtc;
+            if (snapshot.PendingExpiresAtUtc < validUntilUtc) validUntilUtc = snapshot.PendingExpiresAtUtc;
+        }
         RelayPolicyLedgerEntry? policy = null;
         RelayReconcileIntent? intent = null;
         if (disposition == RelayApprovalDisposition.Allowed)

@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — current-owner guarded relay commit
+
+- Added service-local request/approval commit using existing owner lock through relay CAS. Fresh pinned profile/identity/ACL/time checks immediately before atomic publication; preparer provides exact exclusive frame/decision deadline. Copied input before waiting; cancellation checked after validation, committed journal remains non-cancellable. No new queue/dependency or owner rewrite; fixed lock order owner → relay and no network in callback.
+- Fresh Release/29 v2/45 legacy and Android-generated approval→production .NET interop PASS. Tests reuse real synthetic-attestation enrollment with temporary purpose-separated CurrentUser DPAPI: stale/concurrent owner, mutated waiting input, late inner/outer/request/profile/clock/ACL rejection, cancellation before/while/after publication and reopening complete pending result. Self-review checked all callers and publication/lock lifetime. Android/Worker sources unchanged; their suites not repeated; no live host/VM/phone/cloud effects.
+- PROJECT_ONLY via wiki-memory/project-memory; capsule/plan/protocol updated, service connection journal unchanged. Runtime still needs protected relay bootstrap/lifetime/ACL composition, observations, duplicate/invalid cursor recovery, HTTP/outbox and verified terminal effects. No hosted worker registration yet; M1/admin/TTL and M7 remain open.
+
 ## 2026-10-01 — durable original request and native encrypted publication
 
 - Stored exact canonical request bytes with the existing tracked request/outbox, retained by resolution and acknowledgment. Schema 3 reads V2 without resetting history or inventing missing snapshots; V1 safety unchanged. Native approval no longer accepts a caller-supplied snapshot. `PrepareRequest` signs/seals the same original for the phone; no new store, dependency, grant or service activation.
