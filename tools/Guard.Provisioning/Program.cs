@@ -66,6 +66,15 @@ internal static class Program
                 Console.WriteLine("Relay подтвердил права обмена компьютера и привязанного телефона. Задание сохранено для повтора. Передача доступа телефону ещё не выполнена; защита не подтверждена.");
                 return 0;
             }
+            if (args.Length == 7 && args[0] == "export-native")
+            {
+                var digest = await MailboxProvisioningJob.ActivateNativeAsync(args[1], args[2], args[3], args[4], args[5],
+                    CancellationToken.None, outputPath: args[6]);
+                Console.WriteLine("Права обмена подтверждены. Сохранён профиль, зашифрованный для привязанного телефона; административных ключей в нём нет.");
+                Console.WriteLine("SHA-256 для независимой проверки на телефоне: " + digest);
+                Console.WriteLine("Передавайте только этот .guard-native файл. Задания .job оставьте на родительском ПК. Это не разрешение приложения и не подтверждение защиты Windows.");
+                return 0;
+            }
             Console.WriteLine("Guard.Provisioning — служебная утилита, только для родительского ПК.");
             Console.WriteLine("prepare-mailbox <доверенный-HTTPS-origin> <новый-mailboxId> <новый-файл-задания-ящика>");
             Console.WriteLine("publish-mailbox <тот-же-доверенный-origin> <файл-задания-ящика>");
@@ -75,6 +84,7 @@ internal static class Program
             Console.WriteLine("verify-native <тот-же-доверенный-origin> <исходный-файл-задания-устройства> <подтверждение.guard-proof>");
             Console.WriteLine("prepare-native <тот-же-доверенный-origin> <исходный-файл-задания-устройства> <подтверждение.guard-proof> <новое-задание-активации>");
             Console.WriteLine("activate-native <тот-же-доверенный-origin> <исходный-файл-задания-устройства> <задание-активации> <свежее-подтверждение.guard-proof> <задание-ящика>");
+            Console.WriteLine("export-native <тот-же-доверенный-origin> <исходный-файл-задания-устройства> <задание-активации> <свежее-подтверждение.guard-proof> <задание-ящика> <новый-файл.guard-native>");
             Console.WriteLine("Файлы задания и профиля — по абсолютным путям вне Git. Секреты не передавайте в аргументах.");
             return args.Length == 0 || args.SequenceEqual(new[] { "--help" }) ? 0 : 2;
         }

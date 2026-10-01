@@ -1,6 +1,7 @@
 package app.guard.parent.enrollment
 
 import android.content.Context
+import app.guard.parent.BuildConfig
 import app.guard.parent.protocol.*
 import app.guard.parent.security.AndroidApprovalKeyStore
 import app.guard.parent.security.AndroidRelayEncryptionKey
@@ -33,6 +34,7 @@ class EnrollmentSigningOperation internal constructor(private val store: Pending
 /** Windows alone performs attestation/final owner CAS; this client retains its signed acknowledgment. */
 class AndroidEnrollmentCeremony(context: Context) {
     private val store = PendingEnrollmentStore(File(context.noBackupFilesDir, "enrollment"))
+    private val nativeProfiles = NativeRelayProfileStore(File(context.noBackupFilesDir, "native-transport"))
     fun listPending() = store.list()
 
     fun prepare(transcript: EnrollmentTranscript): PendingEnrollment {
@@ -85,6 +87,25 @@ class AndroidEnrollmentCeremony(context: Context) {
     fun confirmedEnrollment(offer: EnrollmentOffer): PendingEnrollment? {
         val (state, result) = inspect(offer)
         return if (result?.outcome == EnrollmentExchange.CONFIRMED) state else null
+    }
+
+    /** Caller must get the checksum independently from the trusted off-PC operator, not from the imported file/relay. */
+    fun importNativeProfile(offer: EnrollmentOffer, envelope: ByteArray, independentlyTrustedSha256: String) {
+        val state = nativeProfileOwner(offer)
+        nativeProfiles.install(offer, requireNotNull(state.claim), AndroidRelayEncryptionKey.openExisting(state.encryptionAlias),
+            envelope, independentlyTrustedSha256)
+        nativeProfileOwner(offer) // Do not report success if local enrollment/keys changed during storage.
+    }
+
+    /** No creation or trust from a profile. Caller owns/clears the short-lived decrypted credential. */
+    fun openNativeProfile(offer: EnrollmentOffer): NativeRelayProfile? {
+        val state = nativeProfileOwner(offer)
+        return nativeProfiles.open(offer, requireNotNull(state.claim), AndroidRelayEncryptionKey.openExisting(state.encryptionAlias))
+    }
+
+    private fun nativeProfileOwner(offer: EnrollmentOffer): PendingEnrollment {
+        require(offer.relayEndpoint == EnrollmentRelayBinding(BuildConfig.ENROLLMENT_RELAY).canonicalRelayEndpoint) { "unbound deployment" }
+        return requireNotNull(confirmedEnrollment(offer)) { "confirmed enrollment required" }.also { check(!it.abandoned) { "abandoned enrollment" } }
     }
 
     /** UI reads only locally reverified evidence. A stored flag or an HTTP status is not confirmation. */

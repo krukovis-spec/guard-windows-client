@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — encrypted operator-to-native transport profile
+
+- Added GNI1 fixed-size HPKE envelope and `export-native` on the existing exact-activation path. Only approval credential and immutable intent dates; no admin/device credential/private key. New file plus independently displayed SHA-256, no export on uncertain/refused HTTP and no overwrite. Android decoder and no-backup ciphertext store reuse HPKE/Keystore; ceremony wrapper requires existing confirmed signed owner/keys and compiled origin. Historical enrollment is not current permission; profile alone creates no authority.
+- Real .NET operator export decrypts with synthetic phone key; .NET-generated public fixture is independently opened by Kotlin/JCA. Tests cover every byte mutation/truncation, missing/wrong independent hash, wrong key/transcript, malformed authenticated inner data, expiry/clock, restart, exact plaintext retry with different sealing, conflicting replacement/corruption and expiry at fsync publication. Fixed test resource lookup and expected CNG PlatformNotSupportedException-with-CryptographicException classification; production validation not weakened.
+- Fresh full Release/29 v2/45 legacy and CLI help PASS; Android 52 tests (0 skipped/failures), debug APK, instrumentation APK build and lint 0 errors/13 existing warnings PASS. No installs/live service/policies/VM/cloud/phone action, no packages. PROJECT_ONLY via wiki-memory/project-memory; connection journal unchanged (no actual auth/endpoint/secret change), cloud stays `477f18f`. Next Android explicit import/checksum UI, approval runtime, real device gates. Ponytail reused the established envelope suite, original intent and keys; no new signer, service or crypto dependency.
+
 ## 2026-10-01 — durable off-PC activation reaches the existing relay API
 
 - Connected original device/mailbox jobs and signed GNA1 to `prepare-native`/`activate-native`. Private immutable activation intent is saved before HTTP with a distinct DPAPI purpose; current proof must match exact offer/claim and not roll back state version. Saved historical proof only validates saved intent. Checks after file work/immediately before send and after response close stale-read/late-response paths. Exact retry preserves credentials/scopes/original expiry and all existing files; no `/tokens` fallback or phone export.
