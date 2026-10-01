@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — atomic native transport activation, server-side prerequisite
+
+- Added a mailbox-admin-only initial activation using existing token scopes/SQLite transactions. Exact initial device credential, independent new phone credential, epoch 1 and original expiry; device↔phone only. Explicit empty view list grants no locator permission. Hash-only marker outlives revocation until expiry, bounded by initial issuance; exact retry never writes or restores later rights.
+- Real Worker/DO/SQLite checks: positive request/approval/receipt exchange, destination/role/epoch isolation, real locator retained on refusal, lost-response/reopen with write-aborting triggers, concurrent winner, two injected SQL rollback points, changed/revoked/expired scopes, credential collisions, quota, admin revoke/expiry during body read. Full 63 tests/typecheck/dry-run PASS; no new dependency or live deployment. No .NET/Android changes or re-run claimed.
+- PROJECT_ONLY via wiki-memory/project-memory; auth journal needs no external-state update because no deployed auth/secret/endpoint changed. Production stays `477f18f`; operator must independently verify committed enrollment before calling this new API. Trusted export/operator/phone handoff and clients are still unconnected. Ponytail reused current stores, parsers, harness and response contract instead of adding a second provisioning service.
+
 ## 2026-10-01 — deliver committed enrollment without an open setup window
 
 - Reused the existing native handler/coordinator/store/relay for service-owned polling of confirmed results only. Added one hosted worker, no queue/table/framework/dependency. Startup is after authorized boundary, no one-time bootstrap/import networking; sequential stop cancels/drains before writer/key release. Pending ceremonies cannot be advanced or confirmed by this worker.
