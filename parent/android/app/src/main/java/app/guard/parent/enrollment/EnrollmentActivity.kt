@@ -1,15 +1,22 @@
 package app.guard.parent.enrollment
 
 import android.app.AlertDialog
+import android.content.Context
+import android.content.Intent
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
+import android.text.InputFilter
+import android.text.InputType
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.biometric.BiometricManager
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -35,6 +42,13 @@ class EnrollmentActivity : FragmentActivity() {
     private var displayedStage: EnrollmentStage? = null
     private var foreground = false
     private var scanning = false
+    private var pickingProfile = false
+    // Deliberately not saved in Bundle, preferences or intents. A recreated screen needs a new explicit import.
+    private var profileSelection: Pair<EnrollmentOffer, String>? = null
+    private val profilePicker = registerForActivityResult(object : ActivityResultContracts.OpenDocument() {
+        override fun createIntent(context: Context, input: Array<String>): Intent =
+            super.createIntent(context, input).putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+    }) { uri -> profileSelected(uri) }
     private var transcript: EnrollmentTranscript? = null
     private var signing: EnrollmentSigningOperation? = null
     private var prompt: BiometricPrompt? = null
@@ -68,7 +82,7 @@ class EnrollmentActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart(); stopped = false
-        if (!scanning) selectedOffer?.let { showOffer(it) } ?: showSaved()
+        if (!scanning && !pickingProfile) selectedOffer?.let { showOffer(it) } ?: showSaved()
     }
 
     override fun onResume() { super.onResume(); foreground = true; startWaiting() }
@@ -187,6 +201,7 @@ class EnrollmentActivity : FragmentActivity() {
             }
         }
         if (stage == EnrollmentStage.BIOMETRIC) button(R.string.enrollment_sign) { authenticate(state.offer) }
+        if (stage == EnrollmentStage.CONFIRMED) button(R.string.native_profile_open) { showNativeProfile(state.offer) }
         if (stage.canSynchronize) button(R.string.enrollment_update) { showOffer(state.offer) }
         if (!state.abandoned && stage != EnrollmentStage.CONFIRMED) button(R.string.enrollment_stop) {
             AlertDialog.Builder(this).setMessage(R.string.enrollment_stop_warning)
@@ -200,6 +215,88 @@ class EnrollmentActivity : FragmentActivity() {
                 }.show()
         }
         button(R.string.enrollment_back) { showSaved() }
+    }
+
+    private fun showNativeProfile(offer: EnrollmentOffer) = work(R.string.native_profile_loading,
+        failure = R.string.native_profile_failed) { renderNativeProfile(offer) }
+
+    private suspend fun renderNativeProfile(offer: EnrollmentOffer) {
+        val expiry = withContext(Dispatchers.IO) { ceremony.openNativeProfile(offer)?.use { it.expiryUnixMillis } }
+        content.removeAllViews(); device(offer)
+        label(R.string.native_profile_title, 22f)
+        if (expiry != null) {
+            text(getString(R.string.native_profile_present, DateFormat.getDateTimeInstance().format(Date(expiry))))
+            label(R.string.native_profile_scope)
+            button(R.string.native_profile_check) { showNativeProfile(offer) }
+        } else {
+            label(R.string.native_profile_instructions)
+            val caption = label(R.string.native_profile_checksum)
+            val checksum = EditText(this).apply {
+                id = View.generateViewId(); isSaveEnabled = false
+                textSize = 16f; typeface = Typeface.MONOSPACE
+                textDirection = View.TEXT_DIRECTION_LTR
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                filters = arrayOf(InputFilter.LengthFilter(65)) // Keep one excess character so oversized input cannot become valid.
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+                minHeight = dp(48); filterTouchesWhenObscured = true
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+            }
+            caption.labelFor = checksum.id
+            content.addView(checksum, LinearLayout.LayoutParams(-1, -2))
+            button(R.string.native_profile_choose) {
+                val digest = checksum.text.toString()
+                // Do not silently truncate/filter pasted text into a different accepted checksum.
+                if (!digest.matches(Regex("[0-9A-Fa-f]{64}"))) {
+                    checksum.error = getString(R.string.native_profile_checksum_error); checksum.requestFocus()
+                } else {
+                    checksum.text.clear()
+                    chooseNativeProfile(offer, digest)
+                }
+            }
+        }
+        button(R.string.native_profile_back) { showOffer(offer) }
+    }
+
+    private fun chooseNativeProfile(offer: EnrollmentOffer, digest: String) {
+        check(displayedStage == EnrollmentStage.CONFIRMED && selectedOffer === offer)
+        pickingProfile = true; profileSelection = offer to digest
+        waiting?.cancel(); setButtons(false); status.setText(R.string.native_profile_choosing)
+        try { profilePicker.launch(arrayOf("*/*")) }
+        catch (_: Exception) {
+            profileSelection = null; pickingProfile = false
+            status.setText(R.string.native_profile_failed); setButtons(true)
+        }
+    }
+
+    private fun profileSelected(uri: Uri?) {
+        val selection = profileSelection ?: return // Ignore restored/stale results; no remembered consent.
+        profileSelection = null
+        scope.launch {
+            val returned = withTimeoutOrNull(5000) {
+                lifecycle.withResumed {
+                    pickingProfile = false
+                    if (selectedOffer !== selection.first || displayedStage != EnrollmentStage.CONFIRMED) {
+                        status.setText(R.string.native_profile_cancelled); setButtons(true)
+                    } else if (uri == null) {
+                        status.setText(R.string.native_profile_cancelled); setButtons(true)
+                    } else work(R.string.native_profile_loading, success = R.string.native_profile_saved,
+                        failure = R.string.native_profile_failed) {
+                        val bytes = NativeProfileDocument.read(contentResolver, uri)
+                        withContext(Dispatchers.IO) {
+                            val active = coroutineContext
+                            ceremony.importNativeProfile(selection.first, bytes, selection.second) { active.ensureActive() }
+                        }
+                        // Reopen the actual saved ciphertext before reporting success; never claim network reachability.
+                        renderNativeProfile(selection.first)
+                    }
+                    true
+                }
+            }
+            if (returned == null) {
+                pickingProfile = false
+                if (!isDestroyed) { status.setText(R.string.native_profile_cancelled); setButtons(true) }
+            }
+        }
     }
 
     private fun authenticate(offer: EnrollmentOffer) {
@@ -240,7 +337,8 @@ class EnrollmentActivity : FragmentActivity() {
     }
 
     private fun startWaiting() {
-        if (!foreground || stopped || scanning || signing != null || job?.isActive == true || waiting?.isActive == true) return
+        if (!foreground || stopped || scanning || pickingProfile || signing != null || job?.isActive == true || waiting?.isActive == true ||
+            displayedStage == EnrollmentStage.CONFIRMED) return
         val offer = selectedOffer ?: return
         val previous = waiting
         waiting = scope.launch(start = CoroutineStart.LAZY) {
@@ -270,8 +368,9 @@ class EnrollmentActivity : FragmentActivity() {
     }
 
     // User actions first cancel/join polling. Durable files, not Activity/Bundle state, are the restart source.
-    private fun work(message: Int, action: suspend () -> Unit) {
-        if (stopped || scanning || job?.isActive == true || signing != null) return
+    private fun work(message: Int, success: Int = R.string.enrollment_scope, failure: Int = R.string.enrollment_failed,
+        action: suspend () -> Unit) {
+        if (stopped || scanning || pickingProfile || job?.isActive == true || signing != null) return
         val previous = job
         val poll = waiting
         poll?.cancel(); waiting = null
@@ -279,20 +378,21 @@ class EnrollmentActivity : FragmentActivity() {
             status.setText(message); setButtons(false)
             try {
                 previous?.join(); poll?.join(); ensureActive()
-                action(); status.setText(R.string.enrollment_scope)
+                action(); status.setText(success)
             }
+            catch (_: TimeoutCancellationException) { ensureActive(); status.setText(failure) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {
                 // Prompt construction/start may throw before it can deliver an error callback.
                 // Clear the same busy operation so retry never reuses an authenticated Signature.
                 signing?.cancel(); signing = null
                 prompt?.cancelAuthentication(); prompt = null
-                status.setText(R.string.enrollment_failed)
+                status.setText(failure)
             }
             finally {
                 if (job === coroutineContext.job) {
                     job = null
-                    if (!stopped && !scanning && signing == null) { setButtons(true); startWaiting() }
+                    if (!stopped && !scanning && !pickingProfile && signing == null) { setButtons(true); startWaiting() }
                 }
             }
         }
@@ -313,7 +413,7 @@ class EnrollmentActivity : FragmentActivity() {
     }
     private fun button(id: Int, action: () -> Unit) = Button(this).apply {
         setText(id); isAllCaps = false; minHeight = dp(48); filterTouchesWhenObscured = true
-        setOnClickListener { if (!stopped && !scanning && job?.isActive != true && signing == null) action() }
+        setOnClickListener { if (!stopped && !scanning && !pickingProfile && job?.isActive != true && signing == null) action() }
         content.addView(this, LinearLayout.LayoutParams(-1, -2))
     }
     private fun setButtons(enabled: Boolean) {

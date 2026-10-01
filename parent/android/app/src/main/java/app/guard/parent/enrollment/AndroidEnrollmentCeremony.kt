@@ -90,10 +90,11 @@ class AndroidEnrollmentCeremony(context: Context) {
     }
 
     /** Caller must get the checksum independently from the trusted off-PC operator, not from the imported file/relay. */
-    fun importNativeProfile(offer: EnrollmentOffer, envelope: ByteArray, independentlyTrustedSha256: String) {
+    fun importNativeProfile(offer: EnrollmentOffer, envelope: ByteArray, independentlyTrustedSha256: String, beforeCommit: () -> Unit = {}) {
+        beforeCommit()
         val state = nativeProfileOwner(offer)
         nativeProfiles.install(offer, requireNotNull(state.claim), AndroidRelayEncryptionKey.openExisting(state.encryptionAlias),
-            envelope, independentlyTrustedSha256)
+            envelope, independentlyTrustedSha256, beforeCommit)
         nativeProfileOwner(offer) // Do not report success if local enrollment/keys changed during storage.
     }
 

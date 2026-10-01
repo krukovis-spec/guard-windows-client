@@ -50,4 +50,19 @@
     <string name="enrollment_device_id">Компьютер: %1$s</string>
     <string name="enrollment_relay">Сервер Guard: %1$s</string>
     <string name="enrollment_deadline">QR-код действует до: %1$s</string>
+    <string name="native_profile_open">Настроить обмен с компьютером</string>
+    <string name="native_profile_title">Профиль обмена</string>
+    <string name="native_profile_loading">Проверяем профиль обмена…</string>
+    <string name="native_profile_instructions">Это шаг настройки, а не выдача разрешения. Сохраните на телефон файл .guard-native, созданный родительским оператором export-native. Введите полную контрольную сумму с экрана доверенного родительского компьютера, затем выберите файл в загрузках телефона. Не берите сумму из самого файла или сообщения с ним. Файлы .job на телефон не переносите.</string>
+    <string name="native_profile_checksum">Контрольная сумма SHA-256 с родительского компьютера</string>
+    <string name="native_profile_checksum_error">Нужны все 64 символа: цифры и буквы A–F, без пробелов. Сверьте сумму с родительским компьютером.</string>
+    <string name="native_profile_choose">Выбрать файл профиля</string>
+    <string name="native_profile_choosing">Выберите сохранённый файл .guard-native для этого компьютера.</string>
+    <string name="native_profile_cancelled">Выбор прерван, файл не импортирован. Чтобы повторить, снова введите контрольную сумму и выберите файл.</string>
+    <string name="native_profile_failed">Не удалось проверить или сохранить профиль. Проверьте дату телефона, файл .guard-native в загрузках и полную контрольную сумму на родительском компьютере. Сохранённый профиль не заменён. Если ошибка повторяется, не удаляйте приложение или ключи — нужна проверка настройки.</string>
+    <string name="native_profile_saved">Профиль сохранён и повторно проверен. Разрешение приложениям не выдано.</string>
+    <string name="native_profile_present">Профиль сохранён на телефоне. Указанный в нём срок — до %1$s.</string>
+    <string name="native_profile_scope">Это не проверка связи с сервером или текущих прав телефона. Сохранённый профиль не означает, что защита включена, и не разрешает запуск приложений.</string>
+    <string name="native_profile_check">Проверить сохранённый профиль</string>
+    <string name="native_profile_back">К привязке компьютера</string>
 </resources>

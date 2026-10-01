@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — explicit Android native profile import screen
+
+- Connected confirmed enrollment to explicit checksum + system file picker and existing HPKE/Keystore store. Local whole-file/size limits, one-shot memory-only consent, resumed-screen processing, no URI persistence/auto import, readback before success. Existing installed profile is read-only; no reset or replacement. Added cancellable document reader with one outstanding provider per process and cancellation check immediately before atomic storage; late provider output cannot import.
+- 55 JVM tests PASS including all truncations/extra bytes/partial reads/zero progress/cancellation and cancellation before actual temporary-store commit/exact retry. Debug + instrumentation APK build, lint 0 errors/13 prior warnings, fresh complete Release/29 v2/45 legacy PASS. Self-review covered file/result lifecycle, rechecked ownership, checksum provenance, no overwrite and failure copy. Device UI/provider/lifecycle/biometry NOT RUN; no cloud/VM/host action or dependency changes.
+- PROJECT_ONLY via wiki-memory/project-memory; README/protocol/plan/capsule updated, service-connection journal unchanged because no external auth/endpoint/secret changed. `ux-copy` shaped Russian action/error/success labels, explicitly separating profile storage from protection/permission. Ponytail reused AndroidX picker and existing crypto/store; final Codex styling is still queued M7, next is request/approval runtime. Production remains `477f18f`.
+
 ## 2026-10-01 — encrypted operator-to-native transport profile
 
 - Added GNI1 fixed-size HPKE envelope and `export-native` on the existing exact-activation path. Only approval credential and immutable intent dates; no admin/device credential/private key. New file plus independently displayed SHA-256, no export on uncertain/refused HTTP and no overwrite. Android decoder and no-backup ciphertext store reuse HPKE/Keystore; ceremony wrapper requires existing confirmed signed owner/keys and compiled origin. Historical enrollment is not current permission; profile alone creates no authority.

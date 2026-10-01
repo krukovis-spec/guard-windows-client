@@ -129,6 +129,22 @@ class NativeRelayProfileTest {
         assertThrows(Exception::class.java) { store.install(offer, claim, phone, raw, digest) }
         assertTrue(directory.listFiles()!!.isEmpty())
     }
+    @Test fun `cancel before publication removes only temporary file and exact retry preserves saved profile`() {
+        val store = NativeRelayProfileStore(directory, TestClock(now + 1000))
+        var checks = 0
+        assertThrows(java.util.concurrent.CancellationException::class.java) {
+            store.install(offer, claim, phone, raw, digest) { if (++checks == 2) throw java.util.concurrent.CancellationException() }
+        }
+        assertEquals(2, checks)
+        assertTrue(directory.listFiles()!!.isEmpty())
+        store.install(offer, claim, phone, raw, digest)
+        val path = directory.listFiles()!!.single(); val saved = path.readBytes()
+        checks = 0
+        assertThrows(java.util.concurrent.CancellationException::class.java) {
+            store.install(offer, claim, phone, raw, digest) { if (++checks == 2) throw java.util.concurrent.CancellationException() }
+        }
+        assertEquals(2, checks); assertArrayEquals(saved, path.readBytes())
+    }
     private class TestClock(var now: Long) : Clock() {
         override fun getZone() = ZoneOffset.UTC
         override fun withZone(zone: ZoneId): Clock = this

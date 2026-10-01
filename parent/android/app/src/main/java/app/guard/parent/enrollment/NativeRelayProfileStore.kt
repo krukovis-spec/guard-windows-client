@@ -16,11 +16,14 @@ internal class NativeRelayProfileStore(private val directory: File, private val 
     }
     init { check(directory.isDirectory || directory.mkdirs()) { "native profile storage unavailable" } }
 
-    fun install(offer: EnrollmentOffer, claim: EnrollmentKeyClaim, key: RelayEncryptionKey, bytes: ByteArray, trustedSha256: String): Unit = synchronized(lock) {
+    fun install(offer: EnrollmentOffer, claim: EnrollmentKeyClaim, key: RelayEncryptionKey, bytes: ByteArray, trustedSha256: String,
+        beforeCommit: () -> Unit = {}): Unit = synchronized(lock) {
+        beforeCommit()
         val raw = bytes.copyOf(); val imported = clock.millis()
         NativeRelayProfile.open(raw, offer, claim, key, trustedSha256, imported).use { incoming ->
             open(offer, claim, key)?.use { existing ->
                 require(existing.sameAs(incoming)) { "native profile already installed; explicit recovery required" }
+                beforeCommit()
                 return@synchronized // Keep the first verified ciphertext, even if the same plaintext is re-encrypted.
             }
             check(requireNotNull(directory.listFiles()).count { it.extension == "bin" } < 8) { "native profile limit" }
@@ -29,6 +32,7 @@ internal class NativeRelayProfileStore(private val directory: File, private val 
             try {
                 FileOutputStream(temporary).use { it.write(stored); it.fd.sync() }
                 val now = clock.millis(); require(now >= imported) { "native profile clock rollback" }; incoming.requireCurrent(now)
+                beforeCommit()
                 // One process lock and immutable target. No non-atomic fallback, replace, delete or auto-rekey.
                 Files.move(temporary.toPath(), file(offer).toPath(), StandardCopyOption.ATOMIC_MOVE)
             } finally { temporary.delete() }
