@@ -221,6 +221,12 @@ internal static class NativeApprovalTransactionChecks
             using (var store = Open())
             {
                 var current = store.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+                var cursorOnly = new RelayTransactionState(current.DeviceId, current.Version + 1, 1, 1, 7,
+                    current.HighestOutboundCursor, current.AcknowledgedOutboundCursor, current.PolicyRevision,
+                    current.ReplayFloors, current.TrackedRequests, current.PolicyLedger, current.ReconcileIntents,
+                    current.SignedReceipts, current.Outbox, current.RecipientOutboundCursors);
+                Reject(() => store.TryCommitAsync(current.Version, cursorOnly, default).GetAwaiter().GetResult(),
+                    "transport hint without a complete verified transaction");
                 var encoded = f.Seal(f.Approval(), cursor: 7);
                 var next = f.Prepare(encoded, current);
                 using var cancelled = new CancellationTokenSource(); cancelled.Cancel();

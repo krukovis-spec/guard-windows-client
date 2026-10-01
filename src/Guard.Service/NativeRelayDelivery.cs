@@ -31,23 +31,40 @@ internal sealed class NativeRelayDelivery(ServiceAuthoritativeStateBoundary serv
 
     internal async Task<bool> RunAsync(CancellationToken token)
     {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25), clock);
+        using var pass = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
+        token = pass.Token;
         var delivered = await DeliverOutboxAsync(token).ConfigureAwait(false);
         if (!delivered.Drained) return delivered.Processed;
         await AcknowledgeInboxAsync(token).ConfigureAwait(false); // Retries an ack lost after an earlier durable commit.
         var owner = await RequireReadyAsync(token).ConfigureAwait(false);
         var current = await service.RelayTransactions.LoadAsync(token).ConfigureAwait(false);
-        var page = await transport.PollAsync(current.CommittedInboundCursor, token).ConfigureAwait(false);
-        if (page.Count == 0) return delivered.Processed;
-        // ponytail: one approval per pass bounds receipt capacity and latency; batch only if throughput requires it.
-        try
+        var scanAfter = current.CommittedInboundCursor;
+        // ponytail: scan at most 64 pages (covers the Worker's 1000-frame quota), within this pass's
+        // pass deadline. This is only a read bookmark, never a durable cursor or acknowledgment.
+        for (var pageIndex = 0; pageIndex < 64; pageIndex++)
         {
-            if (!await _transactions.AcceptApprovalAsync(owner.Version, page[0], token).ConfigureAwait(false)) return delivered.Processed;
+            await RequireReadyAsync(token).ConfigureAwait(false);
+            var page = await transport.PollAsync(scanAfter, token).ConfigureAwait(false);
+            if (page.Count == 0 && pageIndex == 0) return delivered.Processed;
+            // At most one verified outcome per pass. Bad ciphertext never advances local state;
+            // later commands still require exact signed sequence/request/history checks.
+            foreach (var frame in page)
+            {
+                try
+                {
+                    if (!await _transactions.AcceptApprovalAsync(owner.Version, frame, token).ConfigureAwait(false)) return delivered.Processed;
+                }
+                catch (NativeApprovalRejectedException) { continue; }
+                await DeliverOutboxAsync(token).ConfigureAwait(false);
+                await AcknowledgeInboxAsync(token).ConfigureAwait(false);
+                return true;
+            }
+            if (page.Count < HttpRelayTransport.PageSize) break;
+            // Poll already checked the entire page's bounded, strictly increasing GRF1 cursors.
+            scanAfter = RelayCanonicalEncoding.DecodeRelayFrame(page[^1]).Cursor;
         }
-        catch (NativeApprovalRejectedException)
-        { throw new HttpRequestException("Relay approval was refused; inbox cursor is unchanged."); }
-        await DeliverOutboxAsync(token).ConfigureAwait(false);
-        await AcknowledgeInboxAsync(token).ConfigureAwait(false);
-        return true;
+        throw new HttpRequestException("Relay approval page was refused; inbox cursor is unchanged.");
     }
 
     private async Task<(bool Drained, bool Processed)> DeliverOutboxAsync(CancellationToken token)

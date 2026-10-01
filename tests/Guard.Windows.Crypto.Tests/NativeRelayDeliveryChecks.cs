@@ -50,6 +50,8 @@ internal static class NativeRelayDeliveryChecks
         var loseRequest = true; var changeOwner = false; var corrupt = false;
         var expireDuringPoll = false; var loseReceipt = false; var loseAck = false; var replay = false;
         var loseRetirement = false; var rollbackRetirement = false; byte[]? retiredBytes = null;
+        List<byte[]>? scanFrames = null;
+        var scanPolls = 0; var expireScan = false; var timeoutScan = false;
         string? badResponse = null;
 
         async Task<HttpResponseMessage> Send(HttpRequestMessage request, CancellationToken token)
@@ -99,6 +101,22 @@ internal static class NativeRelayDeliveryChecks
             if (request.RequestUri.AbsolutePath.EndsWith("/poll", StringComparison.Ordinal))
             {
                 polls++;
+                if (scanFrames != null)
+                {
+                    scanPolls++;
+                    var after = long.Parse(request.RequestUri.Query.Split('&').Single(p => p.StartsWith("after=", StringComparison.Ordinal))[6..],
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    Check(after >= state.CommittedInboundCursor && state.CommittedInboundCursor == 7 && state.SignedReceipts.Count == 1,
+                        "read-only scan changed authoritative state");
+                    var batch = scanFrames.Where(b => RelayCanonicalEncoding.DecodeRelayFrame(b).Cursor > after).Take(16).ToArray();
+                    if (after > state.CommittedInboundCursor)
+                    {
+                        if (expireScan) clock.Now = config.ExpiresAt;
+                        if (timeoutScan) clock.ExpirePass!();
+                    }
+                    return Reply(new { frames = batch.Select(Convert.ToBase64String).ToArray(),
+                        nextCursor = batch.Length == 0 ? after : RelayCanonicalEncoding.DecodeRelayFrame(batch[^1]).Cursor });
+                }
                 Check(request.RequestUri.Query.Contains("&after=" + state.CommittedInboundCursor + "&", StringComparison.Ordinal), "poll did not resume committed cursor");
                 var bytes = (byte[])frame.Clone(); if (corrupt) bytes[^1] ^= 1;
                 if (expireDuringPoll) clock.Now = config.ExpiresAt;
@@ -160,19 +178,39 @@ internal static class NativeRelayDeliveryChecks
             Check(calls == priorCalls, "local corruption reached network or became retryable peer input");
         }
         finally { File.WriteAllBytes(path, durable); }
-        // Same signed command at a fresh transport cursor resends history, not another grant.
-        inboundCursor = 10; frame = Seal(signed, inboundCursor); loseReceipt = true;
+        // Read bookmarks can pass hostile ciphertext, but never become durable acknowledgments.
+        var template = RelayCanonicalEncoding.DecodeRelayFrame(frame);
+        byte[] Poison(long cursor) => RelayCanonicalEncoding.EncodeRelayFrame(new RelayFrame(RelayFrameKind.Approval,
+            template.MailboxId, template.RecipientKeyId, "poison-frame-" + cursor.ToString("D6"), cursor, 0,
+            template.CreatedAtUtc, template.ExpiresAtUtc, template.GetEncapsulatedKeyCopy(), template.GetCiphertextCopy()));
+        scanFrames = Enumerable.Range(8, 1030).Select(i => Poison(i)).ToList();
         await Reject(() => Pass(), typeof(HttpRequestException));
+        Check(scanPolls == 64 && (await service.RelayTransactions.LoadAsync(default)).Version == restored.Version,
+            "hostile scan exceeded page limit or changed authority");
+        scanFrames = scanFrames.Take(32).ToList(); scanPolls = 0;
+        await Reject(() => Pass(), typeof(HttpRequestException));
+        Check(scanPolls == 3 && (await service.RelayTransactions.LoadAsync(default)).Version == restored.Version,
+            "all-invalid page/empty continuation advanced cursor");
+        scanPolls = 0; expireScan = true; await Reject(() => Pass(), typeof(InvalidDataException)); expireScan = false; clock.Now = now;
+        Check(scanPolls == 2, "expired profile continued scanning");
+        scanPolls = 0; timeoutScan = true; await Reject(() => Pass()); timeoutScan = false;
+        Check(scanPolls == 2 && clock.TimerDisposed && (await service.RelayTransactions.LoadAsync(default)).Version == restored.Version,
+            "pass timeout leaked timer, continued scan or changed cursor");
+        // Same signed command at a fresh transport cursor resends history, not another grant.
+        inboundCursor = 40; frame = Seal(signed, inboundCursor); loseReceipt = true;
+        scanFrames.Add(frame); scanPolls = 0;
+        await Reject(() => Pass(), typeof(HttpRequestException));
+        Check(scanPolls == 3, "valid command after two poison pages was not reached"); scanFrames = null;
         var repeated = await service.RelayTransactions.LoadAsync(default);
-        Check(repeated.CommittedInboundCursor == 10 && repeated.PolicyRevision == 1 && repeated.Outbox.Count == 1 &&
+        Check(repeated.CommittedInboundCursor == 40 && repeated.PolicyRevision == 1 && repeated.Outbox.Count == 1 &&
             repeated.SignedReceipts.Single().GetSignedReceiptCopy().SequenceEqual(restored.SignedReceipts.Single().GetSignedReceiptCopy()) &&
             repeated.ReconcileIntents.Count == 1 && repeated.PolicyLedger.Count == 1, "redelivery changed authority or receipt time");
         await Reopen(); Check(await Pass(), "redelivery outbox did not retry after restart");
         var delivered = await service.RelayTransactions.LoadAsync(default);
-        Check(delivered.CommittedInboundCursor == 10 && delivered.AcknowledgedOutboundCursor == 3 && delivered.Outbox.Count == 0 &&
+        Check(delivered.CommittedInboundCursor == 40 && delivered.AcknowledgedOutboundCursor == 3 && delivered.Outbox.Count == 0 &&
             delivered.ReplayFloors.Single().HighestAcceptedSequence == 1 && published.Count == 3, "redelivery retry changed bytes/floor or lost ack");
         var conflicting = Approval(sign(RelayCanonicalEncoding.ComputeApprovalHash(Approval(new byte[64], ParentDecisionKind.Deny))), ParentDecisionKind.Deny);
-        inboundCursor = 11; frame = Seal(conflicting, inboundCursor);
+        inboundCursor = 41; frame = Seal(conflicting, inboundCursor);
         await Reject(() => Pass(), typeof(HttpRequestException));
         Check((await service.RelayTransactions.LoadAsync(default)).Version == delivered.Version, "conflicting repeated command changed state");
         frame = Seal(signed, inboundCursor); loseReceipt = true;
@@ -193,14 +231,30 @@ internal static class NativeRelayDeliveryChecks
         clock.Now = now.AddDays(1).AddSeconds(1);
         await Reopen(); Check(await Pass(), "expired outbox did not retire after restart");
         var retired = await service.RelayTransactions.LoadAsync(default);
-        Check(retired.Outbox.Count == 0 && retired.AcknowledgedOutboundCursor == 4 && retired.CommittedInboundCursor == 11 &&
+        Check(retired.Outbox.Count == 0 && retired.AcknowledgedOutboundCursor == 4 && retired.CommittedInboundCursor == 41 &&
             retired.SignedReceipts.Single().GetSignedReceiptCopy().SequenceEqual(waiting.SignedReceipts.Single().GetSignedReceiptCopy()) &&
             retired.PolicyRevision == 1 && retired.PolicyLedger.Count == 1 && retired.ReconcileIntents.Count == 1 &&
             retired.ReplayFloors.Single().HighestAcceptedSequence == 1, "retirement changed permission, history or inbound cursor");
         Console.WriteLine("PASS native relay delivery: actual owner/DPAPI/HPKE commit, lost responses/restart/owner race, receipt redelivery and expired-outbox retirement without renewed grants, durable-only ack, hostile frame/profile and hint rejection; controlled HTTP only");
     }
 
-    private sealed class Clock : TimeProvider { internal DateTimeOffset Now; public override DateTimeOffset GetUtcNow() => Now; }
+    private sealed class Clock : TimeProvider
+    {
+        internal DateTimeOffset Now; internal Action? ExpirePass; internal bool TimerDisposed = true;
+        public override DateTimeOffset GetUtcNow() => Now;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            Check(dueTime == TimeSpan.FromSeconds(25) && period == Timeout.InfiniteTimeSpan, "unbounded pass timer");
+            TimerDisposed = false; ExpirePass = () => callback(state);
+            return new PassTimer(() => { TimerDisposed = true; ExpirePass = null; });
+        }
+        private sealed class PassTimer(Action dispose) : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => throw new NotSupportedException();
+            public void Dispose() => dispose();
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+    }
     private sealed class Boundary : IServiceDataBoundaryGuard
     { internal bool Fail; public void DemandReady() { if (Fail) throw new UnauthorizedAccessException("Synthetic lost boundary."); } }
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
