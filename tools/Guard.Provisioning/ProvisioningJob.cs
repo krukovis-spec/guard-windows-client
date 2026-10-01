@@ -53,7 +53,8 @@ internal sealed class ProvisioningJob
     }
 
     internal static async Task PublishAsync(string independentlyTrustedOrigin, string jobPath, string outputPath,
-        string adminCredential, DateTimeOffset now, CancellationToken cancellationToken, HttpMessageHandler? handler = null)
+        string adminCredential, DateTimeOffset now, CancellationToken cancellationToken, HttpMessageHandler? handler = null,
+        string? expectedMailbox = null)
     {
         // Pin origin independently on EVERY invocation, before using an administrative credential.
         cancellationToken.ThrowIfCancellationRequested();
@@ -75,15 +76,30 @@ internal sealed class ProvisioningJob
                 value.GetProperty("issuedAt").GetInt64(), value.GetProperty("expiresAt").GetInt64(), now);
         }
         finally { CryptographicOperations.ZeroMemory(raw); }
+        if (expectedMailbox != null && job._mailbox != expectedMailbox) throw new InvalidDataException("Mailbox credential binding.");
         var body = JsonSerializer.SerializeToUtf8Bytes(new { accessToken = job._token, role = "device", expiresAt = job._expires,
             recipientKeyId = job._encryptionId, publishRecipientKeyIds = Array.Empty<string>() });
+        await PostIssuanceAsync(job._origin + "/v1/mailboxes/" + job._mailbox + "/tokens/initial", adminCredential,
+            body, "device", job._expires, cancellationToken, handler);
+        cancellationToken.ThrowIfCancellationRequested();
+        var profile = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, role = "device", relayOrigin = job._origin,
+            deviceId = job._deviceId, signingKeyId = job._signingId, encryptionKeyId = job._encryptionId, mailboxId = job._mailbox,
+            deviceEpoch = 1, authorityEpoch = 1, accessToken = job._token, issuedAt = job._issued, expiresAt = job._expires });
+        try { SaveNewPrivate(outputPath, DeviceRelayProfileEnvelope.Seal(job._encryptionSpki, profile)); }
+        finally { CryptographicOperations.ZeroMemory(profile); }
+    }
+
+    // The two initial-issuance callers use the same bounded, non-redirecting HTTP path.
+    internal static async Task<long> PostIssuanceAsync(string endpoint, string credential, byte[] body,
+        string role, long? expiresAt, CancellationToken cancellationToken, HttpMessageHandler? handler)
+    {
         using var client = new HttpClient(handler ?? new HttpClientHandler {
             AllowAutoRedirect = false, UseProxy = false, UseCookies = false, AutomaticDecompression = DecompressionMethods.None
         }) { Timeout = Timeout.InfiniteTimeSpan };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
-        using var request = new HttpRequestMessage(HttpMethod.Post, job._origin + "/v1/mailboxes/" + job._mailbox + "/tokens/initial");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminCredential);
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential);
         request.Content = new ByteArrayContent(body);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         var reply = new byte[513];
@@ -107,27 +123,24 @@ internal sealed class ProvisioningJob
             if (length > 512) throw new InvalidDataException("Initial issuance response size.");
             using var result = JsonDocument.Parse(reply.AsMemory(0, length), new JsonDocumentOptions { MaxDepth = 2 });
             RequireObject(result.RootElement, "role", "expiresAt");
-            if (String(result.RootElement, "role") != "device" || result.RootElement.GetProperty("expiresAt").GetInt64() != job._expires)
+            var confirmedExpiry = result.RootElement.GetProperty("expiresAt").GetInt64();
+            if (String(result.RootElement, "role") != role || confirmedExpiry <= 0 || expiresAt.HasValue && confirmedExpiry != expiresAt.Value)
                 throw new InvalidDataException("Initial issuance response binding.");
             deadline.Token.ThrowIfCancellationRequested();
-            var profile = JsonSerializer.SerializeToUtf8Bytes(new { version = 1, role = "device", relayOrigin = job._origin,
-                deviceId = job._deviceId, signingKeyId = job._signingId, encryptionKeyId = job._encryptionId, mailboxId = job._mailbox,
-                deviceEpoch = 1, authorityEpoch = 1, accessToken = job._token, issuedAt = job._issued, expiresAt = job._expires });
-            try { SaveNewPrivate(outputPath, DeviceRelayProfileEnvelope.Seal(job._encryptionSpki, profile)); }
-            finally { CryptographicOperations.ZeroMemory(profile); }
+            return confirmedExpiry;
         }
         finally { request.Headers.Authorization = null; CryptographicOperations.ZeroMemory(body); CryptographicOperations.ZeroMemory(reply); }
     }
 
-    private static void RequireOrigin(string origin)
+    internal static void RequireOrigin(string origin)
     {
         RelayCanonicalEncoding.RequireEnrollmentRelay(origin);
         var uri = new Uri(origin, UriKind.Absolute);
         if (origin != uri.GetLeftPart(UriPartial.Authority)) throw new InvalidDataException("Pinned origin must not include a path.");
     }
-    private static string Id(string value) => GuardIdentifier.IsCanonicalToken(value) ? value : throw new InvalidDataException("Identifier.");
-    private static string String(JsonElement value, string name) => value.GetProperty(name).GetString() ?? throw new InvalidDataException("Missing string.");
-    private static void RequireObject(JsonElement value, params string[] names)
+    internal static string Id(string value) => GuardIdentifier.IsCanonicalToken(value) ? value : throw new InvalidDataException("Identifier.");
+    internal static string String(JsonElement value, string name) => value.GetProperty(name).GetString() ?? throw new InvalidDataException("Missing string.");
+    internal static void RequireObject(JsonElement value, params string[] names)
     {
         if (value.ValueKind != JsonValueKind.Object) throw new InvalidDataException("JSON object required.");
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -155,7 +168,7 @@ internal sealed class ProvisioningJob
                 throw new IOException("Operator files must remain outside Git.");
         }
     }
-    private static void SaveNewPrivate(string path, byte[] bytes)
+    internal static void SaveNewPrivate(string path, byte[] bytes)
     {
         RequireOutputPath(path);
         using var identity = WindowsIdentity.GetCurrent();
@@ -166,7 +179,7 @@ internal sealed class ProvisioningJob
         file.Write(bytes); file.Flush(flushToDisk: true);
         // A partial file after failure is retained and rejected on read, never silently regenerated/overwritten.
     }
-    private static byte[] ReadBounded(string path, int maximum, bool requirePrivate)
+    internal static byte[] ReadBounded(string path, int maximum, bool requirePrivate)
     {
         if (requirePrivate) RequireOutputPath(path);
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);

@@ -42,7 +42,7 @@ export default {
     if (url.pathname === "/v1/admin/bootstrap" && request.method === "POST") {
       const bootstrap = tokenFrom(request); if (!env.BOOTSTRAP_ADMIN_TOKEN || !bootstrap || !constantTimeEqual(await sha256(bootstrap), await sha256(env.BOOTSTRAP_ADMIN_TOKEN))) return fail(403, "bootstrap_forbidden");
       const body = await readJsonObject(request);
-      if (!validMailboxId(body.mailboxId) || !validToken(body.accessToken)) return fail(400, "invalid_bootstrap");
+      if (url.search || Object.keys(body).length !== 2 || !validMailboxId(body.mailboxId) || !validToken(body.accessToken)) return fail(400, "invalid_bootstrap");
       return await forward(env, body.mailboxId, new Request(request.url, { method: "POST", headers: request.headers, body: JSON.stringify(body) }), bootstrap, true);
     }
     if (isParentBffPath(url.pathname)) return forwardParentBff(request, env);
@@ -64,6 +64,13 @@ export class DeviceMailbox implements DurableObject {
   private readonly sql: SqlStorage;
   constructor(readonly state: DurableObjectState, readonly env: Env) { this.sql = state.storage.sql; state.blockConcurrencyWhile(async () => this.migrate()); }
   private migrate(): void {
+    this.state.storage.transactionSync(() => {
+      if ([...this.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mailbox_bootstrap'")].length) return;
+      const legacy = [...this.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tokens'")].length > 0;
+      this.sql.exec("CREATE TABLE mailbox_bootstrap(id INTEGER PRIMARY KEY CHECK(id=1),hash BLOB,expires_at INTEGER)");
+      // Never guess ownership of a pre-migration mailbox, even if all its tokens expired.
+      if (legacy) this.sql.exec("INSERT INTO mailbox_bootstrap(id) VALUES(1)");
+    });
     migrateEnrollment(this.sql);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS tokens(hash BLOB PRIMARY KEY, role TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS frames(frame_id TEXT PRIMARY KEY, recipient_key_id TEXT NOT NULL, kind INTEGER NOT NULL, cursor INTEGER NOT NULL, expires_at INTEGER NOT NULL, bytes BLOB NOT NULL, size INTEGER NOT NULL);
@@ -141,7 +148,29 @@ export class DeviceMailbox implements DurableObject {
     this.sql.exec("DELETE FROM parent_locators WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM parent_registration_tickets WHERE expires_at <= ?", now);
   }
-  private async bootstrap(request: Request): Promise<Response> { const body = await readJsonObject(request); if (!validToken(body.accessToken)) return fail(400, "invalid_bootstrap"); const hash = await sha256(body.accessToken); const exists = [...this.sql.exec("SELECT 1 FROM tokens LIMIT 1")].length > 0; if (exists) return fail(409, "already_bootstrapped"); this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,?,?)", hash.buffer, "admin", Date.now() + 365 * 86400000); return json({ role: "admin" }, 201); }
+  private async bootstrap(request: Request): Promise<Response> {
+    const body = await readJsonObject(request);
+    if (Object.keys(body).length !== 2 || body.mailboxId !== this.state.id.name || !validToken(body.accessToken))
+      return fail(400, "invalid_bootstrap");
+    const hash = await sha256(body.accessToken);
+    return this.state.storage.transactionSync(() => {
+      const marker = [...this.sql.exec<{ hash: ArrayBuffer | null; expires_at: number | null }>(
+        "SELECT hash,expires_at FROM mailbox_bootstrap WHERE id=1")][0];
+      if (marker) {
+        const token = [...this.sql.exec<{ role: string; expires_at: number }>(
+          "SELECT role,expires_at FROM tokens WHERE hash=?", hash.buffer)][0];
+        if (!marker.hash || !constantTimeEqual(new Uint8Array(marker.hash), hash) || !token || token.role !== "admin" ||
+          token.expires_at !== marker.expires_at || token.expires_at <= Date.now())
+          return fail(409, "already_bootstrapped");
+        return json({ role: "admin", expiresAt: marker.expires_at }, 201); // Read-only exact retry, no renewed lifetime.
+      }
+      if ([...this.sql.exec("SELECT 1 FROM tokens LIMIT 1")].length) return fail(409, "already_bootstrapped");
+      const expiresAt = Date.now() + 365 * 86400000;
+      this.sql.exec("INSERT INTO mailbox_bootstrap(id,hash,expires_at) VALUES(1,?,?)", hash.buffer, expiresAt);
+      this.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?,'admin',?)", hash.buffer, expiresAt);
+      return json({ role: "admin", expiresAt }, 201);
+    });
+  }
   private async provisionToken(request: Request, auth: Auth, initialOnly = false): Promise<Response> {
     if (auth.role !== "admin") throw new RelayHttpError(403, "role_forbidden");
     const body = await readJsonObject(request);

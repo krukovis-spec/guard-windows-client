@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-01 — safe first-mailbox setup reaches existing device provisioning
+
+- Reused the off-PC utility for durable mailbox prepare/publish and device issuance from a pinned mailbox job. Master credential is first saved by the operator in Bitwarden; separate-purpose CurrentUser DPAPI/user-only ACL operational copy, hidden input-only global bootstrap credential, exact independently pinned origin/mailbox before network. No credentials in arguments/logs/profile; no new dependency/abstract infrastructure. Existing bounded non-redirecting HTTP and file checks serve both issuance paths.
+- Worker bootstrap is now atomic and safely retryable: one permanent hash/expiry marker, unchanged valid original admin only, no expiry extension/resurrection after revoke/expiry/role change. Pre-migration mailboxes are sealed without assuming who owned them; existing tokens retained. Added actual DELETE-self/retry, concurrent competing admin, fault-rollback, repeated migration and legacy empty/populated checks. No automatic reset or admin-upsert fallback.
+- Checks: 59 Worker tests/typecheck/dry-run PASS; fresh complete Release/29 v2/45 legacy PASS, including real temporary DPAPI/file ACL tests, lost bootstrap response/exact retry, cross-purpose/origin/mailbox refusal and mailbox-job→encrypted device profile→actual service import. One fixture failure revealed ACL restoration did not persist an unmodified FileSecurity object; fixed both old and new test restores, verified through the production private-file reader so later HTTP faults are genuinely reached. CLI help PASS. No Guard/service/policy/VM/phone action on host; actual bootstrap secrets and authenticated cloud issuance not configured/tested.
+- PROJECT_ONLY until the Worker update is deployed: capsule/plan/operator README record the runnable route and remaining human-secret/release/VM gates. Ponytail reused two existing helpers rather than creating a separate setup framework; no claim of family readiness.
+
 ## 2026-10-01 — actual relay update with existing restricted access
 
 - Published existing verified source `95bb8ca` to only `guard-relay`, using existing CurrentUser DPAPI token after checking user-only ACL. No new dependency, deployment wrapper, credential, permission, route, namespace or VoicePaste change. Ponytail reused the existing deployment and test path.

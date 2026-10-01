@@ -157,6 +157,71 @@ describe("mailbox authorization and signing intent", () => {
     });
   });
 
+  it("retries mailbox bootstrap exactly without reviving expired, changed or revoked administrators", async () => {
+    for (const mutation of ["DELETE FROM tokens", "UPDATE tokens SET expires_at=0", "UPDATE tokens SET expires_at=expires_at+1",
+      "UPDATE tokens SET role='reader'"]) {
+      const mailbox = "mailbox-bootstrap-retry-" + crypto.randomUUID();
+      const call = (accessToken = adminToken, extra = {}) => request("/v1/admin/bootstrap", {
+        method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" },
+        body: JSON.stringify({ mailboxId: mailbox, accessToken, ...extra }),
+      });
+      const first = await call(); expect(first.status).toBe(201);
+      const expected = await first.json();
+      const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox));
+      await runInDurableObject(stub, (_instance, state) => { new DeviceMailbox(state, env); });
+      const retry = await call(); expect(retry.status).toBe(201); expect(await retry.json()).toEqual(expected);
+      expect((await call("z".repeat(32))).status).toBe(409);
+      expect((await call(adminToken, { ignored: true })).status).toBe(400);
+      if (mutation === "DELETE FROM tokens") {
+        expect((await request(`/v1/mailboxes/${mailbox}/tokens`, { method: "DELETE",
+          headers: { ...bearer(adminToken), "content-type": "application/json" }, body: JSON.stringify({ accessToken: adminToken }) })).status).toBe(204);
+      } else await runInDurableObject(stub, (_instance, state) => { state.storage.sql.exec(mutation); });
+      expect((await call()).status).toBe(409);
+      await runInDurableObject(stub, (_instance, state) => {
+        state.storage.sql.exec("DELETE FROM tokens"); new DeviceMailbox(state, env);
+      });
+      expect((await call("n".repeat(32))).status).toBe(409);
+      await runInDurableObject(stub, (_instance, state) => {
+        expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n).toBe(0);
+        expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM mailbox_bootstrap")][0]!.n).toBe(1);
+      });
+    }
+  });
+
+  it("atomically creates bootstrap history and seals legacy empty mailboxes without adopting credentials", async () => {
+    const mailbox = "mailbox-bootstrap-atomic-0001";
+    const call = (id: string) => request("/v1/admin/bootstrap", { method: "POST",
+      headers: { ...bearer(bootstrapToken), "content-type": "application/json" },
+      body: JSON.stringify({ mailboxId: id, accessToken: adminToken }) });
+    const stub = env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox));
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("CREATE TRIGGER fail_bootstrap BEFORE INSERT ON tokens BEGIN SELECT RAISE(ABORT,'test-only'); END");
+    });
+    expect((await call(mailbox)).status).toBe(503);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec("SELECT * FROM mailbox_bootstrap")]).toEqual([]);
+      expect([...state.storage.sql.exec("SELECT * FROM tokens")]).toEqual([]);
+      state.storage.sql.exec("DROP TRIGGER fail_bootstrap");
+    });
+    expect((await call(mailbox)).status).toBe(201);
+    for (const populated of [false, true]) {
+      const old = "mailbox-bootstrap-legacy-" + populated;
+      await runInDurableObject(env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(old)), (_instance, state) => {
+        state.storage.sql.exec("DROP TABLE mailbox_bootstrap");
+        if (populated) state.storage.sql.exec("INSERT INTO tokens(hash,role,expires_at) VALUES(?, 'admin', ?)",
+          new Uint8Array(32).buffer, Date.now() + 10000);
+        new DeviceMailbox(state, env);
+      });
+      expect((await call(old)).status).toBe(409);
+      await runInDurableObject(env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(old)), (_instance, state) => {
+        expect([...state.storage.sql.exec("SELECT * FROM mailbox_bootstrap")]).toEqual([{ id: 1, hash: null, expires_at: null }]);
+        expect([...state.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM tokens")][0]!.n).toBe(populated ? 1 : 0);
+        state.storage.sql.exec("DELETE FROM tokens"); new DeviceMailbox(state, env);
+      });
+      expect((await call(old)).status).toBe(409);
+    }
+  });
+
   it("rejects stale scope, role or lifetime after reading a slow mutating request", async () => {
     const cases = [
       ["frames", "POST", deviceToken, "UPDATE tokens SET publish_recipient_key_ids='[]' WHERE role='device'", 403],
@@ -319,7 +384,7 @@ describe("mailbox authorization and signing intent", () => {
     let response = await request("/v1/admin/bootstrap", { method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" }, body: JSON.stringify({ mailboxId: mailbox, accessToken: adminToken }) });
     expect(response.status).toBe(201);
     response = await request("/v1/admin/bootstrap", { method: "POST", headers: { ...bearer(bootstrapToken), "content-type": "application/json" }, body: JSON.stringify({ mailboxId: mailbox, accessToken: adminToken }) });
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(201);
     for (const [accessToken, role] of [[deviceToken, "device"], [approvalToken, "approval"], [readerToken, "reader"]] as const) {
       response = await request(`/v1/mailboxes/${mailbox}/tokens`, { method: "POST", headers: { ...bearer(adminToken), "content-type": "application/json" }, body: JSON.stringify({ accessToken, role, expiresAt: Date.now() + 600000,
         recipientKeyId: role === "device" ? deviceRecipient : parentRecipient,
