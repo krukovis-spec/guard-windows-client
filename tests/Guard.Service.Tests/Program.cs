@@ -274,7 +274,8 @@ namespace Guard.Service.Tests
 
                 Assert(found, "Guard service worker was not registered.");
                 var ordered = workers.ToArray();
-                Assert(ordered[^2] is GuardServiceWorker && ordered[^1] is NativeEnrollmentDeliveryWorker,
+                Assert(ordered[^3] is GuardServiceWorker && ordered[^2] is NativeEnrollmentDeliveryWorker &&
+                    ordered[^1] is NativeEnrollmentDeliveryWorker,
                     "Delivery must start after, and stop before, the authoritative boundary.");
                 var options = host.Services.GetRequiredService<IOptions<HostOptions>>().Value;
                 Assert(!options.ServicesStartConcurrently && !options.ServicesStopConcurrently,

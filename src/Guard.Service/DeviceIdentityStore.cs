@@ -83,6 +83,9 @@ internal sealed class DeviceIdentityStore(GuardDataPaths paths, IStateDataProtec
         // A complete key record may precede state after a power cut. Reuse it; never rotate it.
         if (File.Exists(paths.DeviceIdentityFile)) return Load();
 
+        if (File.Exists(paths.RelayStateFile) || File.Exists(paths.RelayStateBackupFile) || File.Exists(paths.RelayJournalFile))
+            throw new InvalidOperationException("Existing relay history requires recovery of the original device identity.");
+
         using var signing = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         using var encryption = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         var deviceId = "device-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();

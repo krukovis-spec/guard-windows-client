@@ -218,11 +218,11 @@ namespace Guard.Domain.Relay
                 throw new ArgumentNullException(nameof(transaction));
             }
 
-            if (CommittedInboundCursor == long.MaxValue ||
-                transaction.InboundCursor != CommittedInboundCursor + 1)
+            if (transaction.InboundCursor <= CommittedInboundCursor ||
+                transaction.InboundCursor > MaximumRecipientCursor)
             {
                 throw new InvalidOperationException(
-                    "An approval must consume exactly the next inbound cursor.");
+                    "An approval must advance the bounded inbound transport cursor.");
             }
 
             var nextRecipientCursors = AdvanceRecipientCursors(new[] { transaction.EncryptedReceiptOutboxItem });
@@ -342,6 +342,20 @@ namespace Guard.Domain.Relay
                 signedReceipts: nextReceipts,
                 outbox: nextOutbox,
                 recipientOutboundCursors: nextRecipientCursors);
+        }
+
+        // Non-authorizing delivery only. The trusted crypto caller must verify an exact
+        // already-recorded command and seal its existing signed receipt, never a new decision.
+        public RelayTransactionState WithRedeliveredReceipt(long inboundCursor, RelayEncryptedOutboxItem encryptedReceipt)
+        {
+            if (encryptedReceipt == null) throw new ArgumentNullException(nameof(encryptedReceipt));
+            if (inboundCursor <= CommittedInboundCursor || inboundCursor > MaximumRecipientCursor ||
+                _signedReceipts.Length == 0 || encryptedReceipt.Kind != RelayFrameKind.Receipt || _outbox.Length >= MaximumOutboxItems)
+                throw new InvalidOperationException("Receipt redelivery requires newer bounded input, existing receipt history and outbox capacity.");
+            var heads = AdvanceRecipientCursors(new[] { encryptedReceipt });
+            return CreateSuccessor(inboundCursor, encryptedReceipt.OutboundCursor, AcknowledgedOutboundCursor, PolicyRevision,
+                _replayFloors, _trackedRequests, _policyLedger, _reconcileIntents, _signedReceipts,
+                Append(_outbox, encryptedReceipt), heads);
         }
 
         public RelayTransactionState WithAcknowledgedOutboundCursor(long cursor)

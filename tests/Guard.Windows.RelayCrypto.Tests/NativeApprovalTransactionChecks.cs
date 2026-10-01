@@ -44,19 +44,37 @@ internal static class NativeApprovalTransactionChecks
                     next.TrackedRequests.Single().Resolution == RelayRequestResolution.Allowed &&
                     receipt.Status == CommandReceiptStatus.AcceptedPendingReconciliation && receipt.ReconciliationStatus == ReconciliationStatus.Pending, "allow must await effect");
             Reject(() => f.Prepare(f.Seal(approval), next), "same cursor replay");
-            Reject(() => f.Prepare(f.Seal(approval, cursor: 2), next), "same approval at new cursor");
+            var repeated = f.Prepare(f.Seal(approval, cursor: 2), next);
+            CheckRedelivery(next, repeated);
+            Check(f.OpenReceipt(repeated).ProcessedAtUtc == receipt.ProcessedAtUtc && f.OpenReceipt(repeated).Status == receipt.Status,
+                "redelivery changed original receipt status/time");
+            var later = f.Now.AddDays(2);
+            var delayed = f.Prepare(f.Seal(approval, cursor: 8, created: later, expires: later.AddHours(1)), next, now: later);
+            CheckRedelivery(next, delayed);
+            Check(delayed.CommittedInboundCursor == 8, "verified history did not cross missing transport frames");
+            Check(f.OpenReceipt(delayed, later).ProcessedAtUtc == receipt.ProcessedAtUtc, "expired approval renewed result time");
+            Reject(() => f.Prepare(f.Seal(f.Approval(decision == Decision.Deny ? Decision.AllowAlways : Decision.Deny), cursor: 2), next),
+                "same command with a different signed decision");
+            Reject(() => f.Prepare(f.Seal(f.Approval(decision, signatureKey: f.DeviceSigning), cursor: 2), next), "repeated command still needs valid signature");
             if (decision != Decision.Deny)
                 Reject(() => f.Prepare(f.Seal(f.Approval(Decision.Deny, sequence: 2, command: "next-command-0001"), cursor: 2), next),
                     "next sequence before terminal receipt");
         }
 
-        var expired = f.Prepare(f.Seal(f.Approval(expires: f.Now)), now: f.Now);
+        var expired = f.Prepare(f.Seal(f.Approval(expires: f.Now), cursor: 7), now: f.Now);
         Check(f.OpenReceipt(expired).Status == CommandReceiptStatus.Expired && expired.PolicyLedger.Count == 0 &&
             expired.TrackedRequests.Single().IsPending, "signed expiry advances only receipt/floor");
         var denied = f.Prepare(f.Seal(f.Approval(Decision.Deny)));
+        CheckRedeliveryGuards(f, denied);
         var resolved = f.Prepare(f.Seal(f.Approval(sequence: 2, command: "next-command-0001"), cursor: 2), denied);
         Check(f.OpenReceipt(resolved).Status == CommandReceiptStatus.AlreadyResolved && resolved.PolicyLedger.Count == 0 &&
             resolved.ReplayFloors.Single().HighestAcceptedSequence == 2, "resolved request cannot grant");
+        var older = f.Prepare(f.Seal(f.Approval(Decision.Deny), cursor: 3), resolved);
+        CheckRedelivery(resolved, older);
+        Check(f.OpenReceipt(older).Status == CommandReceiptStatus.Applied && f.OpenReceipt(older).Sequence == 1 &&
+            older.ReplayFloors.Single().HighestAcceptedSequence == 2, "old receipt changed latest replay floor");
+        CheckRedelivery(expired, f.Prepare(f.Seal(f.Approval(expires: f.Now), cursor: 9), expired));
+        CheckRedelivery(resolved, f.Prepare(f.Seal(f.Approval(sequence: 2, command: "next-command-0001"), cursor: 3), resolved));
         var stalePolicy = new RelayTransactionState(f.Owner.DeviceId, f.Current.Version, 1, 1, 0, 1, 1, 1,
             trackedRequests: f.Current.TrackedRequests, policyLedger: new[] { new RelayPolicyLedgerEntry(1, "another-request-001",
                 "another-command-001", RelayTargetKind.Application, "another.exe", Decision.AllowAlways, 0, new byte[32]) },
@@ -66,6 +84,7 @@ internal static class NativeApprovalTransactionChecks
         Check(f.OpenReceipt(rejected).Status == CommandReceiptStatus.Rejected && rejected.PolicyLedger.Count == 1 &&
             rejected.PolicyLedger[0].CommandId == "another-command-001" && rejected.PolicyRevision == 1 &&
             rejected.TrackedRequests.Single().IsPending, "stale policy cannot grant");
+        CheckRedelivery(rejected, f.Prepare(f.Seal(f.Approval(), cursor: 2), rejected));
 
         foreach (var invalid in new[] {
             f.Approval(sequence: 2), f.Approval(key: "wrong-parent-key"), f.Approval(device: "wrong-device-001"),
@@ -74,8 +93,8 @@ internal static class NativeApprovalTransactionChecks
             f.Approval(target: "another.exe"), f.Approval(kind: RelayTargetKind.Website), f.Approval(policy: 1),
             f.Approval(issued: f.Now.AddSeconds(1)), f.Approval(issued: f.Now.AddMinutes(-3)),
             f.Approval(signatureKey: f.DeviceSigning) })
-            Reject(() => f.Prepare(f.Seal(invalid)), "invalid signed input");
-        foreach (var frame in new[] { f.Seal(f.Approval(), cursor: 0), f.Seal(f.Approval(), cursor: 2),
+            Reject(() => f.Prepare(f.Seal(invalid, cursor: 7)), "invalid signed input cannot cross a transport gap");
+        foreach (var frame in new[] { f.Seal(f.Approval(), cursor: 0), f.Seal(f.Approval(), cursor: RelayTransactionState.MaximumRecipientCursor + 1),
             f.Seal(f.Approval(), ack: 1), f.Seal(f.Approval(), recipient: "wrong-recipient1"),
             f.Seal(f.Approval(), mailbox: "wrong-mailbox-001"), f.Seal(f.Approval(), kind: RelayFrameKind.Receipt),
             f.Seal(f.Approval(), created: f.Now.AddSeconds(1)), f.Seal(f.Approval(), expires: f.Now),
@@ -135,6 +154,47 @@ internal static class NativeApprovalTransactionChecks
         state.HighestOutboundCursor, state.AcknowledgedOutboundCursor, state.PolicyRevision, state.ReplayFloors,
         new[] { request }, state.PolicyLedger, state.ReconcileIntents, state.SignedReceipts, state.Outbox, state.RecipientOutboundCursors);
 
+    private static void CheckRedelivery(RelayTransactionState before, RelayTransactionState after)
+    {
+        Check(after.Version == before.Version + 1 && after.CommittedInboundCursor > before.CommittedInboundCursor &&
+            after.HighestOutboundCursor == before.HighestOutboundCursor + 1 && after.AcknowledgedOutboundCursor == before.AcknowledgedOutboundCursor &&
+            after.Outbox.Count == before.Outbox.Count + 1 && after.PolicyRevision == before.PolicyRevision &&
+            after.ReplayFloors.SequenceEqual(before.ReplayFloors) && after.TrackedRequests.SequenceEqual(before.TrackedRequests) &&
+            after.PolicyLedger.SequenceEqual(before.PolicyLedger) && after.ReconcileIntents.SequenceEqual(before.ReconcileIntents) &&
+            after.SignedReceipts.SequenceEqual(before.SignedReceipts), "redelivery changed authority or signed history");
+    }
+
+    private static void CheckRedeliveryGuards(Fixture f, RelayTransactionState state)
+    {
+        var saved = state.SignedReceipts.Single();
+        var duplicate = f.Seal(f.Approval(Decision.Deny), cursor: 2);
+        foreach (var damage in new[] { "signature", "status", "hash", "sequence", "floor-missing", "floor-hash" })
+        {
+            var bytes = saved.GetSignedReceiptCopy();
+            if (damage == "signature") bytes[^1] ^= 1;
+            var receipt = new RelaySignedReceiptRecord(saved.DeviceId, saved.DeviceEpoch, saved.CommandId, saved.RequestId,
+                saved.RequestRevision, saved.AuthorityEpoch, saved.ApprovalKeyId, damage == "sequence" ? 2 : saved.Sequence,
+                damage == "status" ? CommandReceiptStatus.Expired : saved.Status,
+                damage == "hash" ? new byte[32] : saved.GetApprovalHashCopy(), bytes);
+            var floors = damage == "floor-missing" ? Array.Empty<RelayReplayFloor>() : damage == "floor-hash"
+                ? new[] { new RelayReplayFloor(1, saved.ApprovalKeyId, 1, saved.CommandId, new byte[32]) } : state.ReplayFloors;
+            var broken = new RelayTransactionState(state.DeviceId, state.Version, 1, 1, 1, state.HighestOutboundCursor,
+                state.AcknowledgedOutboundCursor, state.PolicyRevision, floors, state.TrackedRequests, state.PolicyLedger,
+                state.ReconcileIntents, new[] { receipt }, state.Outbox, state.RecipientOutboundCursors);
+            Reject(() => f.Prepare(duplicate, broken), "damaged redelivery evidence: " + damage);
+        }
+        Reject(() => f.Prepare(f.Seal(f.Approval(Decision.Deny), cursor: state.CommittedInboundCursor), state), "redelivery stale input");
+        Reject(() => state.WithRedeliveredReceipt(RelayTransactionState.MaximumRecipientCursor + 1, state.Outbox.Single()), "redelivery cursor exhaustion");
+        Reject(() => f.Prepare(f.Seal(f.Approval(Decision.Deny), cursor: 2, expires: f.Now), state), "expired redelivery transport");
+        var requestItem = f.Published.Outbox.Single();
+        Reject(() => state.WithRedeliveredReceipt(2, requestItem), "redelivery is not a request publication");
+        Reject(() => f.Current.WithRedeliveredReceipt(1, state.Outbox.Single()), "redelivery requires existing history");
+        var full = state;
+        for (var cursor = 2; cursor <= RelayTransactionState.MaximumOutboxItems; cursor++)
+            full = f.Prepare(f.Seal(f.Approval(Decision.Deny), cursor: cursor), full);
+        Reject(() => f.Prepare(f.Seal(f.Approval(Decision.Deny), cursor: full.CommittedInboundCursor + 1), full), "redelivery outbox capacity");
+    }
+
     private static void PersistsAtomic(Fixture f)
     {
         var directory = Directory.CreateTempSubdirectory("Guard-approval-transaction-");
@@ -161,7 +221,7 @@ internal static class NativeApprovalTransactionChecks
             using (var store = Open())
             {
                 var current = store.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
-                var encoded = f.Seal(f.Approval());
+                var encoded = f.Seal(f.Approval(), cursor: 7);
                 var next = f.Prepare(encoded, current);
                 using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
                 Reject(() => store.TryCommitAsync(f.Current.Version, next, cancelled.Token).GetAwaiter().GetResult(), "cancel before commit");
@@ -171,11 +231,32 @@ internal static class NativeApprovalTransactionChecks
                 Check(!store.TryCommitAsync(f.Current.Version, other, CancellationToken.None).GetAwaiter().GetResult(), "CAS loser");
                 exactReply = next.Outbox.Single().GetEncryptedFrameCopy();
             }
-            using var reopened = Open();
-            var restored = reopened.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
-            Check(restored.Outbox.Single().GetEncryptedFrameCopy().SequenceEqual(exactReply) && restored.PolicyLedger.Count == 1 &&
-                restored.ReplayFloors.Count == 1 && restored.ReconcileIntents.Count == 1 && restored.CommittedInboundCursor == 1 &&
-                f.OpenReceipt(restored).Status == CommandReceiptStatus.AcceptedPendingReconciliation, "restart retains one complete transaction");
+            byte[] repeatedBytes;
+            using (var reopened = Open())
+            {
+                var restored = reopened.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+                Check(restored.Outbox.Single().GetEncryptedFrameCopy().SequenceEqual(exactReply) && restored.PolicyLedger.Count == 1 &&
+                    restored.ReplayFloors.Count == 1 && restored.ReconcileIntents.Count == 1 && restored.CommittedInboundCursor == 7 &&
+                    f.OpenReceipt(restored).Status == CommandReceiptStatus.AcceptedPendingReconciliation, "restart retains one complete transaction");
+                var repeated = f.Prepare(f.Seal(f.Approval(), cursor: 10), restored);
+                // The store permits delivery only, never a combined floor/ack/receipt mutation.
+                var badFloor = new RelayTransactionState(repeated.DeviceId, repeated.Version, 1, 1, 10, repeated.HighestOutboundCursor,
+                    repeated.AcknowledgedOutboundCursor, repeated.PolicyRevision,
+                    new[] { new RelayReplayFloor(1, f.Claim.ApprovalKeyId, 2, "forged-command-001", new byte[32]) },
+                    repeated.TrackedRequests, repeated.PolicyLedger, repeated.ReconcileIntents, repeated.SignedReceipts, repeated.Outbox,
+                    repeated.RecipientOutboundCursors);
+                Reject(() => reopened.TryCommitAsync(restored.Version, badFloor, default).GetAwaiter().GetResult(), "redelivery advanced approval floor");
+                using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+                Reject(() => reopened.TryCommitAsync(restored.Version, repeated, cancelled.Token).GetAwaiter().GetResult(), "cancelled redelivery");
+                Check(reopened.TryCommitAsync(restored.Version, repeated, default).GetAwaiter().GetResult(), "redelivery CAS");
+                Check(!reopened.TryCommitAsync(restored.Version, repeated, default).GetAwaiter().GetResult(), "redelivery CAS loser");
+                repeatedBytes = repeated.Outbox.Last().GetEncryptedFrameCopy();
+            }
+            using var final = Open();
+            var saved = final.LoadAsync(default).GetAwaiter().GetResult();
+            Check(saved.CommittedInboundCursor == 10 && saved.PolicyRevision == 1 && saved.SignedReceipts.Count == 1 &&
+                saved.ReconcileIntents.Count == 1 && saved.ReplayFloors.Single().HighestAcceptedSequence == 1 &&
+                saved.Outbox.Last().GetEncryptedFrameCopy().SequenceEqual(repeatedBytes), "redelivery restart changed authority/bytes");
         }
         finally { directory.Delete(recursive: true); } // Only this newly created disposable test directory.
     }
@@ -258,11 +339,12 @@ internal static class NativeApprovalTransactionChecks
         }
         public RelayTransactionState Prepare(byte[] frame, RelayTransactionState? state = null, DateTimeOffset? now = null, DeviceSecurityState? owner = null) =>
             NativeApprovalTransaction.Prepare(owner ?? Owner, state ?? Current, frame, DeviceEncryption, DeviceSigning, now ?? Now);
-        public CommandReceipt OpenReceipt(RelayTransactionState state)
+        public CommandReceipt OpenReceipt(RelayTransactionState state, DateTimeOffset? frameTime = null)
         {
             var item = state.Outbox.Last(); var frame = RelayCanonicalEncoding.DecodeRelayFrame(item.GetEncryptedFrameCopy());
             Check(frame.Kind == RelayFrameKind.Receipt && frame.RecipientKeyId == Claim.EncryptionKeyId && frame.MailboxId == Offer.MailboxId &&
-                frame.Cursor == item.RecipientCursor && frame.AckCursor == 0 && frame.CreatedAtUtc == Now && frame.ExpiresAtUtc == Now.AddDays(1), "receipt transport");
+                frame.Cursor == item.RecipientCursor && frame.AckCursor == 0 && frame.CreatedAtUtc == (frameTime ?? Now) &&
+                frame.ExpiresAtUtc == (frameTime ?? Now).AddDays(1), "receipt transport");
             var aad = RelayCanonicalEncoding.EncodeRelayFrameAssociatedData(frame); var key = _parentEncryption.ExportParameters(true);
             byte[] plain;
             try { plain = Cryptography.RelayCryptography.Decrypt(key.D!, Claim.GetEncryptionKeyCopy(), frame.GetEncapsulatedKeyCopy(), frame.GetCiphertextCopy(),
@@ -271,7 +353,7 @@ internal static class NativeApprovalTransactionChecks
             var signed = RelayCanonicalEncoding.DecodeDeviceReceiptEnvelope(plain);
             Check(signed.DeviceKeyId == Offer.SigningKeyId && DeviceSigning.VerifyHash(RelayCanonicalEncoding.ComputeDeviceReceiptHash(signed),
                 signed.GetSignatureP1363Copy(), DSASignatureFormat.IeeeP1363FixedFieldConcatenation), "device signature");
-            Check(state.SignedReceipts.Last().GetSignedReceiptCopy().SequenceEqual(plain), "same saved encrypted receipt");
+            Check(state.SignedReceipts.Single(r => r.CommandId == signed.Receipt.CommandId).GetSignedReceiptCopy().SequenceEqual(plain), "same saved encrypted receipt");
             return signed.Receipt;
         }
         public void Dispose() { DeviceSigning.Dispose(); ParentSigning.Dispose(); DeviceEncryption.Dispose(); _parentEncryption.Dispose(); }

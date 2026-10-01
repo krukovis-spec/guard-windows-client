@@ -61,7 +61,8 @@ internal static class EnrollmentConfigurationChecks
             var guard = new TestGuard();
             var identityStore = new DeviceIdentityStore(paths, new LocalSystemDpapiDataProtector(DeviceIdentityStore.Purpose, true), guard);
             using var boundary = new ServiceAuthoritativeStateBoundary(paths,
-                new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true), guard, identityStore);
+                new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true), guard, identityStore,
+                () => DeviceIdentityChecks.OpenRelay(paths));
             var protector = new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.Purpose, true);
             var store = new DeviceRelayConfigurationStore(paths, protector, guard);
             await boundary.AcquireAsync(default); await boundary.InitializeNewAsync(default);
@@ -171,7 +172,8 @@ internal static class EnrollmentConfigurationChecks
             Directory.CreateDirectory(freshPaths.RootDirectory);
             using var freshBoundary = new ServiceAuthoritativeStateBoundary(freshPaths,
                 new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true), guard,
-                new DeviceIdentityStore(freshPaths, new LocalSystemDpapiDataProtector(DeviceIdentityStore.Purpose, true), guard));
+                new DeviceIdentityStore(freshPaths, new LocalSystemDpapiDataProtector(DeviceIdentityStore.Purpose, true), guard),
+                () => DeviceIdentityChecks.OpenRelay(freshPaths));
             var freshStore = new DeviceRelayConfigurationStore(freshPaths, protector, guard);
             // No held writer lease must fail before any protected record can be published.
             await ThrowsAsync(() => freshStore.InstallNewAsync(original, trust, freshBoundary, Now, default));
@@ -482,6 +484,8 @@ internal static class EnrollmentConfigurationChecks
             Check((await boundary.LoadAsync(default)).Version == owner.Version,
                 "background delivery mutated owner or policy state");
             await NativeRelayCommitChecks.RunAsync(boundary.NativeEnrollmentStore, boundary.Identity, config, trust, phone.Sign, Now);
+            await NativeRelayCommitChecks.CheckBoundaryRestartAsync(boundary, config, trust, Now);
+            await NativeRelayDeliveryChecks.RunAsync(boundary, config, trust, phone.Sign, Now);
         }
         finally { CryptographicOperations.ZeroMemory(capability); }
     }

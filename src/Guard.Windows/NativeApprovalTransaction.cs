@@ -58,7 +58,8 @@ public static class NativeApprovalTransaction
         if (frame.Kind != RelayFrameKind.Approval || frame.MailboxId != offer.MailboxId ||
             frame.RecipientKeyId != offer.EncryptionKeyId || frame.AckCursor != 0 ||
             current.CommittedInboundCursor >= RelayTransactionState.MaximumRecipientCursor ||
-            frame.Cursor != current.CommittedInboundCursor + 1 || now < frame.CreatedAtUtc || now >= frame.ExpiresAtUtc ||
+            frame.Cursor <= current.CommittedInboundCursor || frame.Cursor > RelayTransactionState.MaximumRecipientCursor ||
+            now < frame.CreatedAtUtc || now >= frame.ExpiresAtUtc ||
             frame.CreatedAtUtc < offer.CreatedAtUtc)
             throw new InvalidDataException("Approval transport binding, ordering or time.");
 
@@ -103,9 +104,23 @@ public static class NativeApprovalTransaction
             approval.ExpiresAtUtc > snapshot.PendingExpiresAtUtc)
             throw new InvalidDataException("Approval request binding or time.");
         RequireClockFloor(current, now);
-        var nextSequence = current.TryGetReplayFloor(current.AuthorityEpoch, approval.KeyId, out var floor)
-            ? checked(floor.HighestAcceptedSequence + 1) : 1;
-        if (approval.Sequence != nextSequence || current.SignedReceipts.Any(r => r.CommandId == approval.CommandId))
+        current.TryGetReplayFloor(current.AuthorityEpoch, approval.KeyId, out var floor);
+        var saved = current.SignedReceipts.SingleOrDefault(r => r.CommandId == approval.CommandId);
+        if (saved != null)
+        {
+            if (floor == null || floor.HighestAcceptedSequence < approval.Sequence ||
+                (floor.HighestAcceptedSequence == approval.Sequence &&
+                    (floor.CommandId != approval.CommandId || !Equal(floor.GetApprovalHashCopy(), hash))))
+                throw new InvalidDataException("Repeated approval does not match its durable replay floor.");
+            RequireSavedReceipt(saved, approval, hash, offer.SigningKeyId, signingKey);
+            validUntilUtc = frame.ExpiresAtUtc; // This resends history; expired decisions never acquire a new lifetime.
+            return current.WithRedeliveredReceipt(frame.Cursor, Seal(current, offer, claim, RelayFrameKind.Receipt,
+                saved.GetSignedReceiptCopy(), now, now.AddDays(1)));
+        }
+        // Relay TTL can remove transport positions. Only a fully verified command (or exact signed
+        // history above) advances the cursor; the authoritative per-key sequence stays gap-free.
+        var nextSequence = floor != null ? checked(floor.HighestAcceptedSequence + 1) : 1;
+        if (approval.Sequence != nextSequence)
             throw new InvalidDataException("Approval replay or sequence gap.");
         if (floor != null && current.SignedReceipts.LastOrDefault(r => r.ApprovalKeyId == approval.KeyId &&
             r.Sequence == floor.HighestAcceptedSequence)?.Status == CommandReceiptStatus.AcceptedPendingReconciliation)
@@ -162,6 +177,27 @@ public static class NativeApprovalTransaction
         return current.WithCommittedApproval(new RelayApprovalTransaction(frame.Cursor, snapshot.RequestId, snapshot.RequestRevision,
             snapshotHash, disposition, new RelayReplayFloor(current.AuthorityEpoch, approval.KeyId, approval.Sequence, approval.CommandId, hash),
             policy, intent, record, outbox));
+    }
+
+    private static void RequireSavedReceipt(RelaySignedReceiptRecord saved, SignedApprovalEnvelope approval,
+        byte[] hash, string signingKeyId, ECDsa signingKey)
+    {
+        if (saved.DeviceId != approval.DeviceId || saved.DeviceEpoch != approval.DeviceEpoch ||
+            saved.AuthorityEpoch != approval.AuthorityEpoch || saved.ApprovalKeyId != approval.KeyId ||
+            saved.Sequence != approval.Sequence || saved.RequestId != approval.RequestId ||
+            saved.RequestRevision != approval.RequestRevision || !Equal(saved.GetApprovalHashCopy(), hash))
+            throw new InvalidDataException("Conflicting repeated approval.");
+        var envelope = RelayCanonicalEncoding.DecodeDeviceReceiptEnvelope(saved.GetSignedReceiptCopy());
+        var receipt = envelope.Receipt;
+        if (envelope.DeviceKeyId != signingKeyId || receipt.DeviceId != saved.DeviceId || receipt.DeviceEpoch != saved.DeviceEpoch ||
+            receipt.AuthorityEpoch != saved.AuthorityEpoch || receipt.KeyId != saved.ApprovalKeyId || receipt.Sequence != saved.Sequence ||
+            receipt.CommandId != saved.CommandId || receipt.RequestId != saved.RequestId || receipt.RequestRevision != saved.RequestRevision ||
+            receipt.Status != saved.Status || !Equal(receipt.GetApprovalHashCopy(), hash) || receipt.ProcessedAtUtc < approval.IssuedAtUtc)
+            throw new InvalidDataException("Stored receipt binding.");
+        lock (signingKey)
+            if (!signingKey.VerifyHash(RelayCanonicalEncoding.ComputeDeviceReceiptHash(envelope), envelope.GetSignatureP1363Copy(),
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
+                throw new InvalidDataException("Stored receipt signature.");
     }
 
     private static DeviceEnrollmentState RequireOwner(DeviceSecurityState owner, RelayTransactionState state,

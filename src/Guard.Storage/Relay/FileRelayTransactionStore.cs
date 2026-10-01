@@ -17,7 +17,7 @@ namespace Guard.Storage.Relay
     /// before state so an interrupted bootstrap can be completed without reset.
     /// The journal detects state-file rollback while intact; restoring both
     /// files offline still requires the future TPM/remote witness gate.
-    /// WP1 accepts only the explicit publish, approval, and cumulative-ack
+    /// Accepts only explicit publish, approval, receipt-redelivery, and cumulative-ack
     /// transitions; enrollment, epoch rotation, and reconciliation completion
     /// must add their own exact transition validators in later work packets.
     /// </summary>
@@ -762,7 +762,7 @@ namespace Guard.Storage.Relay
             if (!MatchesKnownAtomicTransition(current, next))
             {
                 throw new ArgumentException(
-                    "A relay commit must be one complete publish, approval, or ack transaction.",
+                    "A relay commit must be one complete publish, approval, receipt-redelivery, or ack transaction.",
                     nameof(next));
             }
         }
@@ -809,9 +809,11 @@ namespace Guard.Storage.Relay
                         next);
                 }
 
-                if (current.CommittedInboundCursor == long.MaxValue ||
-                    next.CommittedInboundCursor !=
-                        current.CommittedInboundCursor + 1 ||
+                if (next.SignedReceipts.Count == current.SignedReceipts.Count && next.Outbox.Count == current.Outbox.Count + 1)
+                    return SameState(current.WithRedeliveredReceipt(next.CommittedInboundCursor, next.Outbox[next.Outbox.Count - 1]), next);
+
+                if (next.CommittedInboundCursor <= current.CommittedInboundCursor ||
+                    next.CommittedInboundCursor > RelayTransactionState.MaximumRecipientCursor ||
                     next.TrackedRequests.Count !=
                         current.TrackedRequests.Count ||
                     next.SignedReceipts.Count !=

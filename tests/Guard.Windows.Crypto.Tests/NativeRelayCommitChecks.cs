@@ -70,7 +70,15 @@ internal static class NativeRelayCommitChecks
                 var published = await relay.LoadAsync(default);
                 Check(published.TrackedRequests.Single().GetEncodedSnapshotCopy().SequenceEqual(RelayCanonicalEncoding.EncodeRequestSnapshot(snapshot)),
                     "committed original mismatch");
-                Check(await relay.TryCommitAsync(published.Version, published.WithAcknowledgedOutboundCursor(1), default), "test delivery ack");
+                var first = published.Outbox.Single();
+                var modified = first.GetEncryptedFrameCopy(); modified[0] ^= 1;
+                foreach (var wrong in new[] {
+                    new RelayEncryptedOutboxItem(first.FrameId, first.OutboundCursor + 1, first.Kind, first.RecipientKeyId, first.RecipientCursor, first.GetEncryptedFrameCopy()),
+                    new RelayEncryptedOutboxItem(first.FrameId, first.OutboundCursor, first.Kind, first.RecipientKeyId, first.RecipientCursor, modified) })
+                    await ThrowsAsync(() => runtime.AcknowledgePublishedAsync(owner.Version, wrong, default));
+                Check((await relay.LoadAsync(default)).Version == published.Version &&
+                    !await runtime.AcknowledgePublishedAsync(owner.Version - 1, first, default), "wrong/stale ack changed outbox");
+                Check(await runtime.AcknowledgePublishedAsync(owner.Version, first, default), "guarded delivery ack");
 
                 byte[] ApprovalFrame(DateTimeOffset frameDeadline)
                 {
@@ -145,6 +153,28 @@ internal static class NativeRelayCommitChecks
         finally { directory.Delete(recursive: true); }
     }
 
+    internal static async Task CheckBoundaryRestartAsync(ServiceAuthoritativeStateBoundary boundary,
+        DeviceRelayConfiguration config, EnrollmentDeploymentTrust trust, DateTimeOffset now)
+    {
+        var owner = await boundary.LoadAsync(default);
+        var snapshot = new RequestSnapshot(owner.DeviceId, 1, 1, "event-restart-0001", "request-restart-001", 1,
+            RelayTargetKind.Application, "sha256:" + new string('b', 64), Array.Empty<RelayEvidenceField>(), "test", now,
+            now.AddMinutes(10), RandomNumberGenerator.GetBytes(32), 0);
+        var runtime = new NativeRelayTransactions(boundary.NativeEnrollmentStore, boundary.RelayTransactions,
+            boundary.Identity, config, trust, new Boundary(), new Clock { Value = now });
+        Check(await runtime.PublishRequestAsync(owner.Version, snapshot, default), "boundary-owned queue did not publish");
+        var stored = await boundary.RelayTransactions.LoadAsync(default);
+        var exactFrame = stored.Outbox.Single().GetEncryptedFrameCopy();
+        boundary.Dispose();
+        Check(!boundary.IsAcquired, "boundary retained writers after shutdown");
+        await boundary.AcquireAsync(default);
+        Check((await boundary.LoadAsync(default)).Version == owner.Version, "restart changed owner");
+        var restored = await boundary.RelayTransactions.LoadAsync(default);
+        Check(restored.Version == stored.Version && restored.Outbox.Single().GetEncryptedFrameCopy().SequenceEqual(exactFrame) &&
+            restored.TrackedRequests.Single().GetEncodedSnapshotCopy().SequenceEqual(RelayCanonicalEncoding.EncodeRequestSnapshot(snapshot)),
+            "restart lost original request/frame");
+    }
+
     private sealed class Clock : TimeProvider { internal DateTimeOffset Value; public override DateTimeOffset GetUtcNow() => Value; }
     private sealed class Boundary : IServiceDataBoundaryGuard
     {
@@ -164,7 +194,7 @@ internal static class NativeRelayCommitChecks
     {
         try { await action(); }
         catch (Exception e) when (e is ArgumentException or InvalidDataException or InvalidOperationException or
-            OperationCanceledException or UnauthorizedAccessException or CryptographicException) { return; }
+            OperationCanceledException or UnauthorizedAccessException or CryptographicException or NativeApprovalRejectedException) { return; }
         throw new Exception("Expected native relay commit rejection.");
     }
 }

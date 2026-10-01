@@ -126,6 +126,7 @@ export class DeviceMailbox implements DurableObject {
         return await forwardRegistrationTicket(request, this.env, this.state.id.name!);
       }
       if (path === `${prefix}/frames` && request.method === "POST") return await this.publish(request, auth);
+      if (path === `${prefix}/frames/retire` && request.method === "POST") return await this.publish(request, auth, true);
       if (path === `${prefix}/frames/reserve` && request.method === "POST") return await this.reserveFrame(request, auth);
       if (path === `${prefix}/poll` && request.method === "GET") return this.poll(request, auth);
       if (path === `${prefix}/ack` && request.method === "POST") return await this.ack(request, auth);
@@ -366,19 +367,44 @@ export class DeviceMailbox implements DurableObject {
         expires_at: expiresAt, lease_expires_at: leaseExpiresAt, status: "reserved" }), 201);
     });
   }
-  private async publish(request: Request, auth: Auth): Promise<Response> { const raw = await readBoundedBody(request, MAX_FRAME_BYTES); let frame: RelayFrame; try { frame = parseRelayFrame(raw); } catch (e) { throw new RelayHttpError(400, e instanceof FrameError ? "malformed_frame" : "invalid_frame"); }
+  private async publish(request: Request, auth: Auth, retire = false): Promise<Response> { const raw = await readBoundedBody(request, MAX_FRAME_BYTES); let frame: RelayFrame; try { frame = parseRelayFrame(raw); } catch (e) { throw new RelayHttpError(400, e instanceof FrameError ? "malformed_frame" : "invalid_frame"); }
     const mailbox = mailboxPath(new URL(request.url).pathname); if (frame.mailboxId !== mailbox) throw new RelayHttpError(400, "mailbox_mismatch");
     if ((auth.role !== "device" && auth.role !== "admin") && frame.kind !== 2) throw new RelayHttpError(403, "role_forbidden");
     if ((auth.role === "device") && frame.kind !== 1 && frame.kind !== 3) throw new RelayHttpError(403, "role_forbidden");
     if ((auth.role === "reader") || (auth.role === "approval" && frame.kind !== 2)) throw new RelayHttpError(403, "role_forbidden");
     if (auth.role !== "admin" && !auth.publishRecipientKeyIds.includes(frame.recipientKeyId)) throw new RelayHttpError(403, "recipient_forbidden");
+    if (retire && auth.role !== "device") throw new RelayHttpError(403, "role_forbidden");
     if (frame.cursor === 0n) throw new RelayHttpError(400, "invalid_cursor");
     const now = Date.now();
-    if (frame.expiresAt <= BigInt(now)) throw new RelayHttpError(410, "frame_expired");
+    if (!retire && frame.expiresAt <= BigInt(now)) throw new RelayHttpError(410, "frame_expired");
+    if (retire && frame.expiresAt > BigInt(now)) throw new RelayHttpError(409, "frame_not_expired");
     if (frame.createdAt > BigInt(now + 5 * 60000)) throw new RelayHttpError(400, "frame_from_future");
     const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", raw));
     return this.state.storage.transactionSync(() => {
       this.requireCurrentAuth(auth);
+      if (retire) {
+        if (frame.expiresAt > BigInt(Date.now())) throw new RelayHttpError(409, "frame_not_expired");
+        // Retire only this sender's expired request/receipt position, never an approval or recipient ack.
+        const existing = [...this.sql.exec<{ bytes: ArrayBuffer }>("SELECT bytes FROM frames WHERE frame_id=?", frame.frameId)][0];
+        const marker = [...this.sql.exec<{ frame_hash: ArrayBuffer | null; recipient_key_id: string | null; cursor: number | null }>(
+          "SELECT frame_hash,recipient_key_id,cursor FROM tombstones WHERE frame_id=?", frame.frameId)][0];
+        if ((existing && !sameBytes(new Uint8Array(existing.bytes), raw)) || (marker && (!marker.frame_hash ||
+          marker.recipient_key_id !== frame.recipientKeyId || marker.cursor !== Number(frame.cursor) || !sameBytes(new Uint8Array(marker.frame_hash), hash))))
+          throw new RelayHttpError(409, "frame_id_conflict");
+        const floor = [...this.sql.exec<{ cursor: number }>("SELECT cursor FROM publication_cursors WHERE recipient_key_id=?", frame.recipientKeyId)][0]?.cursor;
+        if (Number(frame.cursor) > (floor ?? 0) + 1) throw new RelayHttpError(409, "cursor_not_monotonic");
+        if (Number(frame.cursor) > (floor ?? 0)) {
+          if ([...this.sql.exec("SELECT 1 FROM frame_reservations WHERE recipient_key_id=? AND status='reserved' AND lease_expires_at>?",
+            frame.recipientKeyId, Date.now())].length) throw new RelayHttpError(409, "recipient_reserved");
+          if (floor === undefined && [...this.sql.exec<{ n: number }>("SELECT count(*) n FROM publication_cursors")][0]!.n >= 128)
+            throw new RelayHttpError(429, "recipient_limit_reached");
+          this.sql.exec("INSERT INTO publication_cursors(recipient_key_id,cursor) VALUES(?,?) ON CONFLICT(recipient_key_id) DO UPDATE SET cursor=excluded.cursor",
+            frame.recipientKeyId, Number(frame.cursor));
+        }
+        this.sql.exec("DELETE FROM frames WHERE frame_id=? AND expires_at<=?", frame.frameId, Date.now());
+        // After expiry there may be no hash tombstone: this confirms retirement, NOT byte-identical delivery.
+        return json({ frameId: frame.frameId, cursor: Number(frame.cursor), retired: true });
+      }
       if (frame.expiresAt <= BigInt(Date.now())) throw new RelayHttpError(410, "frame_expired");
       const delivered = [...this.sql.exec<{ frame_hash: ArrayBuffer | null; recipient_key_id: string | null; cursor: number | null }>(
         "SELECT frame_hash,recipient_key_id,cursor FROM tombstones WHERE frame_id=?", frame.frameId)][0];
