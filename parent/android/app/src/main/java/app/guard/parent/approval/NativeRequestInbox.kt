@@ -16,7 +16,24 @@ import javax.net.ssl.HttpsURLConnection
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-internal data class NativeRequestPage(val requests: List<RequestSnapshot>, val nextCursor: Long, val frameCount: Int)
+internal data class NativeRequestPage(val requests: List<VerifiedNativeRequest>, val nextCursor: Long, val frameCount: Int)
+
+/** Retain the exact authenticated frame, not caller-mutable display data, for a later explicit decision. */
+internal class VerifiedNativeRequest private constructor(private val frame: ByteArray, private val canonical: ByteArray) {
+    val snapshot: RequestSnapshot get() = GuardWire.decodeRequestSnapshot(canonical)
+    val expiryUnixMillis: Long get() = minOf(snapshot.pendingExpiryUnixMillis, RelayReceive.decodeFrame(frame).aad.expiryUnixMillis)
+    fun reverify(recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long) {
+        require(GuardWire.encodeRequestSnapshot(RelayReceive.receiveRequest(frame, recipient, trust, now).snapshot)
+            .contentEquals(canonical)) { "request changed" }
+    }
+    companion object {
+        fun verify(raw: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long): VerifiedNativeRequest {
+            val frozen = raw.copyOf()
+            val snapshot = RelayReceive.receiveRequest(frozen, recipient, trust, now).snapshot
+            return VerifiedNativeRequest(frozen, GuardWire.encodeRequestSnapshot(snapshot))
+        }
+    }
+}
 
 /** Keep signed evidence unchanged internally; make invisible direction/control characters visible in display-only text. */
 internal fun requestDisplayText(value: String): String = buildString {
@@ -96,14 +113,14 @@ internal class NativeRequestInbox(
                         val requests = decoded.first.mapNotNull { bytes ->
                             checkActive(); val now = requireCurrent()
                             if (RelayReceive.decodeFrame(bytes).aad.kind == 1)
-                                RelayReceive.receiveRequest(bytes, recipient, trust, now).snapshot
+                                VerifiedNativeRequest.verify(bytes, recipient, trust, now)
                             else {
                                 // Verify receipts too, but never turn an unmatched receipt into "applied" or consume the outbox.
                                 RelayReceive.receiveReceipt(bytes, recipient, trust, now); null
                             }
                         }
                         checkActive(); beforeUse(); val now = requireCurrent(); checkActive()
-                        require(requests.all { now in it.createdUnixMillis until it.pendingExpiryUnixMillis }) { "request expired during verification" }
+                        require(requests.all { val snapshot = it.snapshot; now in snapshot.createdUnixMillis until snapshot.pendingExpiryUnixMillis }) { "request expired during verification" }
                         require(decoded.first.all { val aad = RelayReceive.decodeFrame(it).aad; now in aad.createdUnixMillis until aad.expiryUnixMillis }) { "frame expired during verification" }
                         checkActive()
                         NativeRequestPage(requests, decoded.second, decoded.first.size)

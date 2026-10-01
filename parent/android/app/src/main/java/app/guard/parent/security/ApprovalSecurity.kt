@@ -132,22 +132,25 @@ object EcdsaP1363 {
     }
 }
 
-data class PendingSignedEnvelope(val keyId: String, val sequence: Long, val exactBytes: ByteArray)
+class PendingSignedEnvelope(val keyId: String, val sequence: Long, exactBytes: ByteArray) {
+    private val bytes = exactBytes.copyOf()
+    val exactBytes: ByteArray get() = bytes.copyOf()
+}
 interface ApprovalOutbox {
     fun load(keyId: String): PendingSignedEnvelope?
     fun nextSequence(keyId: String): Long
-    fun save(envelope: PendingSignedEnvelope)
+    fun save(envelope: PendingSignedEnvelope, beforeCommit: () -> Unit = {})
     fun complete(envelope: PendingSignedEnvelope)
 }
 class StopAndWaitApprovals(private val outbox: ApprovalOutbox) {
     fun getPending(keyId: String): PendingSignedEnvelope? = outbox.load(keyId)
     fun nextSequence(keyId: String): Long = outbox.nextSequence(keyId)
-    fun persistBeforeSend(value: PendingSignedEnvelope) {
+    fun persistBeforeSend(value: PendingSignedEnvelope, beforeCommit: () -> Unit = {}) {
         val approval = GuardWire.decodeSignedApproval(value.exactBytes)
         require(value.keyId == approval.keyId && value.sequence == approval.sequence && value.sequence == outbox.nextSequence(value.keyId)) { "approval sequence" }
         val existing = outbox.load(value.keyId)
         require(existing == null || existing.sequence == value.sequence && existing.exactBytes.contentEquals(value.exactBytes)) { "receipt required before next approval" }
-        if (existing == null) outbox.save(value)
+        if (existing == null) outbox.save(value, beforeCommit) else beforeCommit()
     }
     fun acceptReceipt(rawFrame: ByteArray, recipient: RelayRecipient, trust: RelayDeviceTrust, now: Long): CommandReceipt {
         val receipt = RelayReceive.receiveReceipt(rawFrame, recipient, trust, now).receipt

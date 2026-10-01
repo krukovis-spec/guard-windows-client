@@ -10,7 +10,7 @@ import app.guard.parent.security.LocatorOnlyDeepLink
 import app.guard.parent.enrollment.EnrollmentActivity
 
 /**
- * Presentation shell only. A verified snapshot is required before ApprovalCoordinator is reachable.
+ * Presentation shell only. A verified snapshot is required before ApprovalSigningOperation is reachable.
  * Production wiring injects encrypted transport + device-signature verifier; no insecure fallback exists.
  */
 class MainActivity : FragmentActivity() {

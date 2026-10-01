@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Guard — родитель</string>
     <string name="waiting_for_request">Guard — родитель</string>
-    <string name="development_notice">Версия для разработки. Откройте привязанный компьютер, чтобы настроить обмен и прочитать проверенные запросы. Выдача разрешений пока не подключена.</string>
+    <string name="development_notice">Версия для разработки. Можно прочитать проверенные запросы и сохранить решение после биометрии. Отправка решения компьютеру ещё не подключена: доступ не выдаётся.</string>
     <string name="invalid_locator">Ссылка на запрос недействительна.</string>
     <string name="locator_received">Ссылка получена, но сам запрос ещё не проверен. Разрешение не выдано.</string>
     <string name="enrollment_open">Привязка компьютера</string>
@@ -69,7 +69,7 @@
     <string name="native_inbox_title">Полученные запросы</string>
     <string name="native_inbox_loading">Получаем и проверяем сообщения компьютера…</string>
     <string name="native_inbox_unverified">Запросы появятся после проверки подписи компьютера.</string>
-    <string name="native_inbox_scope">Пока доступен только просмотр. Подписи проверены, но запрос мог уже измениться на компьютере. Название и комментарий могли быть введены ребёнком — проверяйте полный идентификатор. Получение запроса не даёт разрешения и не подтверждает работу защиты.</string>
+    <string name="native_inbox_scope">Подписи проверены, но запрос мог уже измениться на компьютере. Название и комментарий могли быть введены ребёнком — проверяйте полный идентификатор. Можно выбрать и подписать решение; отправка компьютеру ещё не подключена. Получение запроса не даёт разрешения и не подтверждает работу защиты.</string>
     <string name="native_inbox_loaded">Проверка этой порции сообщений завершена. Разрешения не выдавались.</string>
     <string name="native_inbox_failed">Не удалось проверить сообщения. Проверьте интернет, дату телефона и сохранённый профиль в разделе «Настроить обмен с компьютером», затем повторите. Ключи не сброшены, разрешения не выдавались.</string>
     <string name="native_inbox_empty_page">В этой порции нет запросов для отображения. Это не означает, что всё разрешено или защита включена.</string>
@@ -82,4 +82,29 @@
     <string name="native_inbox_evidence">Данные компьютера — %1$s: %2$s</string>
     <string name="native_inbox_reason">Комментарий к запросу: %1$s</string>
     <string name="native_inbox_expiry">Указанный срок запроса: до %1$s</string>
+    <string name="approval_choose">Выбрать решение</string>
+    <string name="approval_checking">Проверяем запрос, привязку и сохранённые решения…</string>
+    <string name="approval_always">Разрешить постоянно</string>
+    <string name="approval_temporary">Разрешить на время</string>
+    <string name="approval_quota">Задать дневной лимит</string>
+    <string name="approval_deny">Отказать</string>
+    <string name="approval_minutes">Время в минутах — от 1 до 1440</string>
+    <string name="approval_default_minutes" translatable="false">15</string>
+    <string name="approval_minutes_error">Введите целое число от 1 до 1440, без пробелов.</string>
+    <string name="approval_temporary_value">Разрешить на %1$d мин.</string>
+    <string name="approval_quota_value">Дневной лимит: %1$d мин.</string>
+    <string name="approval_review">Проверить выбранное решение</string>
+    <string name="approval_sign">Подписать решение биометрией</string>
+    <string name="approval_biometric_title">Подписать решение Guard</string>
+    <string name="approval_prompt">Подтвердите именно показанное решение сильной биометрией.</string>
+    <string name="approval_saving">Сохраняем подписанное решение на телефоне…</string>
+    <string name="approval_saved">Решение подписано и сохранено на телефоне.</string>
+    <string name="approval_local_only">Отправка решений в этой версии ещё не подключена. Компьютер не получил это решение; доступ не изменён этим действием.</string>
+    <string name="approval_pending_open">Сохранённое решение</string>
+    <string name="approval_pending_empty">Нет решения, ожидающего квитанцию. Это не означает, что доступ разрешён или защита работает.</string>
+    <string name="approval_pending_wait">Новое решение нельзя подписать до проверки квитанции компьютера по этому решению. Даже после истечения срока запись не удаляется и не подписывается заново автоматически. Не удаляйте приложение или ключи.</string>
+    <string name="approval_deadline">Компьютер может принять эту подпись до: %1$s. Это не срок разрешённого доступа.</string>
+    <string name="approval_status_checked">Сохранённое состояние проверено. Применение компьютером не подтверждено.</string>
+    <string name="approval_cancelled">Биометрия отменена или недоступна. Эта попытка не подписала решение. Можно повторить с нового подтверждения.</string>
+    <string name="approval_failed">Не удалось завершить действие. Проверьте «Сохранённое решение»: запись могла сохраниться до ошибки. Не подписывайте повторно и не удаляйте ключи. Если записи нет, обновите запросы и проверьте дату, профиль и биометрию телефона.</string>
 </resources>

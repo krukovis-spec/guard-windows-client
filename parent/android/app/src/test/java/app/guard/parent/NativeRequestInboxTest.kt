@@ -107,8 +107,8 @@ class NativeRequestInboxTest {
         lateinit var connection: Connection; var checks = 0
         inbox({ checks++ }) { url -> Connection(url, body).also { connection = it } }.use { session ->
             val page = session.read()
-            assertEquals(snapshot, page.requests.single().copy(challenge = snapshot.challenge))
-            assertArrayEquals(snapshot.challenge, page.requests.single().challenge)
+            assertEquals(snapshot, page.requests.single().snapshot.copy(challenge = snapshot.challenge))
+            assertArrayEquals(snapshot.challenge, page.requests.single().snapshot.challenge)
             assertEquals(2, page.frameCount); assertEquals(2L, page.nextCursor); assertEquals(3, checks)
             try { session.read(); fail("reused a single-use read session") } catch (_: IllegalStateException) { }
         }
