@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — connect existing SCM observation to production readiness
+
+- Replaced the production always-Unknown service query with the already implemented query-only Windows adapter; removed the stub. No new probe framework/dependency (Ponytail reuse). Existing SYSTEM execution, IPC authentication and policy-bearing-state refusal remain unchanged.
+- Existing harness now verifies lazy production registration plus eleven SCM observation cases reaching readiness, exact service target, fresh reads and false overall readiness despite valid service configuration. Opt-in VM inspection requires the observed service fact before/after restart; no real VM run claimed.
+- Fresh complete Release/29 v2/45 legacy PASS. Initial full build caught an incorrect constant name in the added test; corrected and reran to terminal success. Self-review/diff and UTF-8 checks PASS; no installed Guard/system/cloud/VM action. PROJECT_ONLY: record the removed integration gap and outstanding real endpoint/M1/QR/phone gates here and in the capsule/plan.
+
 ## 2026-10-01 — safe first-mailbox setup reaches existing device provisioning
 
 - Reused the off-PC utility for durable mailbox prepare/publish and device issuance from a pinned mailbox job. Master credential is first saved by the operator in Bitwarden; separate-purpose CurrentUser DPAPI/user-only ACL operational copy, hidden input-only global bootstrap credential, exact independently pinned origin/mailbox before network. No credentials in arguments/logs/profile; no new dependency/abstract infrastructure. Existing bounded non-redirecting HTTP and file checks serve both issuance paths.

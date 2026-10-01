@@ -109,7 +109,7 @@ namespace Guard.Service
             services.AddSingleton<IManagedChildAccountValidator, ManagedChildAccountValidator>();
             services.AddSingleton<ChildAccountBindingCoordinator>();
             services.AddSingleton<IServiceUtcClock, SystemServiceUtcClock>();
-            services.AddSingleton<IServiceHealthQuery, UnobservedServiceHealthQuery>();
+            services.AddSingleton<IServiceHealthQuery, WindowsServiceHealthQuery>();
             services.AddSingleton(provider => new GuardServiceHealthInspector(
                 provider.GetRequiredService<IServiceHealthQuery>(),
                 GuardServiceIdentity.ServiceName,

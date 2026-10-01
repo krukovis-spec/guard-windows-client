@@ -72,7 +72,7 @@ namespace Guard.Windows.Services
         public ServiceHealthFacts? Facts { get; }
     }
 
-    /// <summary>Read-only boundary for a future SCM implementation.</summary>
+    /// <summary>Read-only SCM observation; not proof of administrator-resistant enforcement.</summary>
     public interface IServiceHealthQuery
     {
         ServiceHealthProbeResult Query(string serviceName);

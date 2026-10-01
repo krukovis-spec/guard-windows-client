@@ -7,6 +7,7 @@ using Guard.Service;
 using Guard.Application;
 using Guard.Contracts;
 using Guard.Domain;
+using Guard.Windows.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -290,6 +291,9 @@ namespace Guard.Service.Tests
                     host.Services.GetRequiredService<IServiceBoundaryInitializer>()
                         is ServiceBoundaryInitializer,
                     "Production service retained an unconfigured initializer.");
+                // Resolve only: starting the production host or probing SCM is forbidden here.
+                Assert(host.Services.GetRequiredService<IServiceHealthQuery>() is WindowsServiceHealthQuery,
+                    "Production readiness retained a placeholder instead of the read-only SCM query.");
             }
 
             return Task.CompletedTask;

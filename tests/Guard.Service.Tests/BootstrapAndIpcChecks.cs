@@ -400,6 +400,7 @@ namespace Guard.Service.Tests
                 "S-1-5-21-1001-2002-3003-1004");
             var administratorSid = new WindowsAccountSid(
                 "S-1-5-21-1001-2002-3003-1005");
+            var serviceQuery = new FixedServiceHealthQuery();
             var provider = new ProductionReadinessFactsProvider(
                 new FixedLocalAccountFactsProvider(childSid),
                 new FixedWindowsEditionFactsSource(
@@ -423,7 +424,7 @@ namespace Guard.Service.Tests
                     }),
                 new PassingReadinessBoundaryGuard(),
                 new GuardServiceHealthInspector(
-                    new UnknownServiceHealthQuery(),
+                    serviceQuery,
                     GuardServiceIdentity.ServiceName,
                     GuardServiceIdentity.ExpectedBinaryPath));
             var facts = provider.Probe(
@@ -457,6 +458,35 @@ namespace Guard.Service.Tests
                 !ReadinessEvaluator.Evaluate(facts)
                     .CanEnableProtection,
                 "An unobserved production fact was presented as ready.");
+
+            var binaryPath = "\"" + GuardServiceIdentity.ExpectedBinaryPath + "\"";
+            ServiceHealthProbeResult Installed(string sid, GuardServiceStartMode start, GuardServiceRunState run, string path) =>
+                new(ServiceHealthProbeState.Found, new ServiceHealthFacts(true, sid, start, run, path));
+            var cases = new[] {
+                (Installed("S-1-5-18", GuardServiceStartMode.Automatic, GuardServiceRunState.Running, binaryPath), ReadinessFactState.Satisfied),
+                (Installed("S-1-5-19", GuardServiceStartMode.Automatic, GuardServiceRunState.Running, binaryPath), ReadinessFactState.Unsatisfied),
+                (Installed("S-1-5-18", GuardServiceStartMode.Manual, GuardServiceRunState.Running, binaryPath), ReadinessFactState.Unsatisfied),
+                (Installed("S-1-5-18", GuardServiceStartMode.AutomaticDelayed, GuardServiceRunState.Running, binaryPath), ReadinessFactState.Unsatisfied),
+                (Installed("S-1-5-18", GuardServiceStartMode.Automatic, GuardServiceRunState.Stopped, binaryPath), ReadinessFactState.Unsatisfied),
+                (Installed("S-1-5-18", GuardServiceStartMode.Automatic, GuardServiceRunState.Running, binaryPath + " " + ServiceStartupOptions.InitializeAuthoritativeStateArgument), ReadinessFactState.Unsatisfied),
+                (Installed("S-1-5-18", GuardServiceStartMode.Automatic, GuardServiceRunState.Running, "\"C:\\Other\\Guard.Service.exe\""), ReadinessFactState.Unsatisfied),
+                (new ServiceHealthProbeResult(ServiceHealthProbeState.NotFound, null), ReadinessFactState.Unsatisfied),
+                (new ServiceHealthProbeResult(ServiceHealthProbeState.Error, null), ReadinessFactState.Error),
+                (new ServiceHealthProbeResult(ServiceHealthProbeState.Found, null), ReadinessFactState.Error),
+                (new ServiceHealthProbeResult(ServiceHealthProbeState.Unknown, null), ReadinessFactState.Unknown)
+            };
+            foreach (var (observation, expected) in cases)
+            {
+                serviceQuery.Result = observation;
+                var observed = provider.Probe(new DeviceSecurityState("device-v2-ready002", 5, 0, 0,
+                    childAccountSid: childSid), CancellationToken.None);
+                Assert(observed.ServiceBoundary.State == expected, "SCM observation did not reach production readiness.");
+                Assert(observed.BitLocker.State == ReadinessFactState.Unknown &&
+                    observed.SupportedManagedBrowser.State == ReadinessFactState.Unknown &&
+                    !ReadinessEvaluator.Evaluate(observed).CanEnableProtection,
+                    "Service observation incorrectly established overall protection readiness.");
+            }
+            Assert(serviceQuery.Calls == cases.Length + 1, "Readiness cached a previous SCM observation.");
             return Task.CompletedTask;
         }
 
@@ -1001,14 +1031,16 @@ namespace Guard.Service.Tests
             }
         }
 
-        private sealed class UnknownServiceHealthQuery :
+        private sealed class FixedServiceHealthQuery :
             IServiceHealthQuery
         {
+            public ServiceHealthProbeResult Result { get; set; } = new(ServiceHealthProbeState.Unknown, null);
+            public int Calls { get; private set; }
             public ServiceHealthProbeResult Query(string serviceName)
             {
-                return new ServiceHealthProbeResult(
-                    ServiceHealthProbeState.Unknown,
-                    facts: null);
+                Assert(serviceName == GuardServiceIdentity.ServiceName, "Unexpected SCM service target.");
+                Calls++;
+                return Result;
             }
         }
     }

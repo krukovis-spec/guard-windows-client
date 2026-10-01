@@ -385,6 +385,8 @@ Real SYSTEM-service lab M3, 2026-10-01: подготовлен `scripts/lab/serv
 
 ### Текущий статус нового маршрута
 
+Readiness integration (2026-10-01): production composition теперь использует существующий query-only `WindowsServiceHealthQuery`, заглушка `UnobservedServiceHealthQuery` удалена. Проверены регистрация без запуска службы и 11 случаев SCM observation → readiness: SYSTEM/автозапуск/состояние/путь, ошибки и повторное чтение без кеширования. Свежая Release-сборка + 29 v2 harnesses + 45 legacy checks PASS; опечатка имени константы в новом тесте найдена сборкой и исправлена до чистого прогона. VM `inspect` теперь требует положительный SCM-факт при false общей готовности до/после рестарта. Это не M1, проверка service DACL или действующих блокировок; BitLocker/браузер остаются Unknown. В безопасном прогоне SCM заменён тестовыми данными; настоящий endpoint и новый VM gate ещё NOT RUN. QR UI остаётся следующим отдельным участком после согласования библиотеки.
+
 | Этап | Статус | Условие перехода |
 |---|---|---|
 | M0 | Частично: safe baseline, guest baseline, PowerShell Direct и snapshot restore/boot PASS; recovery-media, официальный ISO hash и финальный Pro gate открыты | Проверенный disposable guest с полным recovery |
