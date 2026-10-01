@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — service-owned relay storage lifetime
+
+- Existing authoritative boundary now owns both writers and validates relay ACL paths, separate DPAPI purposes, device/epoch/history binding before IPC. Failed second acquisition/post-open guard releases resources; keys survive store drain. Explicit bootstrap persists identity → initial relay → owner and resumes only exact initial queue/journal without owner artifacts. Ordinary restart refuses missing/corrupt/mismatched history; missing keys with relay artifacts cannot regenerate.
+- Fresh Release/29 v2/45 legacy PASS; final focused Crypto/Service PASS after self-review changed concurrent owner reads to cancellable reload. Actual temporary CurrentUser DPAPI covers cleanup, lost/corrupt journal/state, wrong identity/epoch/backup, exact partial bootstrap, concurrent writes and signed request/HPKE outbox reopening. Initial test method-name compile error corrected. Android/Worker/interop unchanged, not rerun; no host-policy/VM/phone/cloud/dependency actions.
+- PROJECT_ONLY via wiki-memory/project-memory: capsule/plan/protocol updated; connection journal unchanged. Ponytail reused stores and startup lifecycle. Native approval delivery/observations/reconciliation are still unwired; M1/admin/TTL/live SCM/phone remain open, not release/Protected. Codex-like styling remains queued M7.
+
 ## 2026-10-01 — current-owner guarded relay commit
 
 - Added service-local request/approval commit using existing owner lock through relay CAS. Fresh pinned profile/identity/ACL/time checks immediately before atomic publication; preparer provides exact exclusive frame/decision deadline. Copied input before waiting; cancellation checked after validation, committed journal remains non-cancellable. No new queue/dependency or owner rewrite; fixed lock order owner → relay and no network in callback.

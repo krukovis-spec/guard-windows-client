@@ -37,7 +37,8 @@ internal static class ProvisioningChecks
             Directory.CreateDirectory(paths.RootDirectory);
             using var service = new ServiceAuthoritativeStateBoundary(paths,
                 new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true), guard,
-                new DeviceIdentityStore(paths, new LocalSystemDpapiDataProtector(DeviceIdentityStore.Purpose, true), guard));
+                new DeviceIdentityStore(paths, new LocalSystemDpapiDataProtector(DeviceIdentityStore.Purpose, true), guard),
+                () => DeviceIdentityChecks.OpenRelay(paths));
             await service.AcquireAsync(default); await service.InitializeNewAsync(default);
             var trust = new EnrollmentDeploymentTrust(Origin, new string('A', 64), 1);
             var descriptor = await service.ExportDeviceProvisioningAsync(trust, default);

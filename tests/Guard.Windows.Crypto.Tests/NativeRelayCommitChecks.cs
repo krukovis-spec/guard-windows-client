@@ -145,6 +145,28 @@ internal static class NativeRelayCommitChecks
         finally { directory.Delete(recursive: true); }
     }
 
+    internal static async Task CheckBoundaryRestartAsync(ServiceAuthoritativeStateBoundary boundary,
+        DeviceRelayConfiguration config, EnrollmentDeploymentTrust trust, DateTimeOffset now)
+    {
+        var owner = await boundary.LoadAsync(default);
+        var snapshot = new RequestSnapshot(owner.DeviceId, 1, 1, "event-restart-0001", "request-restart-001", 1,
+            RelayTargetKind.Application, "sha256:" + new string('b', 64), Array.Empty<RelayEvidenceField>(), "test", now,
+            now.AddMinutes(10), RandomNumberGenerator.GetBytes(32), 0);
+        var runtime = new NativeRelayTransactions(boundary.NativeEnrollmentStore, boundary.RelayTransactions,
+            boundary.Identity, config, trust, new Boundary(), new Clock { Value = now });
+        Check(await runtime.PublishRequestAsync(owner.Version, snapshot, default), "boundary-owned queue did not publish");
+        var stored = await boundary.RelayTransactions.LoadAsync(default);
+        var exactFrame = stored.Outbox.Single().GetEncryptedFrameCopy();
+        boundary.Dispose();
+        Check(!boundary.IsAcquired, "boundary retained writers after shutdown");
+        await boundary.AcquireAsync(default);
+        Check((await boundary.LoadAsync(default)).Version == owner.Version, "restart changed owner");
+        var restored = await boundary.RelayTransactions.LoadAsync(default);
+        Check(restored.Version == stored.Version && restored.Outbox.Single().GetEncryptedFrameCopy().SequenceEqual(exactFrame) &&
+            restored.TrackedRequests.Single().GetEncodedSnapshotCopy().SequenceEqual(RelayCanonicalEncoding.EncodeRequestSnapshot(snapshot)),
+            "restart lost original request/frame");
+    }
+
     private sealed class Clock : TimeProvider { internal DateTimeOffset Value; public override DateTimeOffset GetUtcNow() => Value; }
     private sealed class Boundary : IServiceDataBoundaryGuard
     {

@@ -7,8 +7,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using Guard.Contracts.Relay;
 using Guard.Domain;
+using Guard.Domain.Relay;
 using Guard.Service;
 using Guard.Storage;
+using Guard.Storage.Relay;
 using Guard.Windows.Cryptography;
 using Guard.Windows.Storage;
 
@@ -119,6 +121,97 @@ internal static class DeviceIdentityChecks
         await ThrowsAsync<OperationCanceledException>(() => failed.Store.InitializeOrResumeNewAsync(lateCancel.Token));
         Check(!File.Exists(failed.Paths.DeviceIdentityFile) && !File.Exists(failed.Paths.DeviceIdentityPendingFile),
             "cancellation after flush published keys");
+        await RelayLifetimeChecksAsync();
+    }
+
+    internal static FileRelayTransactionStore OpenRelay(GuardDataPaths paths) => new(paths.RelayStateFile,
+        new LocalSystemDpapiDataProtector(FileRelayTransactionStore.StateDataProtectionPurpose, true),
+        new ProtectedFileStateVersionJournal(paths.RelayJournalFile,
+            new LocalSystemDpapiDataProtector(FileRelayTransactionStore.JournalDataProtectionPurpose, true)));
+
+    private static async Task RelayLifetimeChecksAsync()
+    {
+        using var lab = new Lab();
+        using var boundary = lab.Boundary();
+        Throws<InvalidOperationException>(() => _ = boundary.RelayTransactions);
+        Check(!File.Exists(lab.Paths.WriterLeaseFile) && !Directory.Exists(lab.Paths.RelayRootDirectory), "eager relay composition");
+        // A failure opening the second writer must release the first, even before outer startup owns it.
+        using (var contender = OpenRelay(lab.Paths))
+        {
+            await ThrowsAsync<IOException>(() => boundary.AcquireAsync(default));
+            Check(!boundary.IsAcquired, "partial writer acquisition retained");
+            using var owner = new FileAuthoritativeStateStore(lab.Paths.StateFile,
+                new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true),
+                new ProtectedFileStateVersionJournal(lab.Paths.JournalFile,
+                    new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true)));
+        }
+        var calls = 0;
+        lab.Guard.Check = () => { if (++calls == 2) throw new UnauthorizedAccessException("Synthetic changed boundary."); };
+        await ThrowsAsync<UnauthorizedAccessException>(() => boundary.AcquireAsync(default));
+        Check(!boundary.IsAcquired, "failed post-open guard retained writers");
+        using (var relay = OpenRelay(lab.Paths)) { }
+        lab.Guard.Check = () => { };
+        await boundary.AcquireAsync(default); await boundary.InitializeNewAsync(default);
+        var ownerState = await boundary.LoadAsync(default);
+        var initial = await boundary.RelayTransactions.LoadAsync(default);
+        Check(initial.DeviceId == ownerState.DeviceId && initial.DeviceEpoch == 1 && initial.AuthorityEpoch == 1 &&
+            initial.Version == 0 && initial.Outbox.Count == 0, "initial queue binding");
+        var ownerWriter = boundary.NativeEnrollmentStore;
+        var writing = Task.Run(async () =>
+        {
+            for (var version = 0; version < 16; version++)
+                Check(await ownerWriter.TryCommitAsync(version, new DeviceSecurityState(ownerState.DeviceId, version + 1, 0, 0), default),
+                    "concurrent owner write failed");
+        });
+        await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => boundary.LoadAsync(default)));
+        await writing;
+        Check((await boundary.LoadAsync(default)).Version == 16, "concurrent boundary read lost owner state");
+        boundary.Dispose();
+        // Ordinary restart never initializes absent/corrupted queue or journal, nor accepts another device's queue.
+        foreach (var path in new[] { lab.Paths.RelayStateFile, lab.Paths.RelayJournalFile })
+        {
+            var saved = File.ReadAllBytes(path);
+            foreach (var absent in new[] { true, false })
+            {
+                if (absent) File.Delete(path); else File.WriteAllBytes(path, new byte[] { 1 });
+                using var reopened = lab.Boundary(); await reopened.AcquireAsync(default);
+                await ThrowsAsync<Exception>(() => reopened.LoadAsync(default));
+                await ThrowsAsync<InvalidOperationException>(() => reopened.InitializeNewAsync(default));
+                Check(absent ? !File.Exists(path) : File.ReadAllBytes(path).SequenceEqual(new byte[] { 1 }), "damaged queue silently reset");
+            }
+            File.WriteAllBytes(path, saved);
+        }
+        // Exact orphaned initial queue/journal can resume only under explicit bootstrap, retaining key bytes.
+        foreach (var journalOnly in new[] { false, true })
+        {
+            using var partial = new Lab();
+            using var identity = await partial.Store.InitializeOrResumeNewAsync(default);
+            var keys = File.ReadAllBytes(partial.Paths.DeviceIdentityFile);
+            using (var relay = OpenRelay(partial.Paths))
+                await relay.InitializeAsync(new RelayTransactionState(identity.DeviceId, 0, 1, 1, 0, 0, 0, 0), default);
+            if (journalOnly) File.Delete(partial.Paths.RelayStateFile);
+            using var resumed = partial.Boundary(); await resumed.AcquireAsync(default);
+            await ThrowsAsync<Exception>(() => resumed.LoadAsync(default));
+            Check(!File.Exists(partial.Paths.StateFile), "ordinary startup resumed bootstrap");
+            await resumed.InitializeNewAsync(default); await resumed.LoadAsync(default);
+            Check(keys.SequenceEqual(File.ReadAllBytes(partial.Paths.DeviceIdentityFile)) &&
+                (await resumed.RelayTransactions.LoadAsync(default)).Version == 0, "partial bootstrap changed identity/history");
+        }
+        foreach (var mismatch in new[] { "device", "epoch", "backup", "missing-identity" })
+        {
+            using var partial = new Lab();
+            using var identity = await partial.Store.InitializeOrResumeNewAsync(default);
+            using (var relay = OpenRelay(partial.Paths))
+                await relay.InitializeAsync(new RelayTransactionState(mismatch == "device" ? "other-device-0001" : identity.DeviceId,
+                    0, mismatch == "epoch" ? 2 : 1, 1, 0, 0, 0, 0), default);
+            if (mismatch == "backup") File.Copy(partial.Paths.RelayStateFile, partial.Paths.RelayStateBackupFile);
+            if (mismatch == "missing-identity") File.Delete(partial.Paths.DeviceIdentityFile);
+            var saved = File.ReadAllBytes(partial.Paths.RelayStateFile);
+            using var refused = partial.Boundary(); await refused.AcquireAsync(default);
+            await ThrowsAsync<Exception>(() => refused.InitializeNewAsync(default));
+            Check(!File.Exists(partial.Paths.StateFile) && saved.SequenceEqual(File.ReadAllBytes(partial.Paths.RelayStateFile)) &&
+                (mismatch != "missing-identity" || !File.Exists(partial.Paths.DeviceIdentityFile)), "ambiguous bootstrap repaired itself");
+        }
     }
 
     private static void MalformedRecords(Lab lab, byte[] validCipher)
@@ -163,7 +256,7 @@ internal static class DeviceIdentityChecks
             Store = new DeviceIdentityStore(Paths, Protector, Guard);
         }
         internal ServiceAuthoritativeStateBoundary Boundary() => new(Paths,
-            new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true), Guard, Store);
+            new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true), Guard, Store, () => OpenRelay(Paths));
         public void Dispose() => Directory.Delete(_directory, recursive: true);
     }
     private sealed class TestGuard : IServiceDataBoundaryGuard

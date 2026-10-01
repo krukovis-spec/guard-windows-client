@@ -1,10 +1,13 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.Json;
 using Guard.Application;
 using Guard.Domain;
+using Guard.Domain.Relay;
 using Guard.Storage;
+using Guard.Storage.Relay;
 using Guard.Windows.Storage;
 using Guard.Windows.Cryptography;
 
@@ -29,6 +32,11 @@ namespace Guard.Service
         {
             _aclGuard.DemandServiceOnlyDirectory(_paths.SecurityRootDirectory);
             _aclGuard.DemandServiceOnlyDirectory(_paths.RootDirectory);
+            _aclGuard.DemandServiceOnlyDirectory(_paths.RelayRootDirectory);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.RelayStateFile);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.RelayStateBackupFile);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.RelayJournalFile);
+            _aclGuard.DemandServiceOnlyFileIfPresent(_paths.RelayWriterLeaseFile);
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.StateFile);
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.StateBackupFile);
             _aclGuard.DemandServiceOnlyFileIfPresent(_paths.JournalFile);
@@ -47,6 +55,7 @@ namespace Guard.Service
                 _paths.SecurityRootDirectory);
             _aclGuard.EnsureServiceOnlyDirectory(
                 _paths.RootDirectory);
+            _aclGuard.EnsureServiceOnlyDirectory(_paths.RelayRootDirectory);
         }
     }
 
@@ -67,20 +76,27 @@ namespace Guard.Service
         private readonly IStateDataProtector _protector;
         private readonly IServiceDataBoundaryGuard _dataBoundaryGuard;
         private readonly DeviceIdentityStore _identityStore;
+        private readonly Func<FileRelayTransactionStore> _openRelay;
         private FileAuthoritativeStateStore? _store;
+        private FileRelayTransactionStore? _relay;
         private DeviceIdentity? _identity;
 
         public ServiceAuthoritativeStateBoundary(
             GuardDataPaths paths,
             IStateDataProtector protector,
             IServiceDataBoundaryGuard dataBoundaryGuard,
-            DeviceIdentityStore identityStore)
+            DeviceIdentityStore identityStore,
+            Func<FileRelayTransactionStore>? openRelay = null)
         {
             _paths = paths ?? throw new ArgumentNullException(nameof(paths));
             _protector = protector ?? throw new ArgumentNullException(nameof(protector));
             _dataBoundaryGuard = dataBoundaryGuard ??
                 throw new ArgumentNullException(nameof(dataBoundaryGuard));
             _identityStore = identityStore ?? throw new ArgumentNullException(nameof(identityStore));
+            _openRelay = openRelay ?? (() => new FileRelayTransactionStore(_paths.RelayStateFile,
+                new LocalSystemDpapiDataProtector(FileRelayTransactionStore.StateDataProtectionPurpose),
+                new ProtectedFileStateVersionJournal(_paths.RelayJournalFile,
+                    new LocalSystemDpapiDataProtector(FileRelayTransactionStore.JournalDataProtectionPurpose))));
         }
 
         public Task AcquireAsync(CancellationToken cancellationToken)
@@ -98,10 +114,25 @@ namespace Guard.Service
                 var journal = new ProtectedFileStateVersionJournal(
                     _paths.JournalFile,
                     _protector);
-                _store = new FileAuthoritativeStateStore(
+                var store = new FileAuthoritativeStateStore(
                     _paths.StateFile,
                     _protector,
                     journal);
+                FileRelayTransactionStore? relay = null;
+                try
+                {
+                    relay = _openRelay();
+                    _dataBoundaryGuard.DemandReady();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    _store = store;
+                    _relay = relay;
+                }
+                catch
+                {
+                    relay?.Dispose();
+                    store.Dispose();
+                    throw;
+                }
             }
 
             return Task.CompletedTask;
@@ -113,7 +144,7 @@ namespace Guard.Service
             {
                 lock (_sync)
                 {
-                    return _store != null;
+                    return _store != null && _relay != null;
                 }
             }
         }
@@ -121,14 +152,27 @@ namespace Guard.Service
         public async Task<DeviceSecurityState> LoadAsync(
             CancellationToken cancellationToken)
         {
-            var state = await GetAcquiredStore().LoadAsync(cancellationToken).ConfigureAwait(false);
-            lock (_sync)
+            _dataBoundaryGuard.DemandReady();
+            var store = GetAcquiredStore();
+            while (true)
             {
-                _ = GetAcquiredStore();
-                _identity ??= _identityStore.Load();
-                _identity.RequireMatches(state);
+                var state = await store.LoadAsync(cancellationToken).ConfigureAwait(false);
+                // The same owner -> relay lock order as native commits; no mixed owner/history snapshot.
+                if (await store.TryWithCurrentStateAsync(state.Version, async (owner, token) =>
+                {
+                    RequireRelayMatches(owner, await RelayTransactions.LoadAsync(token).ConfigureAwait(false));
+                    lock (_sync)
+                    {
+                        if (!ReferenceEquals(_store, store)) throw new InvalidOperationException("Service boundary changed.");
+                        _identity ??= _identityStore.Load();
+                        _identity.RequireMatches(owner);
+                    }
+                    _dataBoundaryGuard.DemandReady();
+                    token.ThrowIfCancellationRequested();
+                    return true;
+                }, cancellationToken).ConfigureAwait(false)) return state;
+                // A concurrent owner commit is not corruption: reload under the caller's cancellation budget.
             }
-            return state;
         }
 
         internal DeviceIdentity Identity
@@ -137,6 +181,10 @@ namespace Guard.Service
         }
 
         internal FileAuthoritativeStateStore NativeEnrollmentStore => GetAcquiredStore();
+        internal FileRelayTransactionStore RelayTransactions
+        {
+            get { lock (_sync) return _relay ?? throw new InvalidOperationException("Relay writer lease is not acquired."); }
+        }
 
         internal async Task<DeviceSecurityState> LoadPristineAsync(CancellationToken cancellationToken)
         {
@@ -177,7 +225,36 @@ namespace Guard.Service
         {
             var store = GetAcquiredStore();
             using var identity = await _identityStore.InitializeOrResumeNewAsync(cancellationToken).ConfigureAwait(false);
-            await store.InitializeAsync(new DeviceSecurityState(identity.DeviceId, 0, 0, 0), cancellationToken).ConfigureAwait(false);
+            var initial = new DeviceSecurityState(identity.DeviceId, 0, 0, 0);
+            var relay = RelayTransactions;
+            if (File.Exists(_paths.RelayStateFile))
+            {
+                // Explicit bootstrap may resume only the exact untouched queue after keys were persisted.
+                if (File.Exists(_paths.RelayStateBackupFile)) throw new InvalidDataException("Relay bootstrap has transaction history.");
+                RequireRelayMatches(initial, await relay.LoadAsync(cancellationToken).ConfigureAwait(false));
+            }
+            else
+                await relay.InitializeAsync(new RelayTransactionState(identity.DeviceId, 0, 1, 1, 0, 0, 0, 0), cancellationToken).ConfigureAwait(false);
+            _dataBoundaryGuard.DemandReady();
+            await store.InitializeAsync(initial, cancellationToken).ConfigureAwait(false);
+            _dataBoundaryGuard.DemandReady();
+        }
+
+        private static void RequireRelayMatches(DeviceSecurityState owner, RelayTransactionState relay)
+        {
+            if (relay.DeviceId != owner.DeviceId || relay.DeviceEpoch != (owner.Enrollment?.Offer.DeviceEpoch ?? 1) ||
+                relay.AuthorityEpoch != (owner.Enrollment?.Offer.AuthorityEpoch ?? 1))
+                throw new InvalidDataException("Relay history does not match the device enrollment.");
+            if (relay.Version == 0)
+            {
+                if (relay.CommittedInboundCursor != 0 || relay.HighestOutboundCursor != 0 || relay.AcknowledgedOutboundCursor != 0 ||
+                    relay.PolicyRevision != 0 || relay.ReplayFloors.Count != 0 || relay.TrackedRequests.Count != 0 ||
+                    relay.PolicyLedger.Count != 0 || relay.ReconcileIntents.Count != 0 || relay.SignedReceipts.Count != 0 ||
+                    relay.Outbox.Count != 0 || relay.RecipientOutboundCursors.Count != 0)
+                    throw new InvalidDataException("Initial relay history is not empty.");
+            }
+            else if (!owner.IsProvisioned || owner.Enrollment is not { Confirmed: true, PhoneKeyConfirmed: true })
+                throw new InvalidDataException("Relay history requires a confirmed native owner.");
         }
 
         public Task<bool> TryCommitAsync(
@@ -207,15 +284,21 @@ namespace Guard.Service
         public void Dispose()
         {
             FileAuthoritativeStateStore? store;
+            FileRelayTransactionStore? relay;
+            DeviceIdentity? identity;
             lock (_sync)
             {
                 store = _store;
+                relay = _relay;
+                identity = _identity;
                 _store = null;
-                _identity?.Dispose();
+                _relay = null;
                 _identity = null;
             }
-
+            // Hosted workers and IPC drain first; keep keys alive until in-flight store operations finish.
             store?.Dispose();
+            relay?.Dispose();
+            identity?.Dispose();
         }
 
         private FileAuthoritativeStateStore GetAcquiredStore()
