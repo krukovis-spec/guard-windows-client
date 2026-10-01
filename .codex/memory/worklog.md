@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — exact command redelivery without renewed permission
+
+- New-cursor duplicate approval now resends its original signed receipt through the existing atomic outbox. Crypto rechecks owner/signatures/original snapshot/hash/replay history and saved device signature. Only delivery cursors/outbox change; policy, sequence, intents, original receipt status/time/bytes remain intact, including expired or older decisions. Storage independently reconstructs the exact allowed successor. No new schema, queue or dependency.
+- Focused RelayCrypto/Crypto and fresh full Release/29 v2/45 legacy PASS. Existing fixtures cover all four decisions, expired/rejected/resolved outcomes, older command after a higher sequence, conflicting signed decision, wrong signature, corrupted saved evidence, missing floor, gaps/expiry/capacity, combined-floor mutation, cancellation/CAS/reopen and lost HTTP redelivery responses with exact retry bytes. Self-review traced native preparation → guarded CAS → delivery/ack; allowed remains pending, never Applied. Android/Worker/interop unchanged and not rerun; no live cloud/VM/phone/host-policy action.
+- PROJECT_ONLY via wiki-memory/project-memory: updated capsule/plan/protocol; service connection journal unchanged. Ponytail reuses signed history and exact transition validation. Remaining poison/gap/expired-outbox handling, trusted observations, verified policy effect/terminal receipt, M1 independent TTL/admin and real phone acceptance remain open. Codex-like visual pass remains M7 after functionality.
+
 ## 2026-10-01 — native approval delivery wired into the service
 
 - Added one bounded HTTP pass over the existing authoritative stores and crypto pipeline: drain exact committed bytes, retry durable ack, poll/verify/commit one approval, publish stored receipt, ack durable input. Guarded exact-first-item delivery ack reuses owner → relay CAS and post-flush profile/time/ACL checks. Production reuses existing hosted worker, skips bootstrap/import/unconfirmed owner and drains before key release; no HTTP under writer locks or new dependencies.

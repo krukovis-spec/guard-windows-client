@@ -28,17 +28,22 @@ internal static class NativeRelayDeliveryChecks
         var initial = await service.RelayTransactions.LoadAsync(default);
         var snapshot = RelayCanonicalEncoding.DecodeRequestSnapshot(initial.TrackedRequests.Single().GetEncodedSnapshotCopy());
         var expectedRequest = initial.Outbox.Single().GetEncryptedFrameCopy();
-        SignedApprovalEnvelope Approval(byte[] signature) => new(1, owner.Enrollment!.Candidate!.ApprovalKeyId, 1,
+        SignedApprovalEnvelope Approval(byte[] signature, ParentDecisionKind decision = ParentDecisionKind.AllowTemporary) => new(1, owner.Enrollment!.Candidate!.ApprovalKeyId, 1,
             "command-delivery-01", "nonce-delivery-0001", now, now.AddMinutes(2), owner.DeviceId, 1, snapshot.RequestId, 1,
             RelayCanonicalEncoding.ComputeRequestSnapshotHash(snapshot), snapshot.GetDecisionChallengeCopy(), snapshot.TargetKind,
-            snapshot.CanonicalTargetIdentity, 0, ParentDecisionKind.AllowTemporary, 10, signature);
+            snapshot.CanonicalTargetIdentity, 0, decision, decision == ParentDecisionKind.AllowTemporary ? 10 : 0, signature);
         var signed = Approval(sign(RelayCanonicalEncoding.ComputeApprovalHash(Approval(new byte[64]))));
-        RelayFrame Frame(byte[] enc, byte[] cipher) => new(RelayFrameKind.Approval, config.MailboxId, service.Identity.EncryptionKeyId,
-            "frame-delivery-001", 1, 0, now, now.AddHours(1), enc, cipher);
-        var aad = RelayCanonicalEncoding.EncodeRelayFrameAssociatedData(Frame(Array.Empty<byte>(), Array.Empty<byte>()));
-        var ciphertext = RelayCryptography.Encrypt(service.Identity.EncryptionPoint, RelayCanonicalEncoding.EncodeApprovalEnvelope(signed),
-            aad, "guard-relay-approval-hpke-v1"u8.ToArray().Concat(aad).ToArray(), out var encapsulated);
-        var frame = RelayCanonicalEncoding.EncodeRelayFrame(Frame(encapsulated, ciphertext));
+        byte[] Seal(SignedApprovalEnvelope approval, long cursor)
+        {
+            RelayFrame Frame(byte[] enc, byte[] cipher) => new(RelayFrameKind.Approval, config.MailboxId, service.Identity.EncryptionKeyId,
+                "frame-delivery-00" + cursor, cursor, 0, now, now.AddHours(1), enc, cipher);
+            var aad = RelayCanonicalEncoding.EncodeRelayFrameAssociatedData(Frame(Array.Empty<byte>(), Array.Empty<byte>()));
+            var ciphertext = RelayCryptography.Encrypt(service.Identity.EncryptionPoint, RelayCanonicalEncoding.EncodeApprovalEnvelope(approval),
+                aad, "guard-relay-approval-hpke-v1"u8.ToArray().Concat(aad).ToArray(), out var encapsulated);
+            return RelayCanonicalEncoding.EncodeRelayFrame(Frame(encapsulated, ciphertext));
+        }
+        long inboundCursor = 1;
+        var frame = Seal(signed, inboundCursor);
         var published = new Dictionary<string, byte[]>();
         var clock = new Clock { Now = now }; var guard = new Boundary();
         var calls = 0; var polls = 0; var acks = 0;
@@ -60,7 +65,7 @@ internal static class NativeRelayDeliveryChecks
                 var item = RelayCanonicalEncoding.DecodeRelayFrame(bytes);
                 Check(state.Outbox[0].GetEncryptedFrameCopy().SequenceEqual(bytes), "sent uncommitted bytes");
                 if (item.Kind == RelayFrameKind.Request) Check(expectedRequest.SequenceEqual(bytes), "request retry changed bytes");
-                else Check(item.Kind == RelayFrameKind.Receipt && state.CommittedInboundCursor == 1 && state.PolicyRevision == 1 &&
+                else Check(item.Kind == RelayFrameKind.Receipt && state.CommittedInboundCursor == inboundCursor && state.PolicyRevision == 1 &&
                     state.SignedReceipts.Single().Status == CommandReceiptStatus.AcceptedPendingReconciliation, "receipt before durable transaction");
                 var duplicate = published.TryGetValue(item.FrameId, out var previous);
                 if (duplicate) Check(previous!.SequenceEqual(bytes), "lost response changed ciphertext");
@@ -84,11 +89,11 @@ internal static class NativeRelayDeliveryChecks
                 Check(request.RequestUri.Query.Contains("&after=" + state.CommittedInboundCursor + "&", StringComparison.Ordinal), "poll did not resume committed cursor");
                 var bytes = (byte[])frame.Clone(); if (corrupt) bytes[^1] ^= 1;
                 if (expireDuringPoll) clock.Now = config.ExpiresAt;
-                return Reply(new { frames = state.CommittedInboundCursor == 0 || replay ? new[] { Convert.ToBase64String(bytes) } : Array.Empty<string>(), nextCursor = 1 });
+                return Reply(new { frames = state.CommittedInboundCursor < inboundCursor || replay ? new[] { Convert.ToBase64String(bytes) } : Array.Empty<string>(), nextCursor = inboundCursor });
             }
             Check(request.RequestUri.AbsolutePath.EndsWith("/ack", StringComparison.Ordinal), "unexpected HTTP route");
             using var ack = JsonDocument.Parse(await request.Content!.ReadAsByteArrayAsync(token));
-            Check(ack.RootElement.GetProperty("cursor").GetInt64() == 1 && state.CommittedInboundCursor == 1 &&
+            Check(ack.RootElement.GetProperty("cursor").GetInt64() == state.CommittedInboundCursor && state.CommittedInboundCursor > 0 &&
                 state.ReplayFloors.Single().HighestAcceptedSequence == 1, "ack preceded durable acceptance");
             acks++;
             if (loseAck) { loseAck = false; throw new HttpRequestException("Synthetic lost ack response."); }
@@ -142,7 +147,22 @@ internal static class NativeRelayDeliveryChecks
             Check(calls == priorCalls, "local corruption reached network or became retryable peer input");
         }
         finally { File.WriteAllBytes(path, durable); }
-        Console.WriteLine("PASS native relay delivery: actual owner/DPAPI/HPKE commit, lost responses/restart/owner race, durable-only ack, hostile frame/profile and hint rejection; controlled HTTP only");
+        // Same signed command at a fresh transport cursor resends history, not another grant.
+        inboundCursor = 2; frame = Seal(signed, inboundCursor); loseReceipt = true;
+        await Reject(() => Pass(), typeof(HttpRequestException));
+        var repeated = await service.RelayTransactions.LoadAsync(default);
+        Check(repeated.CommittedInboundCursor == 2 && repeated.PolicyRevision == 1 && repeated.Outbox.Count == 1 &&
+            repeated.SignedReceipts.Single().GetSignedReceiptCopy().SequenceEqual(restored.SignedReceipts.Single().GetSignedReceiptCopy()) &&
+            repeated.ReconcileIntents.Count == 1 && repeated.PolicyLedger.Count == 1, "redelivery changed authority or receipt time");
+        await Reopen(); Check(await Pass(), "redelivery outbox did not retry after restart");
+        var delivered = await service.RelayTransactions.LoadAsync(default);
+        Check(delivered.CommittedInboundCursor == 2 && delivered.AcknowledgedOutboundCursor == 3 && delivered.Outbox.Count == 0 &&
+            delivered.ReplayFloors.Single().HighestAcceptedSequence == 1 && published.Count == 3, "redelivery retry changed bytes/floor or lost ack");
+        var conflicting = Approval(sign(RelayCanonicalEncoding.ComputeApprovalHash(Approval(new byte[64], ParentDecisionKind.Deny))), ParentDecisionKind.Deny);
+        inboundCursor = 3; frame = Seal(conflicting, inboundCursor);
+        await Reject(() => Pass(), typeof(HttpRequestException));
+        Check((await service.RelayTransactions.LoadAsync(default)).Version == delivered.Version, "conflicting repeated command changed state");
+        Console.WriteLine("PASS native relay delivery: actual owner/DPAPI/HPKE commit, lost responses/restart/owner race, exact receipt redelivery without renewed grants, durable-only ack, hostile frame/profile and hint rejection; controlled HTTP only");
     }
 
     private sealed class Clock : TimeProvider { internal DateTimeOffset Now; public override DateTimeOffset GetUtcNow() => Now; }
