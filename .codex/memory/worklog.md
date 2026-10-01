@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — native Windows approval transaction preparation
+
+- Added actual GRF1/HPKE→native owner/signature/exact snapshot checks→complete relay successor→signed/encrypted receipt. Reuses the existing aggregate, HPKE/codec and file CAS; no new package, second writer or policy adapter. Allowed stays pending until verified effect; next sequence cannot bypass an interim response. Nonpermissive terminal outcomes preserve policy. Original QR expiry is not owner expiry.
+- Fresh Release/29 v2 harnesses/45 legacy, 88 JVM/debug+instrumentation APK/lint 0 errors/13 prior warnings and four interop PASS. Android fixture now has canonical fingerprints and a clearly test-only ephemeral signing key under ignored build/, letting its real sender enter production preparation. Temp file commit/reopen/cancel/stale CAS, all encrypted byte mutations and context/time/key/replay cases pass. Initial detailCode length defect fixed; test stale-policy fixture/expectation and Windows invalid-point exception classification corrected. Self-review added stop-and-wait rejection after interim. No live host policies, service, VM, phone, cloud or secrets action.
+- PROJECT_ONLY via wiki-memory/project-memory: capsule/plan/protocol updated; connection journal unchanged. Explicit remaining gap: preparer is not activated in service composition. Durable full snapshots/current-authority commit gate, retry/invalid-frame progression, service transport and terminal policy reconciliation come next; independent M1, real phone and Codex-style M7 remain open.
+
 ## 2026-10-01 — Android verified receipt consumption and durable historical result
 
 - Connected existing inbox→immutable verified receipt→confirmed native ceremony→atomic outbox→Russian pending/history UI. Receipt-only paging ignores request payloads without authorizing/displaying them. GOB3 stores original GRAP+encrypted receipt with the terminal sequence transition; GOB1/GOB2 compatibility, no unsafe complete/reset. Exact identity/hash/signature/time/context, duplicate terminal, interim→terminal, old interim after restart, conflicting terminal and newer pending handled; historical evidence re-verifies with existing keys and cannot claim current access.

@@ -5,6 +5,8 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Guard.Contracts.Relay;
+using Guard.Domain;
+using Guard.Domain.Relay;
 using Guard.Protocol.Relay;
 using Guard.Windows.Cryptography;
 
@@ -100,7 +102,7 @@ internal static class InteropExchange
     public static void VerifyAndroidApprovalFrame(string path)
     {
         var values = File.ReadAllLines(path).Select(x => x.Split('=', 2)).ToDictionary(x => x[0], x => x[1]);
-        Require(values.Count == 5);
+        Require(values.Count == 6);
         var offer = RelayCanonicalEncoding.DecodeEnrollmentOffer(Hex(values["offer"]));
         var claim = RelayCanonicalEncoding.DecodeEnrollmentClaimForSignature(Hex(values["claim"]));
         var snapshot = RelayCanonicalEncoding.DecodeRequestSnapshot(Hex(values["snapshot"]));
@@ -128,6 +130,30 @@ internal static class InteropExchange
             approval.CanonicalTargetIdentity == snapshot.CanonicalTargetIdentity &&
             approval.GetRequestSnapshotHashCopy().SequenceEqual(RelayCanonicalEncoding.ComputeRequestSnapshotHash(snapshot)) &&
             approval.GetDecisionChallengeCopy().SequenceEqual(snapshot.GetDecisionChallengeCopy()));
+        // Exercise production preparation, not just duplicate test-only decryption logic.
+        // Both private keys are ephemeral/public TEST material, never imported from a device/profile.
+        using var deviceSigning = ECDsa.Create();
+        deviceSigning.ImportPkcs8PrivateKey(Hex(values["testDeviceSigningPkcs8"]), out var keyBytes);
+        Require(keyBytes == Hex(values["testDeviceSigningPkcs8"]).Length);
+        using var deviceEncryption = ECDiffieHellman.Create(Parameters(Hex(RecipientPublic), Hex(RecipientPrivate)));
+        var anchor = new ParentTrustAnchor(ParentKeyAlgorithm.EcdsaP256Sha256, claim.GetApprovalKeyCopy());
+        var enrollment = new DeviceEnrollmentState(offer, Array.Empty<byte>(), claim, new[] { new byte[1], new byte[1] },
+            new byte[64], new byte[32], new byte[65], new byte[48], Array.Empty<byte>(), true, true);
+        var owner = new DeviceSecurityState(offer.DeviceId, 3, 0, 0, trustedParentKeys: new[] { anchor }, enrollment: enrollment);
+        var current = new RelayTransactionState(offer.DeviceId, 8, 1, 1, 6, 1, 1, snapshot.PolicyRevision,
+            trackedRequests: new[] { new RelayTrackedRequest(snapshot.RequestId, snapshot.RequestRevision,
+                RelayCanonicalEncoding.ComputeRequestSnapshotHash(snapshot), snapshot.GetDecisionChallengeCopy()) },
+            policyLedger: new[] { new RelayPolicyLedgerEntry(snapshot.PolicyRevision, "other-request-001", "other-command-001",
+                RelayTargetKind.Application, "other.exe", ParentDecisionKind.AllowAlways, 0, new byte[32]) },
+            recipientOutboundCursors: new[] { new KeyValuePair<string, long>(claim.EncryptionKeyId, 1) });
+        var next = NativeApprovalTransaction.Prepare(owner, current, snapshot, Hex(values["frame"]), deviceEncryption, deviceSigning, Now);
+        var response = RelayCanonicalEncoding.DecodeDeviceReceiptEnvelope(next.SignedReceipts.Single().GetSignedReceiptCopy());
+        Require(next.CommittedInboundCursor == 7 && next.ReplayFloors.Single().HighestAcceptedSequence == 1 &&
+            next.PolicyRevision == snapshot.PolicyRevision + 1 && next.PolicyLedger.Last().CanonicalTargetIdentity == snapshot.CanonicalTargetIdentity &&
+            response.Receipt.Status == CommandReceiptStatus.AcceptedPendingReconciliation &&
+            response.Receipt.GetApprovalHashCopy().SequenceEqual(RelayCanonicalEncoding.ComputeApprovalHash(approval)) &&
+            deviceSigning.VerifyHash(RelayCanonicalEncoding.ComputeDeviceReceiptHash(response), response.GetSignatureP1363Copy(),
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
         // A different message kind/domain cannot decrypt the same ciphertext.
         try
         {
@@ -136,7 +162,7 @@ internal static class InteropExchange
             throw new InvalidOperationException("Wrong approval domain accepted.");
         }
         catch (CryptographicException) { }
-        Console.WriteLine("PASS Android reserved GRF1 decrypts in .NET; exact GRAP, signature, enrollment and request binding verified.");
+        Console.WriteLine("PASS Android reserved GRF1 enters production Windows transaction preparation; exact GRAP/trust/request, pending intent and signed receipt verified.");
     }
 
     private static byte[] Seal(RelayFrameKind kind, byte[] plaintext, long cursor)

@@ -26,11 +26,13 @@ class NativeApprovalDeliveryTest {
     private val now = ExchangeVector.now
     private val clock = TestClock(now)
     private fun pair() = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
-    private val phone = pair(); private val approvalKey = pair()
+    private val phone = pair(); private val approvalKey = pair(); private val deviceSigning = pair()
+    private fun keyId(spki: ByteArray) = "p256:" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(GuardWire.sha256(spki))
+    private val deviceEncryptionSpki = java.util.HexFormat.of().parseHex("3059301306072a8648ce3d020106082a8648ce3d030107034200") + ExchangeVector.key.publicKeySec1()
     private val offer = EnrollmentOffer("https://relay.example.test", "enrollment-alpha1", "device-alpha-0001", "Тестовый ПК",
-        1, 1, "mailbox-alpha-0001", "device-signing-0001", ExchangeVector.bytes("device.public"),
-        "device-encryption1", ExchangeVector.key.publicKeySec1(), now - 1000, now + 300000, ByteArray(32) { 9 })
-    private val claim = EnrollmentKeyClaim(EnrollmentWire.offerHash(offer), "phone-approval-001", approvalKey.public.encoded,
+        1, 1, "mailbox-alpha-0001", keyId(deviceSigning.public.encoded), deviceSigning.public.encoded.takeLast(65).toByteArray(),
+        keyId(deviceEncryptionSpki), ExchangeVector.key.publicKeySec1(), now - 1000, now + 300000, ByteArray(32) { 9 })
+    private val claim = EnrollmentKeyClaim(EnrollmentWire.offerHash(offer), keyId(approvalKey.public.encoded), approvalKey.public.encoded,
         "phone-encryption1", phone.public.encoded.takeLast(65).toByteArray())
     private val snapshot = RelayReceive.decodeDeviceSignedRequest(ExchangeVector.bytes("request.plaintext")).snapshot.copy(deviceEpoch = 1, authorityEpoch = 1)
     private val signed = ExchangeVector.approval().copy(authorityEpoch = 1, deviceEpoch = 1, keyId = claim.approvalKeyId,
@@ -95,7 +97,9 @@ class NativeApprovalDeliveryTest {
         val root = File(System.getProperty("user.dir"), "build/test-interop").apply { mkdirs() }
         File(root, "android-approval-frame.txt").writeText(listOf(
             "offer=" + EnrollmentWire.encodeOffer(offer).hex(), "claim=" + EnrollmentWire.encodeClaimForSignature(claim).hex(),
-            "snapshot=" + GuardWire.encodeRequestSnapshot(snapshot).hex(), "approval=" + pending.exactBytes.hex(), "frame=" + saved.frameBytes().hex()).joinToString("\n"))
+            "snapshot=" + GuardWire.encodeRequestSnapshot(snapshot).hex(), "approval=" + pending.exactBytes.hex(), "frame=" + saved.frameBytes().hex(),
+            // Ephemeral JVM TEST key only, under ignored build/. Never a phone/Keystore/production key.
+            "testDeviceSigningPkcs8=" + deviceSigning.private.encoded.hex()).joinToString("\n"))
     }
 
     @Test fun `lost reservation and publication replies retry exact bytes after process reconstruction`() = runBlocking {
