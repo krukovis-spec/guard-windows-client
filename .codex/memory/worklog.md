@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-01 — expired device delivery positions no longer poison the outbox
+
+- Root cause: `/frames` rejects expired bytes while requiring consecutive delivery cursors. Added scoped device-only `/frames/retire`, reusing parser/auth/SQL publication heads, with no new table or dependency. Expired request/receipt positions advance by one or retry below an existing floor; no polling payload, recipient ack, signing sequence or permission change. No receipt-by-phone claim after tombstone expiry.
+- Native delivery checks local expiry, validates exact retirement response, then reuses guarded exact-head removal with a second expiry check and post-flush profile/ACL/clock guard. Requests, signed history, policy and reconciliation stay intact. Lost response/restart retries exact bytes; old servers retain the queue item. Self-review traced the real production caller and shared validation, not a new queue implementation.
+- Service build 0 warnings/errors, focused Crypto and fresh Release/29 v2/45 legacy PASS; Worker 68 tests + typecheck PASS. Real local SQL tests include roles/scope, expiry, conflict/gap, reservation/quota, delayed auth revocation and rollback; actual temporary DPAPI/controlled HTTP covers malformed/lost response, live-frame refusal, clock rollback and restart. No Android/PWA/interop changes, no live host/VM/phone/cloud action; API NOT DEPLOYED.
+- PROJECT_ONLY via wiki-memory/project-memory: capsule/plan/protocol/Worker README updated; service connection journal unchanged. Remaining input poison/gaps, expired pending Android commands/history recovery, trusted observations, real policy effect/terminal receipt, M1/TTL/admin and physical-phone gates stay open. Codex-like visual pass remains M7.
+
 ## 2026-10-01 — exact command redelivery without renewed permission
 
 - New-cursor duplicate approval now resends its original signed receipt through the existing atomic outbox. Crypto rechecks owner/signatures/original snapshot/hash/replay history and saved device signature. Only delivery cursors/outbox change; policy, sequence, intents, original receipt status/time/bytes remain intact, including expired or older decisions. Storage independently reconstructs the exact allowed successor. No new schema, queue or dependency.

@@ -49,6 +49,7 @@ internal static class NativeRelayDeliveryChecks
         var calls = 0; var polls = 0; var acks = 0;
         var loseRequest = true; var changeOwner = false; var corrupt = false;
         var expireDuringPoll = false; var loseReceipt = false; var loseAck = false; var replay = false;
+        var loseRetirement = false; var rollbackRetirement = false; byte[]? retiredBytes = null;
         string? badResponse = null;
 
         async Task<HttpResponseMessage> Send(HttpRequestMessage request, CancellationToken token)
@@ -59,6 +60,18 @@ internal static class NativeRelayDeliveryChecks
             Check(request.RequestUri!.GetLeftPart(UriPartial.Authority) == trust.Origin.GetLeftPart(UriPartial.Authority) &&
                 request.Headers.Authorization?.Scheme == "Bearer", "transport target/credential binding");
             var state = await service.RelayTransactions.LoadAsync(token);
+            if (request.RequestUri.AbsolutePath.EndsWith("/frames/retire", StringComparison.Ordinal))
+            {
+                var bytes = await request.Content!.ReadAsByteArrayAsync(token);
+                var item = RelayCanonicalEncoding.DecodeRelayFrame(bytes);
+                Check(state.Outbox[0].GetEncryptedFrameCopy().SequenceEqual(bytes) && clock.Now >= item.ExpiresAtUtc,
+                    "retirement did not use exact expired head");
+                if (retiredBytes != null) Check(retiredBytes.SequenceEqual(bytes), "retirement retry changed bytes");
+                retiredBytes = bytes;
+                if (loseRetirement) { loseRetirement = false; throw new HttpRequestException("Synthetic lost retirement response."); }
+                if (rollbackRetirement) { rollbackRetirement = false; clock.Now = now; }
+                return Reply(new { frameId = item.FrameId, cursor = badResponse == "retirement" ? 0 : item.Cursor, retired = true });
+            }
             if (request.RequestUri.AbsolutePath.EndsWith("/frames", StringComparison.Ordinal))
             {
                 var bytes = await request.Content!.ReadAsByteArrayAsync(token);
@@ -162,7 +175,29 @@ internal static class NativeRelayDeliveryChecks
         inboundCursor = 3; frame = Seal(conflicting, inboundCursor);
         await Reject(() => Pass(), typeof(HttpRequestException));
         Check((await service.RelayTransactions.LoadAsync(default)).Version == delivered.Version, "conflicting repeated command changed state");
-        Console.WriteLine("PASS native relay delivery: actual owner/DPAPI/HPKE commit, lost responses/restart/owner race, exact receipt redelivery without renewed grants, durable-only ack, hostile frame/profile and hint rejection; controlled HTTP only");
+        frame = Seal(signed, inboundCursor); loseReceipt = true;
+        await Reject(() => Pass(), typeof(HttpRequestException));
+        var waiting = await service.RelayTransactions.LoadAsync(default);
+        var beforeRetirement = calls;
+        using (var transport = config.CreateTransport(trust, service.Identity, await service.LoadAsync(default), clock.Now, new Handler(Send)))
+            await Reject(() => transport.RetireExpiredAsync(waiting.Outbox.Single(), clock.Now, default), typeof(InvalidDataException));
+        var currentOwner = await service.LoadAsync(default);
+        var transactions = new NativeRelayTransactions(service.NativeEnrollmentStore, service.RelayTransactions, service.Identity, config, trust, guard, clock);
+        await Reject(() => transactions.RetireExpiredAsync(currentOwner.Version, waiting.Outbox.Single(), default), typeof(InvalidDataException));
+        Check(calls == beforeRetirement && (await service.RelayTransactions.LoadAsync(default)).Version == waiting.Version, "live frame retired");
+        clock.Now = now.AddDays(1).AddSeconds(1);
+        badResponse = "retirement"; await Reject(() => Pass(), typeof(HttpRequestException)); badResponse = null;
+        loseRetirement = true; await Reject(() => Pass(), typeof(HttpRequestException));
+        rollbackRetirement = true; await Reject(() => Pass(), typeof(InvalidDataException));
+        Check((await service.RelayTransactions.LoadAsync(default)).Version == waiting.Version, "unconfirmed or no-longer-expired retirement cleared queue");
+        clock.Now = now.AddDays(1).AddSeconds(1);
+        await Reopen(); Check(await Pass(), "expired outbox did not retire after restart");
+        var retired = await service.RelayTransactions.LoadAsync(default);
+        Check(retired.Outbox.Count == 0 && retired.AcknowledgedOutboundCursor == 4 && retired.CommittedInboundCursor == 3 &&
+            retired.SignedReceipts.Single().GetSignedReceiptCopy().SequenceEqual(waiting.SignedReceipts.Single().GetSignedReceiptCopy()) &&
+            retired.PolicyRevision == 1 && retired.PolicyLedger.Count == 1 && retired.ReconcileIntents.Count == 1 &&
+            retired.ReplayFloors.Single().HighestAcceptedSequence == 1, "retirement changed permission, history or inbound cursor");
+        Console.WriteLine("PASS native relay delivery: actual owner/DPAPI/HPKE commit, lost responses/restart/owner race, receipt redelivery and expired-outbox retirement without renewed grants, durable-only ack, hostile frame/profile and hint rejection; controlled HTTP only");
     }
 
     private sealed class Clock : TimeProvider { internal DateTimeOffset Now; public override DateTimeOffset GetUtcNow() => Now; }

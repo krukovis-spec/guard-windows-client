@@ -55,6 +55,69 @@ describe("mailbox authorization and signing intent", () => {
     return { prefix, post, initial, activation, stub: env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailboxId)) };
   };
 
+  it("retires only expired device delivery positions without publishing or granting, including lost-response retries", async () => {
+    const mailboxId = "mailbox-retirement-0001";
+    const { prefix, post, activation, stub } = await prepareNative(mailboxId);
+    expect((await post(prefix + "/tokens/activate-native", activation)).status).toBe(201);
+    const frame = (cursor: number, id: string, kind = 1, recipient = parentRecipient, expired = true) => {
+      const bytes = buildFrame(cursor, id, kind, recipient, mailboxId);
+      if (expired) {
+        const offset = bytes.length - (vector.length - 77);
+        writeU64(bytes, offset + 16, Date.now() - 120000); writeU64(bytes, offset + 24, Date.now() - 60000);
+      }
+      return bytes;
+    };
+    const retire = (raw: Uint8Array, token = deviceToken) => request(prefix + "/frames/retire", { method: "POST", headers: bearer(token), body: raw });
+    const first = frame(1, "frame-retirement-001");
+    for (const token of [adminToken, approvalToken]) expect((await retire(first, token)).status).toBe(403);
+    expect((await retire(frame(1, "frame-retirement-001", 2))).status).toBe(403);
+    expect((await retire(frame(1, "frame-retirement-001", 1, deviceRecipient))).status).toBe(403);
+    expect((await retire(frame(0, "frame-retirement-001"))).status).toBe(400);
+    expect((await retire(frame(2, "frame-retirement-002"))).status).toBe(409);
+    expect((await retire(frame(1, "frame-retirement-001", 1, parentRecipient, false))).status).toBe(409);
+    expect((await request(prefix + "/frames", { method: "POST", headers: bearer(deviceToken), body: first })).status).toBe(410);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec("SELECT * FROM publication_cursors")]).toEqual([]);
+      state.storage.sql.exec(`INSERT INTO frame_reservations(frame_id,recipient_key_id,token_hash,cursor,created_at,expires_at,lease_expires_at,status)
+        SELECT 'reserved-retirement-001',?,hash,1,?,?,?,'reserved' FROM tokens WHERE role='device'`,
+        parentRecipient, Date.now(), Date.now() + 60000, Date.now() + 60000);
+    });
+    expect((await retire(first)).status).toBe(409);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec("SELECT * FROM publication_cursors")]).toEqual([]);
+      state.storage.sql.exec("DELETE FROM frame_reservations");
+      for (let i = 0; i < 128; i++) state.storage.sql.exec("INSERT INTO publication_cursors(recipient_key_id,cursor) VALUES(?,1)", `quota-retirement-${i}`);
+    });
+    expect((await retire(first)).status).toBe(429);
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DELETE FROM publication_cursors WHERE recipient_key_id LIKE 'quota-retirement-%'");
+    });
+    for (let retry = 0; retry < 2; retry++) {
+      const result = await retire(first);
+      expect(result.status).toBe(200);
+      expect(await result.json()).toEqual({ frameId: "frame-retirement-001", cursor: 1, retired: true });
+    }
+    const second = frame(2, "frame-retirement-002", 3, parentRecipient, false);
+    expect((await request(prefix + "/frames", { method: "POST", headers: bearer(deviceToken), body: second })).status).toBe(201);
+    expect((await retire(frame(2, "frame-retirement-002", 3))).status).toBe(409); // Same ID, different live content.
+    expect((await retire(first)).status).toBe(200); // An older retry cannot lower the newer publication floor.
+    const page = await request(prefix + `/poll?recipient=${parentRecipient}&after=0`, { headers: bearer(approvalToken) });
+    expect(await page.json()).toMatchObject({ nextCursor: 2, frames: [btoa(String.fromCharCode(...second))] });
+    await runInDurableObject(stub, (_instance, state) => {
+      for (const table of ["acknowledgements", "sequence_floors", "intents", "frame_reservations"])
+        expect([...state.storage.sql.exec(`SELECT * FROM ${table}`)]).toEqual([]);
+      state.storage.sql.exec("CREATE TRIGGER retirement_failure BEFORE INSERT ON publication_cursors BEGIN SELECT RAISE(ABORT,'test-retirement-rollback'); END");
+    });
+    const third = frame(3, "frame-retirement-003", 3);
+    expect((await retire(third)).status).toBe(503);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec("SELECT cursor FROM publication_cursors WHERE recipient_key_id=?", parentRecipient)]).toEqual([{ cursor: 2 }]);
+      state.storage.sql.exec("DROP TRIGGER retirement_failure");
+    });
+    expect((await retire(third)).status).toBe(200);
+    expect((await retire(frame(5, "frame-retirement-005"))).status).toBe(409);
+  });
+
   it("atomically activates only device-to-native transport and retries without rewriting it", async () => {
     const mailboxId = "mailbox-native-activation-0001";
     const { prefix, post, initial, activation, stub } = await prepareNative(mailboxId);
@@ -392,6 +455,8 @@ describe("mailbox authorization and signing intent", () => {
     const cases = [
       ["frames", "POST", deviceToken, "UPDATE tokens SET publish_recipient_key_ids='[]' WHERE role='device'", 403],
       ["frames", "POST", deviceToken, "UPDATE tokens SET expires_at=0 WHERE role='device'", 401],
+      ["frames/retire", "POST", deviceToken, "UPDATE tokens SET publish_recipient_key_ids='[]' WHERE role='device'", 403],
+      ["frames/retire", "POST", deviceToken, "UPDATE tokens SET expires_at=0 WHERE role='device'", 401],
       ["frames/reserve", "POST", approvalToken, "UPDATE tokens SET authority_epoch=2 WHERE role='approval'", 403],
       ["frames/reserve", "POST", approvalToken, "UPDATE tokens SET expires_at=0 WHERE role='approval'", 401],
       ["tokens", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
@@ -416,7 +481,7 @@ describe("mailbox authorization and signing intent", () => {
           publishRecipientKeyIds: [role === "device" ? parentRecipient : deviceRecipient],
           ...(role === "approval" ? { approvalKeyId: "approval-signing-0001", authorityEpoch: 1, viewRecipientKeyIds: [parentRecipient] } : {}),
         })).status).toBe(201);
-      const payload = route === "frames" ? buildFrame(1, "frame-slow-scope-001", 1, parentRecipient, mailbox) : new TextEncoder().encode(JSON.stringify(
+      const payload = route === "frames" || route === "frames/retire" ? buildFrame(1, "frame-slow-scope-001", 1, parentRecipient, mailbox) : new TextEncoder().encode(JSON.stringify(
         route === "frames/reserve" ? reservationBody(buildFrame(1, "frame-slow-reserve-001", 2, deviceRecipient, mailbox)) :
         route === "tokens/activate-native" ? { deviceAccessToken: deviceToken, deviceRecipientKeyId: deviceRecipient,
           approvalAccessToken: "n".repeat(32), approvalRecipientKeyId: parentRecipient, approvalKeyId: "approval-signing-0001",
@@ -425,6 +490,10 @@ describe("mailbox authorization and signing intent", () => {
           accessToken: "x".repeat(32), role: "reader", recipientKeyId: parentRecipient, publishRecipientKeyIds: [], expiresAt: Date.now() + 600000,
         }) : route === "ack" ? { recipientKeyId: deviceRecipient, cursor: 0 } : route === "locators/redeem" ? { locator: "A".repeat(43) } :
           { keyId: "approval-signing-0001", authorityEpoch: 1, intentId: "intent-slow-test-0001" }));
+      if (route === "frames/retire") {
+        const offset = payload.length - (vector.length - 77);
+        writeU64(payload, offset + 16, Date.now() - 120000); writeU64(payload, offset + 24, Date.now() - 60000);
+      }
       await runInDurableObject(env.DEVICE_MAILBOX.get(env.DEVICE_MAILBOX.idFromName(mailbox)), async (instance, state) => {
         let started!: () => void;
         const reading = new Promise<void>(resolve => { started = resolve; });

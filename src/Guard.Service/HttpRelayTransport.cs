@@ -105,15 +105,7 @@ namespace Guard.Service
 
         public async Task PublishAsync(RelayEncryptedOutboxItem item, CancellationToken cancellationToken)
         {
-            ArgumentNullException.ThrowIfNull(item);
-            var bytes = item.GetEncryptedFrameCopy();
-            var frame = RelayCanonicalEncoding.DecodeRelayFrame(bytes);
-            RequireFrameBinding(frame);
-            if (frame.FrameId != item.FrameId || frame.Cursor != item.RecipientCursor ||
-                frame.RecipientKeyId != item.RecipientKeyId || frame.Kind != item.Kind ||
-                (frame.Kind != RelayFrameKind.Request && frame.Kind != RelayFrameKind.Receipt) || frame.Cursor == 0)
-                throw new InvalidDataException("Durable outbox metadata does not match its device frame.");
-
+            var (_, bytes) = RequireDeviceOutboxFrame(item);
             using var content = new ByteArrayContent(bytes);
             content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
             using var result = await SendAsync(HttpMethod.Post, "frames", content, 512,
@@ -126,6 +118,37 @@ namespace Guard.Service
                     throw new InvalidDataException("Relay publication response does not match the submitted frame.");
                 return true;
             });
+        }
+
+        public async Task RetireExpiredAsync(RelayEncryptedOutboxItem item, DateTimeOffset now, CancellationToken cancellationToken)
+        {
+            var (frame, bytes) = RequireDeviceOutboxFrame(item);
+            if (now < frame.ExpiresAtUtc) throw new InvalidDataException("Only a locally expired frame can be retired.");
+            using var content = new ByteArrayContent(bytes);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var result = await SendAsync(HttpMethod.Post, "frames/retire", content, 512, cancellationToken, HttpStatusCode.OK).ConfigureAwait(false);
+            ReadRemoteResponse(() =>
+            {
+                RequireObject(result.Document.RootElement, "frameId", "cursor", "retired");
+                if (result.Document.RootElement.GetProperty("frameId").GetString() != item.FrameId ||
+                    result.Document.RootElement.GetProperty("cursor").GetInt64() != item.RecipientCursor ||
+                    !result.Document.RootElement.GetProperty("retired").GetBoolean())
+                    throw new InvalidDataException("Relay retirement response does not match the expired frame.");
+                return true;
+            });
+        }
+
+        private (RelayFrame Frame, byte[] Bytes) RequireDeviceOutboxFrame(RelayEncryptedOutboxItem item)
+        {
+            ArgumentNullException.ThrowIfNull(item);
+            var bytes = item.GetEncryptedFrameCopy();
+            var frame = RelayCanonicalEncoding.DecodeRelayFrame(bytes);
+            RequireFrameBinding(frame);
+            if (frame.FrameId != item.FrameId || frame.Cursor != item.RecipientCursor ||
+                frame.RecipientKeyId != item.RecipientKeyId || frame.Kind != item.Kind ||
+                (frame.Kind != RelayFrameKind.Request && frame.Kind != RelayFrameKind.Receipt) || frame.Cursor == 0)
+                throw new InvalidDataException("Durable outbox metadata does not match its device frame.");
+            return (frame, bytes);
         }
 
         /// <summary>

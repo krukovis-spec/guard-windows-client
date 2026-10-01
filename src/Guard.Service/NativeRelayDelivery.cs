@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Guard.Domain;
 using Guard.Domain.Relay;
+using Guard.Protocol.Relay;
 
 namespace Guard.Service;
 
@@ -58,8 +59,14 @@ internal sealed class NativeRelayDelivery(ServiceAuthoritativeStateBoundary serv
             var current = await service.RelayTransactions.LoadAsync(token).ConfigureAwait(false);
             if (current.Outbox.Count == 0) return (true, processed);
             var item = current.Outbox[0];
-            await transport.PublishAsync(item, token).ConfigureAwait(false);
-            if (!await _transactions.AcknowledgePublishedAsync(owner.Version, item, token).ConfigureAwait(false)) return (false, processed);
+            var now = clock.GetUtcNow();
+            var expired = now >= RelayCanonicalEncoding.DecodeRelayFrame(item.GetEncryptedFrameCopy()).ExpiresAtUtc;
+            if (expired) await transport.RetireExpiredAsync(item, now, token).ConfigureAwait(false);
+            else await transport.PublishAsync(item, token).ConfigureAwait(false);
+            var committed = expired
+                ? await _transactions.RetireExpiredAsync(owner.Version, item, token).ConfigureAwait(false)
+                : await _transactions.AcknowledgePublishedAsync(owner.Version, item, token).ConfigureAwait(false);
+            if (!committed) return (false, processed);
             processed = true;
         }
         return ((await service.RelayTransactions.LoadAsync(token).ConfigureAwait(false)).Outbox.Count == 0, processed);
