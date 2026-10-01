@@ -74,7 +74,9 @@ public partial class SetupWindow : Window
                 CheckPathExists = true, OverwritePrompt = false };
             if (dialog.ShowDialog(this) != true) { Status.Text = "Сохранение отменено. Привязка не изменена."; return; }
             token.ThrowIfCancellationRequested();
-            confirmation.SaveNew(dialog.FileName, DateTimeOffset.UtcNow);
+            try { confirmation.SaveNew(dialog.FileName, DateTimeOffset.UtcNow); }
+            catch (System.IO.InvalidDataException)
+            { Status.Text = "Срок подтверждения истёк или часы изменились. Сохраните новое подтверждение, не повторяя привязку телефона."; return; }
             Digest.Text = confirmation.Sha256;
             ExportStatus.Text = "Подтверждение сохранено. Проверить его на доверенном компьютере оператора нужно до " +
                 confirmation.ExpiresAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss zzz") +

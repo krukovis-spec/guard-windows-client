@@ -11,7 +11,7 @@ using Guard.Windows.Cryptography;
 namespace Guard.Provisioning;
 
 // OFF-PC operator only. No admin credential is saved, exported, or passed to the service.
-internal sealed class ProvisioningJob
+internal sealed partial class ProvisioningJob
 {
     private readonly string _origin, _deviceId, _signingId, _encryptionId, _mailbox, _token;
     private readonly byte[] _encryptionSpki;
@@ -102,9 +102,9 @@ internal sealed class ProvisioningJob
         finally { CryptographicOperations.ZeroMemory(raw); }
     }
 
-    // The two initial-issuance callers use the same bounded, non-redirecting HTTP path.
+    // Issuance and native activation share the same bounded, non-redirecting HTTP path.
     internal static async Task<long> PostIssuanceAsync(string endpoint, string credential, byte[] body,
-        string role, long? expiresAt, CancellationToken cancellationToken, HttpMessageHandler? handler)
+        string role, long? expiresAt, CancellationToken cancellationToken, HttpMessageHandler? handler, Action? beforeSend = null)
     {
         using var client = new HttpClient(handler ?? new HttpClientHandler {
             AllowAutoRedirect = false, UseProxy = false, UseCookies = false, AutomaticDecompression = DecompressionMethods.None
@@ -118,6 +118,8 @@ internal sealed class ProvisioningJob
         var reply = new byte[513];
         try
         {
+            deadline.Token.ThrowIfCancellationRequested();
+            beforeSend?.Invoke();
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             // No redirects, fallbacks, body logs, auto retries, or credential echo in exceptions.
             if (response.StatusCode != HttpStatusCode.Created) throw new InvalidDataException("Initial issuance was not confirmed; preserve the saved job.");

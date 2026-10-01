@@ -1,5 +1,11 @@
 # Worklog
 
+## 2026-10-01 — independently verifiable committed-owner export
+
+- Connected persistent owner state/device signature to new admin-only read IPC 39, authenticated setup inspection/button/file export and off-PC `verify-native`. GNA1 signs raw bounded bytes with a distinct purpose; public transcript only, initial epochs, ten-minute lifetime within 24h retention. Operator uses the original private DPAPI job's descriptor/mailbox; no self-signed-file trust, network, new credentials or policy change. Reused file guards/job loader; no packages.
+- Real temporary authoritative state and synthetic attested owner commit exercise pending/role/payload denial and signed export; each byte mutation/truncation, wrong trusted device/origin/mailbox, lifetime/retention/key, exact file/no overwrite/path and unchanged private job checks PASS. Corrected a mistaken test HTTP-call expectation and its missing FormatException rejection classification, not production acceptance. Initial compile caught a reference to a service-layer JSON helper; local strict bounded parsing keeps Windows independent of Service.
+- Fresh complete Release/29 v2/45 legacy, focused crypto, WPF/operator builds and CLI help PASS. Actual GUI/SCM/phone NOT RUN. PROJECT_ONLY via wiki-memory/project-memory; no external auth/endpoint changed, connection journal unchanged. Durable activation job/API send + protected phone handoff and runtime are next. Ponytail reuses the original off-PC trust anchor rather than adding a new signer/secret or framework.
+
 ## 2026-10-01 — atomic native transport activation, server-side prerequisite
 
 - Added a mailbox-admin-only initial activation using existing token scopes/SQLite transactions. Exact initial device credential, independent new phone credential, epoch 1 and original expiry; device↔phone only. Explicit empty view list grants no locator permission. Hash-only marker outlives revocation until expiry, bounded by initial issuance; exact retry never writes or restores later rights.

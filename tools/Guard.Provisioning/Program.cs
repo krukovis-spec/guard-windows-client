@@ -54,6 +54,18 @@ internal static class Program
                     confirmed.ExpiresAtUtc.ToString("u", CultureInfo.InvariantCulture) + ". Сеть и права доступа не изменены.");
                 return 0;
             }
+            if (args.Length == 5 && args[0] == "prepare-native")
+            {
+                ProvisioningJob.PrepareNativeActivation(args[1], args[2], args[3], args[4]);
+                Console.WriteLine("Приватное задание активации сохранено. Права обмена ещё не изменены; этот файл оставьте только на родительском ПК.");
+                return 0;
+            }
+            if (args.Length == 6 && args[0] == "activate-native")
+            {
+                await MailboxProvisioningJob.ActivateNativeAsync(args[1], args[2], args[3], args[4], args[5], CancellationToken.None);
+                Console.WriteLine("Relay подтвердил права обмена компьютера и привязанного телефона. Задание сохранено для повтора. Передача доступа телефону ещё не выполнена; защита не подтверждена.");
+                return 0;
+            }
             Console.WriteLine("Guard.Provisioning — служебная утилита, только для родительского ПК.");
             Console.WriteLine("prepare-mailbox <доверенный-HTTPS-origin> <новый-mailboxId> <новый-файл-задания-ящика>");
             Console.WriteLine("publish-mailbox <тот-же-доверенный-origin> <файл-задания-ящика>");
@@ -61,6 +73,8 @@ internal static class Program
             Console.WriteLine("publish <тот-же-доверенный-origin> <файл-задания> <новый-файл-профиля>");
             Console.WriteLine("publish-with-mailbox <тот-же-доверенный-origin> <файл-задания-устройства> <файл-задания-ящика> <новый-файл-профиля>");
             Console.WriteLine("verify-native <тот-же-доверенный-origin> <исходный-файл-задания-устройства> <подтверждение.guard-proof>");
+            Console.WriteLine("prepare-native <тот-же-доверенный-origin> <исходный-файл-задания-устройства> <подтверждение.guard-proof> <новое-задание-активации>");
+            Console.WriteLine("activate-native <тот-же-доверенный-origin> <исходный-файл-задания-устройства> <задание-активации> <свежее-подтверждение.guard-proof> <задание-ящика>");
             Console.WriteLine("Файлы задания и профиля — по абсолютным путям вне Git. Секреты не передавайте в аргументах.");
             return args.Length == 0 || args.SequenceEqual(new[] { "--help" }) ? 0 : 2;
         }
@@ -75,7 +89,7 @@ internal static class Program
                 IOException => "Не удалось прочитать или создать файл. Существующие файлы утилита не перезаписывает.",
                 _ => "Операция не завершена. Профиль не подтверждён."
             });
-            Console.Error.WriteLine("Сохраните исходные задания: после сбоя повторяйте ту же publish-команду с ними. Не заменяйте токен и не используйте другой сервер.");
+            Console.Error.WriteLine("Сохраните исходные задания: повторяйте ту же publish/activate-команду с ними. Для активации нужно действующее подтверждение Windows. Не заменяйте токен и не используйте другой сервер.");
             return 1;
         }
     }
