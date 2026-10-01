@@ -2,6 +2,7 @@ import { env, runInDurableObject, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { DeviceMailbox } from "../src/index";
 import { BFF_AUTH_OBJECT_NAME } from "../src/bff";
+import { parseRelayFrame } from "../src/frame";
 
 const adminToken = "a".repeat(32);
 const deviceToken = "d".repeat(32);
@@ -31,6 +32,13 @@ function buildFrame(cursor: number, id: string, kind = 1, recipient = parentReci
   bytes[11] = kind;
   return bytes;
 }
+function reservationBody(raw: Uint8Array) {
+  const frame = parseRelayFrame(raw);
+  return { frameId: frame.frameId, recipientKeyId: frame.recipientKeyId, createdAt: Number(frame.createdAt), expiresAt: Number(frame.expiresAt) };
+}
+const reserveRaw = (prefix: string, raw: Uint8Array, token = approvalToken) => request(prefix + "/frames/reserve", {
+  method: "POST", headers: { ...bearer(token), "content-type": "application/json" }, body: JSON.stringify(reservationBody(raw)),
+});
 
 describe("mailbox authorization and signing intent", () => {
   const prepareNative = async (mailboxId: string) => {
@@ -78,7 +86,9 @@ describe("mailbox authorization and signing intent", () => {
     expect((await activate(activation, approvalToken)).status).toBe(403);
     expect((await post(prefix + "/tokens/initial", initial)).status).toBe(409);
     expect((await publish(deviceToken, 1, "frame-native-request-001", 1, parentRecipient)).status).toBe(201);
-    expect((await publish(approvalToken, 1, "frame-native-approval-01", 2, deviceRecipient)).status).toBe(201);
+    const nativeApproval = buildFrame(1, "frame-native-approval-01", 2, deviceRecipient, mailboxId);
+    expect((await reserveRaw(prefix, nativeApproval)).status).toBe(201);
+    expect((await request(prefix + "/frames", { method: "POST", headers: bearer(approvalToken), body: nativeApproval })).status).toBe(201);
     expect((await publish(deviceToken, 2, "frame-native-receipt-001", 3, parentRecipient)).status).toBe(201);
     for (const [token, kind, recipient] of [[deviceToken, 2, parentRecipient], [deviceToken, 1, deviceRecipient],
       [deviceToken, 1, "browser-recipient-0001"], [approvalToken, 1, deviceRecipient], [approvalToken, 2, parentRecipient]] as const)
@@ -382,6 +392,8 @@ describe("mailbox authorization and signing intent", () => {
     const cases = [
       ["frames", "POST", deviceToken, "UPDATE tokens SET publish_recipient_key_ids='[]' WHERE role='device'", 403],
       ["frames", "POST", deviceToken, "UPDATE tokens SET expires_at=0 WHERE role='device'", 401],
+      ["frames/reserve", "POST", approvalToken, "UPDATE tokens SET authority_epoch=2 WHERE role='approval'", 403],
+      ["frames/reserve", "POST", approvalToken, "UPDATE tokens SET expires_at=0 WHERE role='approval'", 401],
       ["tokens", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
       ["tokens/initial", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
       ["tokens/activate-native", "POST", adminToken, "DELETE FROM tokens WHERE role='admin'", 401],
@@ -405,6 +417,7 @@ describe("mailbox authorization and signing intent", () => {
           ...(role === "approval" ? { approvalKeyId: "approval-signing-0001", authorityEpoch: 1, viewRecipientKeyIds: [parentRecipient] } : {}),
         })).status).toBe(201);
       const payload = route === "frames" ? buildFrame(1, "frame-slow-scope-001", 1, parentRecipient, mailbox) : new TextEncoder().encode(JSON.stringify(
+        route === "frames/reserve" ? reservationBody(buildFrame(1, "frame-slow-reserve-001", 2, deviceRecipient, mailbox)) :
         route === "tokens/activate-native" ? { deviceAccessToken: deviceToken, deviceRecipientKeyId: deviceRecipient,
           approvalAccessToken: "n".repeat(32), approvalRecipientKeyId: parentRecipient, approvalKeyId: "approval-signing-0001",
           authorityEpoch: 1, expiresAt: Date.now() + 600000 } : route === "tokens/initial" ? { accessToken: "x".repeat(32), role: "device", recipientKeyId: deviceRecipient,
@@ -422,7 +435,7 @@ describe("mailbox authorization and signing intent", () => {
         }));
         await reading;
         state.storage.sql.exec(mutation);
-        const capture = () => ["tokens", "initial_device_tokens", "native_token_activations", "frames", "acknowledgements", "intents", "sequence_floors", "parent_locators"]
+        const capture = () => ["tokens", "initial_device_tokens", "native_token_activations", "frames", "frame_reservations", "publication_cursors", "acknowledgements", "intents", "sequence_floors", "parent_locators"]
           .map(table => [...state.storage.sql.exec(`SELECT * FROM ${table} ORDER BY rowid`)]);
         const before = capture();
         controller.enqueue(payload); controller.close();
@@ -476,6 +489,139 @@ describe("mailbox authorization and signing intent", () => {
     expect((await publish("frame-after-withdraw-01")).status).toBe(403);
     expect((await jsonCall(prefix + "/tokens", adminToken, { accessToken: deviceToken }, "DELETE")).status).toBe(204);
     expect((await request(prefix + `/poll?recipient=${deviceRecipient}&after=0`, { headers: bearer(deviceToken) })).status).toBe(401);
+  });
+
+  it("serializes two phone publishers without using an approval sequence as a wire cursor", async () => {
+    const mailboxId = "mailbox-reservation-publish-001";
+    const { prefix, post, activation, stub } = await prepareNative(mailboxId);
+    expect((await post(prefix + "/tokens/activate-native", activation)).status).toBe(201);
+    const secondToken = "s".repeat(32);
+    expect((await post(prefix + "/tokens", { accessToken: secondToken, role: "approval", expiresAt: activation.expiresAt,
+      recipientKeyId: "parent-second-recipient", publishRecipientKeyIds: [deviceRecipient], approvalKeyId: "parent-second-signing",
+      authorityEpoch: 1, viewRecipientKeyIds: [] })).status).toBe(201);
+    const first = buildFrame(1, "frame-reservation-first", 2, deviceRecipient, mailboxId);
+    const other = buildFrame(1, "frame-reservation-other", 2, deviceRecipient, mailboxId);
+    const results = await Promise.all([reserveRaw(prefix, first), reserveRaw(prefix, other, secondToken)]);
+    expect(results.map(r => r.status).sort()).toEqual([201, 409]);
+    const winner = results[0]!.status === 201 ? first : other;
+    const token = results[0]!.status === 201 ? approvalToken : secondToken;
+    const loser = token === approvalToken ? secondToken : approvalToken;
+    const reserved = await results.find(r => r.status === 201)!.json();
+    expect(reserved).toMatchObject({ cursor: 1, status: "reserved", nonAuthoritative: true });
+    await runInDurableObject(stub, (_instance, state) => { new DeviceMailbox(state, env); });
+    expect(await (await reserveRaw(prefix, winner, token)).json()).toEqual(reserved);
+    const publish = (raw: Uint8Array, credential = token) => request(prefix + "/frames", { method: "POST", headers: bearer(credential), body: raw });
+    expect((await publish(winner, loser)).status).toBe(409);
+    // The admin cannot insert a different kind at the leased position either.
+    expect((await publish(buildFrame(1, "frame-steal-reservation", 3, deviceRecipient, mailboxId), adminToken)).status).toBe(409);
+    expect((await publish(winner)).status).toBe(201);
+    const published = await (await reserveRaw(prefix, winner, token)).json();
+    expect(published).toEqual({ ...(reserved as object), status: "published" });
+    expect((await post(prefix + "/ack", { recipientKeyId: deviceRecipient, cursor: 1 }, deviceToken)).status).toBe(200);
+    expect((await publish(winner)).status).toBe(200); // Lost reply followed by device ack still retries exact bytes.
+    const next = buildFrame(2, "frame-reservation-next", 2, deviceRecipient, mailboxId);
+    expect(await (await reserveRaw(prefix, next, loser)).json()).toMatchObject({ cursor: 2, status: "reserved" });
+    expect((await publish(next, loser)).status).toBe(201);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec("SELECT * FROM sequence_floors")]).toHaveLength(0);
+      expect([...state.storage.sql.exec("SELECT * FROM intents")]).toHaveLength(0);
+      expect([...state.storage.sql.exec<{ cursor: number }>("SELECT cursor FROM publication_cursors WHERE recipient_key_id=?", deviceRecipient)][0]?.cursor).toBe(2);
+    });
+  });
+
+  it("binds reservations to exact frame metadata and current credential without lease renewal", async () => {
+    const mailboxId = "mailbox-reservation-guards-001";
+    const { prefix, post, activation, stub } = await prepareNative(mailboxId);
+    expect((await post(prefix + "/tokens/activate-native", activation)).status).toBe(201);
+    const raw = buildFrame(1, "frame-reservation-bound", 2, deviceRecipient, mailboxId);
+    const body = reservationBody(raw);
+    const reserve = (value: unknown = body, token = approvalToken, suffix = "") => post(prefix + "/frames/reserve" + suffix, value, token);
+    const publish = (bytes: Uint8Array = raw) => request(prefix + "/frames", { method: "POST", headers: bearer(approvalToken), body: bytes });
+    for (const role of [adminToken, deviceToken]) expect((await reserve(body, role)).status).toBe(403);
+    expect((await reserve({ ...body, recipientKeyId: parentRecipient })).status).toBe(403);
+    for (const change of [{ frameId: "short" }, { createdAt: -1 }, { createdAt: 1.5 }, { expiresAt: body.createdAt },
+      { expiresAt: Number.MAX_SAFE_INTEGER + 1 }, { expiresAt: body.createdAt + 7 * 86400000 + 1 },
+      { cursor: 1 }, { frameId: undefined }, { recipientKeyId: null }])
+      expect((await reserve({ ...body, ...change })).status).toBe(400);
+    expect((await reserve(body, approvalToken, "?alias=1")).status).toBe(400);
+    expect((await reserve({ ...body, createdAt: Date.now() - 600001 })).status).toBe(400);
+    expect((await reserve({ ...body, createdAt: 0, expiresAt: 1 })).status).toBe(410);
+    expect((await publish()).status).toBe(409); // No caller-chosen cursor without reservation.
+    const initial = await (await reserve()).json();
+    expect((await reserve({ ...body, expiresAt: body.expiresAt + 1 })).status).toBe(409);
+    for (const [offset, value] of [[0, 2], [8, 1], [16, body.createdAt - 1], [24, body.expiresAt + 1]]) {
+      const wrong = raw.slice(); writeU64(wrong, wrong.length - (vector.length - 77) + offset!, value!);
+      expect((await publish(wrong)).status).toBe(409);
+    }
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("CREATE TRIGGER no_lease_update BEFORE UPDATE ON frame_reservations BEGIN SELECT RAISE(ABORT,'test-no-renewal'); END");
+    });
+    expect(await (await reserve(Object.fromEntries(Object.entries(body).reverse()))).json()).toEqual(initial);
+    await runInDurableObject(stub, (_instance, state) => { state.storage.sql.exec("DROP TRIGGER no_lease_update"); });
+    expect((await post(prefix + "/tokens", { accessToken: approvalToken }, adminToken, "DELETE")).status).toBe(204);
+    expect((await reserve()).status).toBe(401);
+    expect((await publish()).status).toBe(401);
+  });
+
+  it("expires abandoned leases without consuming a cursor and rolls back partial publication", async () => {
+    const mailboxId = "mailbox-reservation-recovery-001";
+    const { prefix, post, activation, stub } = await prepareNative(mailboxId);
+    expect((await post(prefix + "/tokens/activate-native", activation)).status).toBe(201);
+    const old = buildFrame(1, "frame-reservation-abandoned", 2, deviceRecipient, mailboxId);
+    expect((await reserveRaw(prefix, old)).status).toBe(201);
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE frame_reservations SET lease_expires_at=0");
+    });
+    expect((await reserveRaw(prefix, old)).status).toBe(410);
+    const next = buildFrame(1, "frame-reservation-recovered", 2, deviceRecipient, mailboxId);
+    expect(await (await reserveRaw(prefix, next)).json()).toMatchObject({ cursor: 1, status: "reserved" });
+    const publish = (bytes: Uint8Array) => request(prefix + "/frames", { method: "POST", headers: bearer(approvalToken), body: bytes });
+    expect((await publish(old)).status).toBe(409);
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("CREATE TRIGGER publication_failure BEFORE INSERT ON tombstones BEGIN SELECT RAISE(ABORT,'test-publication-rollback'); END");
+    });
+    expect((await publish(next)).status).toBe(503);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec("SELECT * FROM frames")]).toHaveLength(0);
+      expect([...state.storage.sql.exec("SELECT * FROM publication_cursors")]).toHaveLength(0);
+      expect([...state.storage.sql.exec<{ status: string }>("SELECT status FROM frame_reservations WHERE frame_id='frame-reservation-recovered'")][0]?.status).toBe("reserved");
+      state.storage.sql.exec("DROP TRIGGER publication_failure");
+    });
+    expect((await publish(next)).status).toBe(201);
+    // An exact published retry is independent of the lease, but not of the frame lifetime.
+    await runInDurableObject(stub, (_instance, state) => { state.storage.sql.exec("UPDATE frame_reservations SET lease_expires_at=0"); });
+    expect((await publish(next)).status).toBe(200);
+    expect(await (await reserveRaw(prefix, next)).json()).toMatchObject({ cursor: 1, status: "published" });
+  });
+
+  it("bounds reservation history and refuses exhausted cursors without changing committed heads", async () => {
+    const mailboxId = "mailbox-reservation-limits-001";
+    const { prefix, post, activation, stub } = await prepareNative(mailboxId);
+    expect((await post(prefix + "/tokens/activate-native", activation)).status).toBe(201);
+    const reserved = buildFrame(1, "frame-reservation-quota", 2, deviceRecipient, mailboxId);
+    expect((await reserveRaw(prefix, reserved)).status).toBe(201);
+    const publish = () => request(prefix + "/frames", { method: "POST", headers: bearer(approvalToken), body: reserved });
+    expect((await publish()).status).toBe(201);
+    await runInDurableObject(stub, (_instance, state) => {
+      // Actual SQLite boundary, not a mocked count. Opaque reservation rows contain no decision plaintext.
+      state.storage.sql.exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<9999)
+        INSERT INTO frame_reservations(frame_id,recipient_key_id,token_hash,cursor,created_at,expires_at,lease_expires_at,status)
+        SELECT 'quota-reservation-'||n.x,r.recipient_key_id,r.token_hash,r.cursor,r.created_at,r.expires_at,r.lease_expires_at,'expired'
+        FROM n CROSS JOIN frame_reservations r WHERE r.frame_id='frame-reservation-quota'`);
+    });
+    expect((await reserveRaw(prefix, reserved)).status).toBe(200);
+    expect((await publish()).status).toBe(200);
+    const next = buildFrame(2, "frame-reservation-overquota", 2, deviceRecipient, mailboxId);
+    expect((await reserveRaw(prefix, next)).status).toBe(429);
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DELETE FROM frame_reservations WHERE status='expired'");
+      state.storage.sql.exec("UPDATE publication_cursors SET cursor=? WHERE recipient_key_id=?", Number.MAX_SAFE_INTEGER, deviceRecipient);
+    });
+    expect((await reserveRaw(prefix, next)).status).toBe(409);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect([...state.storage.sql.exec<{ cursor: number }>("SELECT cursor FROM publication_cursors WHERE recipient_key_id=?", deviceRecipient)][0]?.cursor).toBe(Number.MAX_SAFE_INTEGER);
+      expect([...state.storage.sql.exec("SELECT * FROM frame_reservations")]).toHaveLength(1);
+    });
   });
 
   it("fails closed when bootstrap secret is absent", async () => {
@@ -584,7 +730,9 @@ describe("mailbox authorization and signing intent", () => {
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(deviceToken), body: frame(1, "frame-alpha-00013", 1, deviceRecipient) }); expect(response.status).toBe(403);
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(approvalToken), body: frame(1, "frame-alpha-00013", 2) }); expect(response.status).toBe(403);
     response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(approvalToken), body: frame(1, "frame-alpha-00013", 1, deviceRecipient) }); expect(response.status).toBe(403);
-    response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(approvalToken), body: frame(1, "frame-alpha-00013", 2, deviceRecipient) }); expect(response.status).toBe(201);
+    const approvalFrame = frame(1, "frame-alpha-00013", 2, deviceRecipient);
+    expect((await reserveRaw(`/v1/mailboxes/${mailbox}`, approvalFrame)).status).toBe(201);
+    response = await request(`/v1/mailboxes/${mailbox}/frames`, { method: "POST", headers: bearer(approvalToken), body: approvalFrame }); expect(response.status).toBe(201);
     response = await request(`/v1/mailboxes/${mailbox}/poll?recipient=${deviceRecipient}&after=0`, { headers: bearer(deviceToken) });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ nextCursor: 1 });

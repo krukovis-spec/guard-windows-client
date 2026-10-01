@@ -105,6 +105,8 @@ export class DeviceMailbox implements DurableObject {
     this.sql.exec("CREATE TABLE IF NOT EXISTS native_token_activations(device_hash BLOB PRIMARY KEY,approval_hash BLOB NOT NULL UNIQUE,intent_hash BLOB NOT NULL,expires_at INTEGER NOT NULL)");
     this.sql.exec(`CREATE TABLE IF NOT EXISTS parent_registration_tickets(ticket_hash BLOB PRIMARY KEY,mailbox_id TEXT NOT NULL,recipient_key_id TEXT NOT NULL,username TEXT NOT NULL,display_name TEXT NOT NULL,expires_at INTEGER NOT NULL,UNIQUE(mailbox_id,username));
       CREATE TABLE IF NOT EXISTS publication_cursors(recipient_key_id TEXT PRIMARY KEY,cursor INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS frame_reservations(frame_id TEXT PRIMARY KEY,recipient_key_id TEXT NOT NULL,token_hash BLOB NOT NULL,cursor INTEGER NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,lease_expires_at INTEGER NOT NULL,status TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS frame_reservations_active ON frame_reservations(recipient_key_id) WHERE status='reserved';
       INSERT INTO publication_cursors(recipient_key_id,cursor)
       SELECT recipient_key_id,max(cursor) FROM (SELECT recipient_key_id,cursor FROM frames UNION ALL SELECT recipient_key_id,cursor FROM acknowledgements) GROUP BY recipient_key_id
       ON CONFLICT(recipient_key_id) DO UPDATE SET cursor=max(cursor,excluded.cursor);`);
@@ -124,6 +126,7 @@ export class DeviceMailbox implements DurableObject {
         return await forwardRegistrationTicket(request, this.env, this.state.id.name!);
       }
       if (path === `${prefix}/frames` && request.method === "POST") return await this.publish(request, auth);
+      if (path === `${prefix}/frames/reserve` && request.method === "POST") return await this.reserveFrame(request, auth);
       if (path === `${prefix}/poll` && request.method === "GET") return this.poll(request, auth);
       if (path === `${prefix}/ack` && request.method === "POST") return await this.ack(request, auth);
       if (path === `${prefix}/tokens` && request.method === "POST") return await this.provisionToken(request, auth);
@@ -146,6 +149,8 @@ export class DeviceMailbox implements DurableObject {
     this.sql.exec("DELETE FROM native_token_activations WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM idempotency WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM tombstones WHERE expires_at <= ?", now);
+    this.sql.exec("UPDATE frame_reservations SET status='expired' WHERE status='reserved' AND lease_expires_at<=?", now);
+    this.sql.exec("DELETE FROM frame_reservations WHERE expires_at<=?", now);
     this.sql.exec("DELETE FROM intents WHERE expires_at <= ? AND status != 'pending'", now);
     this.sql.exec("DELETE FROM parent_sessions WHERE expires_at <= ?", now);
     this.sql.exec("DELETE FROM parent_locators WHERE expires_at <= ?", now);
@@ -320,6 +325,47 @@ export class DeviceMailbox implements DurableObject {
     // Both objects are created solely by findAuth with deterministic field order; no request properties enter them.
     if (JSON.stringify(current) !== JSON.stringify(auth)) throw new RelayHttpError(403, "credential_scope_changed");
   }
+  private async reserveFrame(request: Request, auth: Auth): Promise<Response> {
+    if (auth.role !== "approval") throw new RelayHttpError(403, "role_forbidden");
+    const b = await readJsonObject(request);
+    if (new URL(request.url).search || Object.keys(b).length !== 4 || !validId(b.frameId) || !validId(b.recipientKeyId) ||
+      typeof b.createdAt !== "number" || !Number.isSafeInteger(b.createdAt) || b.createdAt < 0 ||
+      typeof b.expiresAt !== "number" || !Number.isSafeInteger(b.expiresAt) || b.expiresAt <= b.createdAt ||
+      b.expiresAt - b.createdAt > 7 * 86400000)
+      throw new RelayHttpError(400, "invalid_frame_reservation");
+    if (!auth.publishRecipientKeyIds.includes(b.recipientKeyId)) throw new RelayHttpError(403, "recipient_forbidden");
+    const { frameId, recipientKeyId, createdAt, expiresAt } = b;
+    return this.state.storage.transactionSync(() => {
+      this.requireCurrentAuth(auth);
+      const now = Date.now();
+      if (expiresAt <= now) throw new RelayHttpError(410, "frame_expired");
+      this.sql.exec("UPDATE frame_reservations SET status='expired' WHERE status='reserved' AND lease_expires_at<=?", now);
+      const prior = [...this.sql.exec<FrameReservation>("SELECT * FROM frame_reservations WHERE frame_id=?", frameId)][0];
+      if (prior) {
+        if (prior.recipient_key_id !== recipientKeyId || prior.created_at !== createdAt || prior.expires_at !== expiresAt ||
+          !sameBytes(new Uint8Array(prior.token_hash), auth.tokenHash)) throw new RelayHttpError(409, "frame_reservation_conflict");
+        if (prior.status !== "reserved" && prior.status !== "published") throw new RelayHttpError(410, "frame_reservation_expired");
+        return json(frameReservationResponse(prior)); // Never extend a lease, reallocate a cursor or resurrect a revoked token.
+      }
+      if (createdAt < now - 5 * 60000 || createdAt > now + 5 * 60000) throw new RelayHttpError(400, "frame_reservation_clock");
+      if ([...this.sql.exec("SELECT 1 FROM frames WHERE frame_id=? UNION ALL SELECT 1 FROM tombstones WHERE frame_id=?", frameId, frameId)].length)
+        throw new RelayHttpError(409, "frame_id_conflict");
+      if ([...this.sql.exec("SELECT 1 FROM frame_reservations WHERE recipient_key_id=? AND status='reserved'", recipientKeyId)].length)
+        throw new RelayHttpError(409, "recipient_reserved");
+      if ([...this.sql.exec<{ n: number }>("SELECT count(*) n FROM frame_reservations")][0]!.n >= 10000)
+        throw new RelayHttpError(429, "reservation_quota_exceeded");
+      const floor = [...this.sql.exec<{ cursor: number }>("SELECT cursor FROM publication_cursors WHERE recipient_key_id=?", recipientKeyId)][0]?.cursor;
+      if (floor === undefined && [...this.sql.exec<{ n: number }>("SELECT count(*) n FROM publication_cursors")][0]!.n >= 128)
+        throw new RelayHttpError(429, "recipient_limit_reached");
+      const cursor = (floor ?? 0) + 1;
+      if (!Number.isSafeInteger(cursor) || cursor < 1) throw new RelayHttpError(409, "cursor_exhausted");
+      const leaseExpiresAt = Math.min(now + 60000, expiresAt);
+      this.sql.exec("INSERT INTO frame_reservations(frame_id,recipient_key_id,token_hash,cursor,created_at,expires_at,lease_expires_at,status) VALUES(?,?,?,?,?,?,?,'reserved')",
+        frameId, recipientKeyId, auth.tokenHash.buffer, cursor, createdAt, expiresAt, leaseExpiresAt);
+      return json(frameReservationResponse({ frame_id: frameId, recipient_key_id: recipientKeyId, cursor, created_at: createdAt,
+        expires_at: expiresAt, lease_expires_at: leaseExpiresAt, status: "reserved" }), 201);
+    });
+  }
   private async publish(request: Request, auth: Auth): Promise<Response> { const raw = await readBoundedBody(request, MAX_FRAME_BYTES); let frame: RelayFrame; try { frame = parseRelayFrame(raw); } catch (e) { throw new RelayHttpError(400, e instanceof FrameError ? "malformed_frame" : "invalid_frame"); }
     const mailbox = mailboxPath(new URL(request.url).pathname); if (frame.mailboxId !== mailbox) throw new RelayHttpError(400, "mailbox_mismatch");
     if ((auth.role !== "device" && auth.role !== "admin") && frame.kind !== 2) throw new RelayHttpError(403, "role_forbidden");
@@ -344,6 +390,16 @@ export class DeviceMailbox implements DurableObject {
       const prior = [...this.sql.exec<{ bytes: ArrayBuffer }>("SELECT bytes FROM frames WHERE frame_id=?", frame.frameId)][0];
       if (prior && !sameBytes(new Uint8Array(prior.bytes), raw)) throw new RelayHttpError(409, "frame_id_conflict");
       if (!prior) {
+        const reservation = [...this.sql.exec<FrameReservation>("SELECT * FROM frame_reservations WHERE frame_id=?", frame.frameId)][0];
+        if (frame.kind === 2 && (!reservation || reservation.status !== "reserved" || reservation.lease_expires_at <= Date.now() ||
+          reservation.recipient_key_id !== frame.recipientKeyId || reservation.cursor !== Number(frame.cursor) ||
+          reservation.created_at !== Number(frame.createdAt) || reservation.expires_at !== Number(frame.expiresAt) ||
+          frame.ackCursor !== 0n || !sameBytes(new Uint8Array(reservation.token_hash), auth.tokenHash)))
+          throw new RelayHttpError(409, "frame_reservation_required");
+        // Even an admin's other frame kinds must not take a live reserved position.
+        if ([...this.sql.exec("SELECT 1 FROM frame_reservations WHERE recipient_key_id=? AND status='reserved' AND lease_expires_at>? AND frame_id<>?",
+          frame.recipientKeyId, Date.now(), frame.frameId)].length || (reservation && frame.kind !== 2))
+          throw new RelayHttpError(409, "recipient_reserved");
         const count = [...this.sql.exec<{ n: number; bytes: number }>("SELECT count(*) n, coalesce(sum(size),0) bytes FROM frames")][0]!;
         if (count.n >= 1000 || count.bytes + raw.byteLength > 8 * 1024 * 1024 ||
           [...this.sql.exec<{ n: number }>("SELECT count(*) n FROM tombstones")][0]!.n >= 10000)
@@ -356,6 +412,7 @@ export class DeviceMailbox implements DurableObject {
           frame.frameId, frame.recipientKeyId, frame.kind, Number(frame.cursor), Number(frame.expiresAt), raw, raw.byteLength);
         this.sql.exec("INSERT INTO publication_cursors(recipient_key_id,cursor) VALUES(?,?) ON CONFLICT(recipient_key_id) DO UPDATE SET cursor=excluded.cursor",
           frame.recipientKeyId, Number(frame.cursor));
+        if (reservation) this.sql.exec("UPDATE frame_reservations SET status='published' WHERE frame_id=?", frame.frameId);
       }
       this.sql.exec("INSERT INTO tombstones(frame_id,recipient_key_id,cursor,frame_hash,expires_at) VALUES(?,?,?,?,?)",
         frame.frameId, frame.recipientKeyId, Number(frame.cursor), hash, Number(frame.expiresAt));
@@ -395,6 +452,14 @@ interface TokenScope {
 }
 type Auth = TokenScope & { tokenHash: Uint8Array };
 interface IntentBody { authorityEpoch: number; keyId: string; intentId: string; receiptFrameId?: string; }
+type FrameReservation = {
+  frame_id: string; recipient_key_id: string; token_hash: ArrayBuffer; cursor: number;
+  created_at: number; expires_at: number; lease_expires_at: number; status: string;
+};
+function frameReservationResponse(row: Omit<FrameReservation, "token_hash">) {
+  return { frameId: row.frame_id, recipientKeyId: row.recipient_key_id, cursor: row.cursor, createdAt: row.created_at,
+    expiresAt: row.expires_at, leaseExpiresAt: row.lease_expires_at, status: row.status, nonAuthoritative: true };
+}
 class RelayHttpError extends Error { constructor(readonly status: number, readonly code: string) { super(code); } }
 function tokenScope(role: unknown, input: Record<string, unknown>): TokenScope | null {
   if (!roles.includes(role as Role)) return null;
