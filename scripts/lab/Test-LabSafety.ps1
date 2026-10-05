@@ -1,7 +1,7 @@
 param([switch]$PolicySigning)
 $ErrorActionPreference = 'Stop'
 if ($PolicySigning -and $PSVersionTable.PSVersion.Major -lt 7) { throw 'Custom-content PKCS#7 self-test requires the installed PowerShell 7 runtime' }
-foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1', 'LabPolicySigning.ps1', 'MarkerProcess.ps1', 'Invoke-AppLockerLab.ps1', 'Build-ServiceLabPackage.ps1', 'Test-ServiceBootstrap.ps1', 'Invoke-ServiceBootstrapLab.ps1')) {
+foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1', 'LabPolicySigning.ps1', 'MarkerProcess.ps1', 'Invoke-AppLockerLab.ps1', 'Build-ServiceLabPackage.ps1', 'Test-ServiceBootstrap.ps1', 'Invoke-ServiceBootstrapLab.ps1', 'kernel/Test-KernelLease.ps1', 'kernel/Invoke-KernelLeaseLab.ps1', 'kernel/Build-KernelLabPackage.ps1')) {
     $tokens = $null
     $parseErrors = $null
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
@@ -9,11 +9,12 @@ foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLock
 }
 # Exercise the real preflight function against a stale wrapper and fresh native disk metadata.
 # Child scope mocks every Hyper-V/CIM dependency; never invokes the elevated runner or a real VM.
-& {
+foreach ($runner in @('Invoke-ServiceBootstrapLab.ps1','kernel/Invoke-KernelLeaseLab.ps1')) { & {
+    param($RunnerPath)
     $vmName='GuardV2-Lab-20260930'; $vmId=[guid]'8f088b63-9193-4ecc-bb20-415ef11fd4c8'
     $biosGuid=[guid]'236ea6ef-9cc6-4295-9934-6f7497f9d262'; $diskRoot='C:\GuardLabFake\'
     $testDisks=@([pscustomobject]@{ResourceSubType='Microsoft:Hyper-V:Virtual Hard Disk';HostResource=@($diskRoot+'fresh.avhdx')})
-    $testTpm=$true
+    $testTpm=$true; $testSecureBoot='On'; $testMode=$false; $changed=$false; $snapshot=$null
     function Get-VM { [pscustomobject]@{Name=$vmName;Generation=2;Id=$vmId} }
     function Get-VMHardDiskDrive { throw 'Stale wrapper disk was used' }
     function Get-CimInstance { [pscustomobject]@{Name=$vmId.ToString()} }
@@ -23,26 +24,46 @@ foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLock
         elseif ($ResultClassName -eq 'Msvm_StorageAllocationSettingData' -and $Association -eq 'Msvm_VirtualSystemSettingDataComponent') { $testDisks }
         else { throw 'Unexpected native metadata query' }
     }
-    function Get-VMFirmware { [pscustomobject]@{SecureBoot='On'} }
+    function Get-VMFirmware { [pscustomobject]@{SecureBoot=$testSecureBoot} }
     function Get-VMSecurity { [pscustomobject]@{TpmEnabled=$testTpm} }
     function Get-VHD { param($Path); if ($Path -ne $diskRoot+'fresh.avhdx') { throw 'Unexpected disk lookup' }; [pscustomobject]@{Size=80GB} }
-    $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Invoke-ServiceBootstrapLab.ps1'),[ref]$null,[ref]$null)
+    $ast=[Management.Automation.Language.Parser]::ParseFile($RunnerPath,[ref]$null,[ref]$null)
+    if ($RunnerPath.EndsWith('Invoke-KernelLeaseLab.ps1')) {
+        $firmwareCalls=$ast.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Set-VMFirmware'},$true)
+        foreach ($call in $firmwareCalls) {
+            if (@($call.CommandElements | Where-Object { $_ -is [Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -like 'SecureBootTemplate*' }).Count) {
+                throw 'Lab must not reassign a Secure Boot template after vTPM initialization'
+            }
+        }
+    }
     $definition=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PinnedVM'},$false)
     if ($null -eq $definition) { throw 'Missing VM preflight' }
     . ([scriptblock]::Create($definition.Extent.Text))
     if ((Get-PinnedVM).Id -ne $vmId) { throw 'Fresh native disk did not validate' }
+    $testSecureBoot='Off'
+    try { Get-PinnedVM | Out-Null; throw 'Unexpected disabled Secure Boot accepted' } catch { if ($_.Exception.Message -ne 'VM identity/security changed') { throw } }
+    if ($RunnerPath.EndsWith('Invoke-KernelLeaseLab.ps1')) {
+        try { Get-PinnedVM -Recovery | Out-Null; throw 'Unbound recovery accepted' } catch { if ($_.Exception.Message -ne 'VM identity/security changed') { throw } }
+        $testMode=$true
+        if ((Get-PinnedVM).Id -ne $vmId) { throw 'Approved lab test mode refused' }
+        $testMode=$false; $changed=$true; $snapshot=[pscustomobject]@{VMId=$vmId}
+        if ((Get-PinnedVM -Recovery).Id -ne $vmId) { throw 'Bound firmware recovery refused' }
+    }
+    $testSecureBoot='On'
     $testDisks[0].HostResource=@('C:\OutsideLab\disk.vhdx')
     try { Get-PinnedVM | Out-Null; throw 'Outside disk accepted' } catch { if ($_.Exception.Message -ne 'Unexpected VM disk') { throw } }
     $testDisks=@()
     try { Get-PinnedVM | Out-Null; throw 'Missing disk accepted' } catch { if ($_.Exception.Message -ne 'Unexpected VM disk count') { throw } }
     $testTpm=$false
     try { Get-PinnedVM | Out-Null; throw 'Missing TPM accepted' } catch { if ($_.Exception.Message -ne 'VM identity/security changed') { throw } }
-}
-try {
-    & (Join-Path $PSScriptRoot 'Test-ServiceBootstrap.ps1') -ExpectedUuid ([guid]::Empty) -HostComputerName $env:COMPUTERNAME -PackageRoot 'not-used' -ManifestSha256 'not-used'
-    throw 'Service test host guard did not reject execution'
-} catch {
-    if ($_.Exception.Message -ne 'This probe can run only in the validated disposable Hyper-V guest.') { throw }
+} (Join-Path $PSScriptRoot $runner) }
+foreach ($probe in @('Test-ServiceBootstrap.ps1','kernel/Test-KernelLease.ps1')) {
+    try {
+        & (Join-Path $PSScriptRoot $probe) -ExpectedUuid ([guid]::Empty) -HostComputerName $env:COMPUTERNAME -PackageRoot 'not-used' -ManifestSha256 'not-used'
+        throw 'Service/kernel test host guard did not reject execution'
+    } catch {
+        if ($_.Exception.Message -ne 'This probe can run only in the validated disposable Hyper-V guest.') { throw }
+    }
 }
 foreach ($probe in @('Get-GuestBaseline.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1')) {
     try {
@@ -84,6 +105,11 @@ try {
     foreach ($marker in @($markerOne, $markerTwo)) {
         if ((Get-MarkerDecision $marker -SelfTest) -ne 'Allowed') { throw 'Marker self-test blocked' }
     }
+    $control=Join-Path $outputRoot 'LabControl.exe'
+    & $compiler /nologo /target:exe /optimize+ /warnaserror+ /reference:System.Management.dll ('/out:'+$control) (Join-Path $PSScriptRoot 'kernel/LabControl.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Lab control compile failed' }
+    $controlResult=& $control --arm-lab-once
+    if ($LASTEXITCODE -ne 3 -or $controlResult -cne 'LAB_VM_REQUIRED') { throw 'Kernel controller did not refuse host' }
     $hashOne = (Get-FileHash -LiteralPath $markerOne -Algorithm SHA256).Hash
     $hashTwo = (Get-FileHash -LiteralPath $markerTwo -Algorithm SHA256).Hash
     if ($hashOne -eq $hashTwo) { throw 'Marker variants must have distinct exact identities' }
