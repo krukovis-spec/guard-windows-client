@@ -11,6 +11,13 @@ foreach ($item in @(
         '-p:GuardRelayOrigin=https://guard-lab.invalid' ('-p:GuardAndroidSignerSha256=' + ('A' * 64)) '-p:GuardMinimumAndroidVersion=1'
     if ($LASTEXITCODE -ne 0) { throw ('Lab publish failed; incomplete package: ' + $package) }
 }
+# dotnet publish can preserve Pinned (0x80000) from build outputs. Windows PowerShell
+# Direct cannot deserialize that FileAttributes value. Normalize only our new temporary
+# payload, never the source tree/NuGet cache; byte hashes below still pin the exact content.
+foreach ($file in Get-ChildItem -LiteralPath $package -File -Recurse) {
+    if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected lab output' }
+    $file.Attributes = [IO.FileAttributes]::Archive
+}
 $files = @(Get-ChildItem -LiteralPath $package -File -Recurse | Sort-Object FullName | ForEach-Object {
     [pscustomobject]@{Path=$_.FullName.Substring($package.Length + 1);Length=$_.Length;Sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
 })
