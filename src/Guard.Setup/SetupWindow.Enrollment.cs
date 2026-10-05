@@ -19,7 +19,7 @@ public partial class SetupWindow
     private void InitializeEnrollment()
     {
         _enrollmentTimer.Tick += EnrollmentTick;
-        Activated += (_, _) => RenderEnrollment();
+        Activated += (_, _) => TryRenderEnrollment();
         Deactivated += (_, _) => { ClearEnrollmentEvidence(); UpdateEnrollmentControls(); };
         Closed += async (_, _) =>
         {
@@ -70,8 +70,7 @@ public partial class SetupWindow
     private async void EnrollmentTick(object? sender, EventArgs e)
     {
         if (_closed || _enrollment == null) return;
-        try { RenderEnrollment(); }
-        catch { FailEnrollmentDisplay(); return; }
+        if (!TryRenderEnrollment()) return;
         if (_operation == null && IsActive && !_pollStopped && !_clockInvalid && _enrollmentView?.AutoRefresh == true &&
             DateTimeOffset.UtcNow >= _nextPoll)
             await RunEnrollmentAsync(token => _enrollment.RefreshAsync(token), polling: true);
@@ -98,11 +97,13 @@ public partial class SetupWindow
         });
         _enrollmentBusy = false; _polling = false;
         _nextPoll = DateTimeOffset.UtcNow.AddSeconds(_enrollment?.Snapshot.Phase == NativeSetupPhase.Confirmed ? 10 : 2);
-        if (!_closed)
-        {
-            try { RenderEnrollment(); }
-            catch { FailEnrollmentDisplay(); }
-        }
+        if (!_closed) TryRenderEnrollment();
+    }
+
+    private bool TryRenderEnrollment()
+    {
+        try { RenderEnrollment(); UpdateEnrollmentControls(); return true; }
+        catch { FailEnrollmentDisplay(); return false; }
     }
 
     private void RenderEnrollment()

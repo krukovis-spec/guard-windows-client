@@ -7,6 +7,37 @@ foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLock
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
     if ($parseErrors.Count) { throw ('Parse failure: ' + $file) }
 }
+# Exercise the real preflight function against a stale wrapper and fresh native disk metadata.
+# Child scope mocks every Hyper-V/CIM dependency; never invokes the elevated runner or a real VM.
+& {
+    $vmName='GuardV2-Lab-20260930'; $vmId=[guid]'8f088b63-9193-4ecc-bb20-415ef11fd4c8'
+    $biosGuid=[guid]'236ea6ef-9cc6-4295-9934-6f7497f9d262'; $diskRoot='C:\GuardLabFake\'
+    $testDisks=@([pscustomobject]@{ResourceSubType='Microsoft:Hyper-V:Virtual Hard Disk';HostResource=@($diskRoot+'fresh.avhdx')})
+    $testTpm=$true
+    function Get-VM { [pscustomobject]@{Name=$vmName;Generation=2;Id=$vmId} }
+    function Get-VMHardDiskDrive { throw 'Stale wrapper disk was used' }
+    function Get-CimInstance { [pscustomobject]@{Name=$vmId.ToString()} }
+    function Get-CimAssociatedInstance {
+        param($InputObject,$Association,$ResultClassName)
+        if ($ResultClassName -eq 'Msvm_VirtualSystemSettingData') { [pscustomobject]@{BIOSGUID=$biosGuid} }
+        elseif ($ResultClassName -eq 'Msvm_StorageAllocationSettingData' -and $Association -eq 'Msvm_VirtualSystemSettingDataComponent') { $testDisks }
+        else { throw 'Unexpected native metadata query' }
+    }
+    function Get-VMFirmware { [pscustomobject]@{SecureBoot='On'} }
+    function Get-VMSecurity { [pscustomobject]@{TpmEnabled=$testTpm} }
+    function Get-VHD { param($Path); if ($Path -ne $diskRoot+'fresh.avhdx') { throw 'Unexpected disk lookup' }; [pscustomobject]@{Size=80GB} }
+    $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Invoke-ServiceBootstrapLab.ps1'),[ref]$null,[ref]$null)
+    $definition=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PinnedVM'},$false)
+    if ($null -eq $definition) { throw 'Missing VM preflight' }
+    . ([scriptblock]::Create($definition.Extent.Text))
+    if ((Get-PinnedVM).Id -ne $vmId) { throw 'Fresh native disk did not validate' }
+    $testDisks[0].HostResource=@('C:\OutsideLab\disk.vhdx')
+    try { Get-PinnedVM | Out-Null; throw 'Outside disk accepted' } catch { if ($_.Exception.Message -ne 'Unexpected VM disk') { throw } }
+    $testDisks=@()
+    try { Get-PinnedVM | Out-Null; throw 'Missing disk accepted' } catch { if ($_.Exception.Message -ne 'Unexpected VM disk count') { throw } }
+    $testTpm=$false
+    try { Get-PinnedVM | Out-Null; throw 'Missing TPM accepted' } catch { if ($_.Exception.Message -ne 'VM identity/security changed') { throw } }
+}
 try {
     & (Join-Path $PSScriptRoot 'Test-ServiceBootstrap.ps1') -ExpectedUuid ([guid]::Empty) -HostComputerName $env:COMPUTERNAME -PackageRoot 'not-used' -ManifestSha256 'not-used'
     throw 'Service test host guard did not reject execution'
