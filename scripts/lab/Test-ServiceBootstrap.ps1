@@ -39,7 +39,7 @@ foreach ($entry in $manifest.Files) {
 $actual = @(Get-ChildItem -LiteralPath $PackageRoot -File -Recurse | Where-Object FullName -ne $manifestPath)
 if ($actual.Count -ne $expected.Count) { throw 'Extra lab payload' }
 foreach ($folder in @($PackageRoot, (Join-Path $PackageRoot 'service'), (Join-Path $PackageRoot 'probe'), 'C:\GuardLab', $env:ProgramFiles, $env:ProgramData)) {
-    if ((Get-Item -LiteralPath $folder).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected lab directory' }
+    if ((Get-Item -LiteralPath $folder -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected lab directory' }
 }
 foreach ($required in @('service\Guard.Service.exe','probe\Guard.Windows.Ipc.Tests.exe')) {
     if (-not $expected.ContainsKey($required)) { throw 'Lab entry point missing' }
@@ -49,12 +49,27 @@ New-Item -ItemType Directory -Path $install | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $PackageRoot 'service') -File | Copy-Item -Destination $install
 $binary = '"' + (Join-Path $install 'Guard.Service.exe') + '"'
 New-Service -Name Guard -DisplayName 'Guard v2 - disposable VM test' -BinaryPathName ($binary + ' --initialize-authoritative-state') -StartupType Automatic | Out-Null
+$serviceStartedAt = Get-Date
 Start-Service -Name Guard
 (Get-Service Guard).WaitForStatus('Running', [timespan]::FromSeconds(30))
 Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public static class GuardLabPipeWait { [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] [return:MarshalAs(UnmanagedType.Bool)] public static extern bool WaitNamedPipe(string name, uint timeout); }'
 $deadline = [datetime]::UtcNow.AddSeconds(30)
 while (-not [GuardLabPipeWait]::WaitNamedPipe('\\.\pipe\Guard.V2.AdminSetup.v1', 500)) {
-    if ([datetime]::UtcNow -gt $deadline -or (Get-Service Guard).Status -ne 'Running') { throw 'Bootstrap pipe did not become ready' }
+    $pipeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ([datetime]::UtcNow -gt $deadline -or (Get-Service Guard).Status -ne 'Running') {
+        $serviceFailure = Get-CimInstance Win32_Service -Filter "Name='Guard'"
+        # Capture only type/member identifiers from THIS test's Guard events before snapshot restore.
+        # No raw exception messages, state, keys, paths or arbitrary event payloads leave the guest.
+        $identifiers = @(Get-WinEvent -FilterHashtable @{LogName='Application';StartTime=$serviceStartedAt} -MaxEvents 64 -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -in @('Guard.Service','.NET Runtime','Application Error') -and $_.Message -match 'Guard\.' } |
+            ForEach-Object {
+                foreach ($match in [regex]::Matches($_.Message,'\b(?:System|Microsoft|Guard)\.[A-Za-z0-9_.]*(?:Exception)\b|(?m)^\s+at\s+((?:Guard|System\.IO|System\.Security|Microsoft\.Extensions)\.[A-Za-z0-9_.+`]+)')) {
+                    if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Value }
+                }
+            } | Select-Object -Unique -First 20)
+        throw ('Bootstrap endpoint unavailable: pipeWin32=' + $pipeError + '; serviceState=' + $serviceFailure.State +
+            '; serviceExit=' + $serviceFailure.ExitCode + '; types=' + ($identifiers -join ','))
+    }
     Start-Sleep -Milliseconds 200
 }
 $probe = Join-Path $PackageRoot 'probe\Guard.Windows.Ipc.Tests.exe'
