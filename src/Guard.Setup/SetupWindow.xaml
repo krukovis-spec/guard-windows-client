@@ -44,7 +44,29 @@
                     Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
                     Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
                     AutomationProperties.Name="Полный код SHA-256 сохранённого файла Guard" />
-                <TextBlock Text="Подключение телефона через QR и включение защиты ещё не доступны в этом окне. Не используйте этот комплект для защиты семейного компьютера." Margin="0,16,0,16" />
+                <TextBlock Text="Привязка родительского телефона" FontSize="20" FontWeight="SemiBold" Margin="0,16,0,12" />
+                <TextBlock Text="Сначала оператор готовит подключение компьютера к серверу. Затем здесь можно начать привязку. QR не включает защиту; этот комплект ещё не прошёл семейную приёмку." />
+                <Button x:Name="BeginEnrollment" Content="Привязать телефон" Click="BeginEnrollment_Click" IsEnabled="False" HorizontalAlignment="Left" />
+                <TextBlock x:Name="EnrollmentStatus" AutomationProperties.LiveSetting="Polite" />
+                <TextBlock x:Name="EnrollmentDeadline" />
+                <Image x:Name="EnrollmentQrImage" Visibility="Collapsed" MaxWidth="560" Stretch="Uniform" HorizontalAlignment="Left"
+                    RenderOptions.BitmapScalingMode="NearestNeighbor" AutomationProperties.Name="QR для сканирования приложением Guard на родительском телефоне" />
+                <StackPanel x:Name="ComparisonPanel" Visibility="Collapsed" Margin="0,12,0,12">
+                    <Label Target="{Binding ElementName=ComparisonCode}" Content="Код сравнения — все восемь строк" Padding="0,0,0,8" />
+                    <TextBox x:Name="ComparisonCode" IsReadOnly="True" FontFamily="Consolas" Padding="8" FontSize="20"
+                        IsReadOnlyCaretVisible="True" Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
+                        Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
+                        AutomationProperties.Name="Полный код для сравнения с телефоном" />
+                    <CheckBox x:Name="Compared" Margin="0,12,0,12" Checked="Compared_Changed" Unchecked="Compared_Changed">
+                        <TextBlock Text="Я сравнил все восемь строк: на телефоне такой же код" Margin="0" />
+                    </CheckBox>
+                    <Button x:Name="ConfirmEnrollment" Content="Подтвердить привязку" Click="ConfirmEnrollment_Click" IsEnabled="False" HorizontalAlignment="Left" />
+                </StackPanel>
+                <WrapPanel>
+                    <Button x:Name="RefreshEnrollment" Content="Проверить привязку" Click="RefreshEnrollment_Click" IsEnabled="False" />
+                    <Button x:Name="CancelEnrollment" Content="Отменить привязку" Click="CancelEnrollment_Click" IsEnabled="False" />
+                </WrapPanel>
+                <TextBlock Text="Закрытие окна не отменяет уже сохранённую привязку. QR не сохраняется в файл и не копируется в буфер обмена." />
                 <TextBlock Text="Подтверждение уже выполненной привязки" FontSize="20" FontWeight="SemiBold" Margin="0,8,0,12" />
                 <TextBlock Text="После привязки можно сохранить подписанное подтверждение для доверенного компьютера оператора. Паролей в нём нет. Оператор должен сверить подпись с первоначальным описанием компьютера; сам файл не включает защиту и не выдаёт разрешений." />
                 <Button x:Name="ExportActivation" Content="Сохранить подтверждение привязки…" Click="ExportActivation_Click" IsEnabled="False" HorizontalAlignment="Left" />

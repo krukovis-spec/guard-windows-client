@@ -11,5 +11,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Guard.Windows\Guard.Windows.csproj" />
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <Compile Include="..\..\src\Guard.Setup\EnrollmentView.cs" Link="EnrollmentView.cs" />
+    <Compile Include="..\..\src\Guard.Setup\EnrollmentQr.cs" Link="EnrollmentQr.cs" />
   </ItemGroup>
 </Project>

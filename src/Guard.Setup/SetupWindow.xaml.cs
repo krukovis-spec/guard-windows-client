@@ -14,7 +14,7 @@ public partial class SetupWindow : Window
     {
         InitializeComponent();
         Protection.Text = SetupInspection.ProtectionNotice;
-        Closed += (_, _) => { _closed = true; _operation?.Cancel(); };
+        InitializeEnrollment();
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
@@ -89,6 +89,7 @@ public partial class SetupWindow : Window
     {
         using var operation = new CancellationTokenSource();
         _operation = operation; Refresh.IsEnabled = Export.IsEnabled = ExportActivation.IsEnabled = false; Cancel.IsEnabled = true;
+        UpdateEnrollmentControls();
         try { await action(operation.Token); }
         catch (Exception error)
         {
@@ -102,7 +103,7 @@ public partial class SetupWindow : Window
         {
             _operation = null;
             if (!_closed) { Refresh.IsEnabled = true; Cancel.IsEnabled = false; Export.IsEnabled = _inspection?.CanExport == true;
-                ExportActivation.IsEnabled = _inspection?.Status.IsProvisioned == true; }
+                ExportActivation.IsEnabled = _inspection?.Status.IsProvisioned == true; UpdateEnrollmentControls(); }
         }
     }
 
