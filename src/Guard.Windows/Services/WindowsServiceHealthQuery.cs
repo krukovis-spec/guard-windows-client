@@ -238,6 +238,15 @@ namespace Guard.Windows.Services
                 return false;
             }
 
+            // SCM returns this reserved service alias, but LookupAccountName /
+            // NTAccount.Translate does not recognize it as a security account.
+            // Only the exact SCM alias maps here; other names still require SID lookup.
+            if (string.Equals(accountName, "LocalSystem", StringComparison.OrdinalIgnoreCase))
+            {
+                sid = ServiceHealthEvaluator.LocalSystemSid;
+                return true;
+            }
+
             try
             {
                 var identity = new NTAccount(accountName).Translate(typeof(SecurityIdentifier)) as SecurityIdentifier;

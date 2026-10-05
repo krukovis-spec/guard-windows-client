@@ -21,6 +21,7 @@ namespace Guard.Service
 
             try
             {
+                WindowsServiceProcessContext.PrepareFileCreationOwner();
                 using (var host = GuardServiceHost.Build(args))
                 {
                     var exitStatus = host.Services.GetRequiredService<ServiceExitStatus>();

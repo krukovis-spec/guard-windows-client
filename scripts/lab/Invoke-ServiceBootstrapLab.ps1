@@ -21,14 +21,19 @@ $phase = 'host-validation'
 $report = [ordered]@{Status='FAIL';RunId=$runId;VmId=$vmId.ToString();ManifestSha256=$ManifestSha256;SnapshotRecovery='NOT_RUN';ProtectionAccepted=$false}
 function Get-PinnedVM {
     $vm = Get-VM -Id $vmId
-    $drives = @(Get-VMHardDiskDrive -VM $vm)
-    if ($vm.Name -ne $vmName -or $vm.Generation -ne 2 -or $drives.Count -ne 1 -or
-        -not [IO.Path]::GetFullPath($drives[0].Path).StartsWith($diskRoot, [StringComparison]::OrdinalIgnoreCase) -or
-        (Get-VHD -Path $drives[0].Path).Size -ne 80GB) { throw 'Unexpected VM target' }
+    if ($vm.Name -ne $vmName -or $vm.Generation -ne 2) { throw 'Unexpected VM target' }
     $system = Get-CimInstance -Namespace root/virtualization/v2 -ClassName Msvm_ComputerSystem -Filter ("Name='" + $vmId.ToString() + "'")
     $settings = @(Get-CimAssociatedInstance -InputObject $system -Association Msvm_SettingsDefineState -ResultClassName Msvm_VirtualSystemSettingData)
     if ($settings.Count -ne 1 -or [guid]$settings[0].BIOSGUID -ne $biosGuid -or
         (Get-VMFirmware -VM $vm).SecureBoot -ne 'On' -or -not (Get-VMSecurity -VM $vm).TpmEnabled) { throw 'VM identity/security changed' }
+    # A Hyper-V wrapper retained the pre-restore AVHDX path in the real lab run.
+    # Read the CURRENT setting's disk allocation directly; never guess a disk from the directory.
+    $disks = @(Get-CimAssociatedInstance -InputObject $settings[0] -Association Msvm_VirtualSystemSettingDataComponent -ResultClassName Msvm_StorageAllocationSettingData |
+        Where-Object ResourceSubType -eq 'Microsoft:Hyper-V:Virtual Hard Disk')
+    if ($disks.Count -ne 1 -or @($disks[0].HostResource).Count -ne 1) { throw 'Unexpected VM disk count' }
+    $diskPath = [IO.Path]::GetFullPath($disks[0].HostResource[0])
+    if (-not $diskPath.StartsWith($diskRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        (Get-VHD -Path $diskPath).Size -ne 80GB) { throw 'Unexpected VM disk' }
     $vm
 }
 function Connect-Guest([switch]$AfterBoot) {
@@ -76,6 +81,14 @@ try {
     $snapshot = Checkpoint-VM -VM $vm -SnapshotName ('before-service-bootstrap-' + $runId) -Passthru
     if ($null -eq $snapshot -or $snapshot.VMId -ne $vmId) { throw 'Pre-test checkpoint failed' }
     $report.SnapshotId = $snapshot.Id.ToString()
+    $phase = 'post-checkpoint-reconnect'
+    # Checkpointing invalidated the open PowerShell Direct runspace in the real guest.
+    # Do not replay a guest write: establish a fresh session and revalidate before the first write.
+    Remove-PSSession -Session $session -ErrorAction SilentlyContinue; $session = $null
+    $session = Connect-Guest -AfterBoot
+    $afterCheckpoint = Read-GuestState
+    if ($afterCheckpoint.ComputerName -ne $before.ComputerName -or $afterCheckpoint.HasService -or
+        $afterCheckpoint.HasInstallation -or $afterCheckpoint.HasData) { throw 'Guest changed during checkpoint' }
     $phase = 'guest-copy'
     $changedGuest = $true
     Invoke-Command -Session $session -ScriptBlock {
