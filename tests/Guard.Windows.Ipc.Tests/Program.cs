@@ -35,6 +35,7 @@ namespace Guard.Windows.Ipc.Tests
                 ("binds setup to the exact running SYSTEM service", SetupClientChecks.RejectWrongServiceBinding),
                 ("bounds and correlates setup responses over a real test pipe", SetupClientChecks.CheckResponses),
                 ("keeps native setup capability, comparison and uncertain results separate", NativeSetupSessionChecks.Run),
+                ("renders local enrollment QR and gates every enrollment screen", EnrollmentViewChecks.Run),
                 ("keeps setup inspection observational and exports exact validated public bytes", SetupInspectionChecks.Run)
             };
             var failures = 0;

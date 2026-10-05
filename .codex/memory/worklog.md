@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-05 — Windows QR enrollment screen
+
+- Resumed after Ivan's explicit Oct4 approval of QRCoder 1.8.0 and separate VM-only system-component research, no purchases/host enforcement. Existing pushed checkpoint and integrated branch reused; pre-existing untracked `.wrangler` left untouched. The M1 prototype has not yet run and the native TTL failure is not waived.
+- Wired existing `NativeSetupSession` to WPF with local PNG/deadline/full Android-compatible comparison and explicit compare/confirm/cancel. Memory-only capability, bounded local rendering, no file/browser/clipboard export; focus loss/expiry/error/close hide evidence and reset consent. Poll does not confirm or replace a comparison. Unknown outcomes remain explicit; no owner reset or protection claim. Pure view/QR sources are linked into the existing IPC harness (no new framework or WPF launch in tests).
+- Check: fresh Release, all 29 v2 harnesses and 45 legacy checks PASS; QR tests cover PNG bounds and all 11 display states/expiry; existing session tests cover exact authority/version and lost-response handling. NuGet vulnerability checks for Setup/IPC, including transitive packages, found none. Self-review fixed controls stuck disabled after focus return before session creation and unhandled render error on activation. No real UI/camera/SCM/phone test claimed; no host system or cloud action.
+- PROJECT_ONLY memory: updated canonical plan, capsule and Setup usage/limits. Ponytail reused the authenticated session and existing harness; ux-copy kept Russian outcomes/actions separate from protection status. Codex visual pass remains M7 after functional verification.
+
 ## 2026-10-01 — deploy current native relay API without changing client authority
 
 - Previous goal turn `b9e89ce` was progress. Rechecked current tree and M1 report timestamp/plan: native-only TTL still FAIL; no new proof or driver permission was invented and no duplicate VM/UAC experiment was started. Took the independent approved M2 rollout instead of treating M1 as passed.
