@@ -11,6 +11,8 @@ internal static class InstalledServiceChecks
 {
     internal static int Run(string[] args)
     {
+        var phase = "guest-boundary";
+        object? observations = null;
         try
         {
             using var identity = WindowsIdentity.GetCurrent();
@@ -20,14 +22,21 @@ internal static class InstalledServiceChecks
                 throw new InvalidOperationException("Disposable guest administrator required.");
             if (args[1] == "reject-bootstrap")
             {
+                phase = "reject-bootstrap-query";
                 try { GuardSetupQueryClient.QueryAsync(GuardVerb.GetStatus, default).GetAwaiter().GetResult(); }
                 catch (UnauthorizedAccessException)
                 { Console.WriteLine("{\"status\":\"PASS\",\"bootstrapEndpoint\":\"REJECTED\"}"); return 0; }
                 throw new InvalidOperationException("Bootstrap endpoint was accepted.");
             }
             if (args[1] != "inspect") throw new ArgumentException("Unknown lab mode.");
+            phase = "inspect-query";
             var inspection = SetupInspection.ReadAsync(default).GetAwaiter().GetResult();
+            phase = "descriptor-query";
             var descriptor = SetupInspection.ReadDescriptorAsync(default).GetAwaiter().GetResult();
+            phase = "inspect-validation";
+            observations = new { inspection.CanExport, inspection.Status.StateVersion, inspection.Readiness.CanEnableProtection,
+                serviceBoundary = inspection.Readiness.ServiceBoundary.ToString(), programDataAcl = inspection.Readiness.ProgramDataAcl.ToString(),
+                expectedLabOrigin = descriptor.RelayOrigin == "https://guard-lab.invalid" };
             if (!inspection.CanExport || inspection.Status.StateVersion != 0 || inspection.Readiness.CanEnableProtection ||
                 inspection.Readiness.ServiceBoundary != GuardReadinessFactState.Satisfied ||
                 inspection.Readiness.ProgramDataAcl != GuardReadinessFactState.Satisfied ||
@@ -42,7 +51,9 @@ internal static class InstalledServiceChecks
         catch (Exception error)
         {
             // Never print state, key material, paths or arbitrary exception messages.
-            Console.WriteLine(JsonSerializer.Serialize(new { status = "FAIL", errorType = error.GetType().Name, errorCode = error.HResult }));
+            Console.WriteLine(JsonSerializer.Serialize(new { status = "FAIL", phase, observations,
+                errorType = error.GetType().Name, errorCode = error.HResult,
+                member = error.TargetSite?.DeclaringType?.FullName + "." + error.TargetSite?.Name }));
             return 1;
         }
     }

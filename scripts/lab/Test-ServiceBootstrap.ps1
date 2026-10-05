@@ -58,6 +58,18 @@ while (-not [GuardLabPipeWait]::WaitNamedPipe('\\.\pipe\Guard.V2.AdminSetup.v1',
     $pipeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
     if ([datetime]::UtcNow -gt $deadline -or (Get-Service Guard).Status -ne 'Running') {
         $serviceFailure = Get-CimInstance Win32_Service -Filter "Name='Guard'"
+        $leaseFacts = @()
+        foreach ($leasePath in @((Join-Path $data 'v2\state.dat.writer.lock'),(Join-Path $data 'v2\relay\state.dat.writer.lock'))) {
+            try {
+                $acl = [IO.File]::GetAccessControl($leasePath,([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access))
+                $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+                $rules = @($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+                $systemOnly = @($rules | Where-Object { -not $_.IdentityReference.IsWellKnown([Security.Principal.WellKnownSidType]::LocalSystemSid) -or
+                    $_.AccessControlType -ne 'Allow' -or ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl }).Count -eq 0
+                $leaseFacts += 'ownerSystem=' + $owner.IsWellKnown([Security.Principal.WellKnownSidType]::LocalSystemSid) +
+                    '/ownerAdmins=' + $owner.IsWellKnown([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid) + '/systemOnlyRules=' + $systemOnly + '/ruleCount=' + $rules.Count
+            } catch { $leaseFacts += 'metadataUnavailable=' + $_.Exception.GetBaseException().GetType().Name }
+        }
         # Capture only type/member identifiers from THIS test's Guard events before snapshot restore.
         # No raw exception messages, state, keys, paths or arbitrary event payloads leave the guest.
         $identifiers = @(Get-WinEvent -FilterHashtable @{LogName='Application';StartTime=$serviceStartedAt} -MaxEvents 64 -ErrorAction SilentlyContinue |
@@ -68,14 +80,14 @@ while (-not [GuardLabPipeWait]::WaitNamedPipe('\\.\pipe\Guard.V2.AdminSetup.v1',
                 }
             } | Select-Object -Unique -First 20)
         throw ('Bootstrap endpoint unavailable: pipeWin32=' + $pipeError + '; serviceState=' + $serviceFailure.State +
-            '; serviceExit=' + $serviceFailure.ExitCode + '; types=' + ($identifiers -join ','))
+            '; serviceExit=' + $serviceFailure.ExitCode + '; types=' + ($identifiers -join ',') + '; leaseFacts=' + ($leaseFacts -join ','))
     }
     Start-Sleep -Milliseconds 200
 }
 $probe = Join-Path $PackageRoot 'probe\Guard.Windows.Ipc.Tests.exe'
 function Invoke-ReadOnlyProbe([string]$Mode) {
     $text = & $probe --installed-service-lab $Mode
-    if ($LASTEXITCODE -ne 0) { throw ('Installed-service probe refused: ' + ($text -join ' ')) }
+    if ($LASTEXITCODE -ne 0) { throw ('Installed-service probe refused (' + $Mode + '): ' + ($text -join ' ')) }
     $value = ($text -join '') | ConvertFrom-Json
     if ($value.status -ne 'PASS') { throw 'Installed-service probe did not pass' }
     $value

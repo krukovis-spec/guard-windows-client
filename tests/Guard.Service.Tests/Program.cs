@@ -24,6 +24,7 @@ namespace Guard.Service.Tests
             var tests = new List<(string Name, Func<Task> Run)>
             {
                 ("rejects an interactive process before initialization", RejectsInteractiveProcessAsync),
+                ("refuses creation-owner changes outside the real SCM boundary", RejectsInteractiveOwnerChangeAsync),
                 ("rejects a non-LocalSystem service before initialization", RejectsNonSystemServiceAsync),
                 ("initializes only inside the LocalSystem service boundary", InitializesAuthorizedServiceAsync),
                 ("does not report started before boundary initialization completes", WaitsForBoundaryInitializationAsync),
@@ -82,6 +83,19 @@ namespace Guard.Service.Tests
             var runtime = CreateRuntime(isWindowsService: false, isLocalSystem: true, initializer);
             await AssertThrowsAsync<SecurityException>(() => runtime.InitializeAsync(CancellationToken.None)).ConfigureAwait(false);
             Assert(initializer.CallCount == 0, "Interactive execution reached service initialization.");
+        }
+
+        private static async Task RejectsInteractiveOwnerChangeAsync()
+        {
+            using var before = System.Security.Principal.WindowsIdentity.GetCurrent();
+            var owner = before.Owner;
+            await AssertThrowsAsync<SecurityException>(() =>
+            {
+                WindowsServiceProcessContext.PrepareFileCreationOwner();
+                return Task.CompletedTask;
+            }).ConfigureAwait(false);
+            using var after = System.Security.Principal.WindowsIdentity.GetCurrent();
+            Assert(owner != null && object.Equals(owner, after.Owner), "Interactive check changed the process creation owner.");
         }
 
         private static async Task RejectsNonSystemServiceAsync()
