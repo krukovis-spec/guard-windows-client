@@ -11,6 +11,7 @@ namespace Guard.Windows.ScmQuery.Tests
             var tests = new List<(string Name, Action Run)>
             {
                 ("maps complete service facts", MapsCompleteFacts),
+                ("maps the SCM LocalSystem alias without NTAccount lookup", MapsNativeSystemAccount),
                 ("maps absent service", MapsNotFound),
                 ("preserves delayed automatic start", MapsDelayedAutomatic),
                 ("fails closed for malformed facts", FailsClosedForMalformedFacts),
@@ -41,6 +42,26 @@ namespace Guard.Windows.ScmQuery.Tests
         {
             var result = new WindowsServiceHealthQuery(new FakeNative(ScmServiceOpenResult.NotFound()), new FakeClassifier()).Query("GuardV2");
             Assert(result.State == ServiceHealthProbeState.NotFound && result.Facts == null, "Missing service did not map to NotFound.");
+        }
+
+        private static void MapsNativeSystemAccount()
+        {
+            var classifier = new WindowsServiceAccountSidClassifier();
+            foreach (var name in new[] { "LocalSystem", "localsystem" })
+            {
+                var native = new FakeNative(ScmServiceOpenResult.Found(new FakeSession(
+                    new ScmServiceConfiguration(2, false, name, "C:\\Guard\\Guard.Service.exe"), 4)));
+                var result = new WindowsServiceHealthQuery(native, classifier).Query("Guard");
+                Assert(result.State == ServiceHealthProbeState.Found &&
+                    result.Facts?.AccountSid == ServiceHealthEvaluator.LocalSystemSid, "SCM LocalSystem alias was not classified.");
+            }
+            // Other accounts still use Windows SID lookup, not a name/substring assumption.
+            var guests = new System.Security.Principal.SecurityIdentifier(
+                System.Security.Principal.WellKnownSidType.BuiltinGuestsSid, null);
+            var guestName = guests.Translate(typeof(System.Security.Principal.NTAccount)).Value;
+            Assert(classifier.TryGetSid(guestName, out var other) && other == guests.Value &&
+                other != ServiceHealthEvaluator.LocalSystemSid, "Non-SYSTEM account was misclassified.");
+            Assert(!classifier.TryGetSid("GuardUnknown-" + Guid.NewGuid().ToString("N"), out _), "Unknown account was accepted.");
         }
 
         private static void MapsDelayedAutomatic()
