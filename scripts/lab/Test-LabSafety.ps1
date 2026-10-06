@@ -7,7 +7,18 @@ foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLock
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
     if ($parseErrors.Count) { throw ('Parse failure: ' + $file) }
 }
-# Exercise the real preflight function against a stale wrapper and fresh native disk metadata.
+# The non-PnP kernel probe needs only Root for its explicit Authenticode validation;
+# do not reintroduce the unnecessary TrustedPublisher import that the guest rejects.
+$kernelProbeAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'kernel/Test-KernelLease.ps1'),[ref]$null,[ref]$null)
+$certificateImports=@($kernelProbeAst.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Import-Certificate'},$true))
+if ($certificateImports.Count -ne 1 -or $certificateImports[0].Extent.Text -notmatch 'Cert:\\LocalMachine\\Root(?:\s|$)') {
+    throw 'Unexpected certificate trust scope in kernel probe'
+}
+$kernelSource=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'kernel/GuardKernelLab.c') -Raw -Encoding UTF8
+if ($kernelSource -match 'KeQueryInterruptTimePrecise\s*\(\s*NULL\s*\)') {
+    throw 'KeQueryInterruptTimePrecise requires a writable output pointer, never NULL'
+}
+# Exercise the real preflight against stale wrappers/fresh native disk metadata.
 # Child scope mocks every Hyper-V/CIM dependency; never invokes the elevated runner or a real VM.
 foreach ($runner in @('Invoke-ServiceBootstrapLab.ps1','kernel/Invoke-KernelLeaseLab.ps1')) { & {
     param($RunnerPath)

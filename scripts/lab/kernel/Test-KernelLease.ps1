@@ -77,7 +77,8 @@ $certificatePath=Join-Path $PackageRoot 'lab-public.cer'
 $script:labPhase='trust-test-certificate'
 Export-Certificate -Cert $certificate -FilePath $certificatePath | Out-Null
 Import-Certificate -FilePath $certificatePath -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-Import-Certificate -FilePath $certificatePath -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+# Root is only for the Authenticode check below. This non-PnP test-mode driver does not
+# install a driver package, so TrustedPublisher trust (denied by this guest) is unnecessary.
 # Preserve the hash-verified unsigned input; subsequent stages revalidate it, not a modified package member.
 $driverPath=Join-Path $PackageRoot 'GuardKernelLab-signed.sys'
 if (Test-Path -LiteralPath $driverPath) { throw 'Signed output already exists' }

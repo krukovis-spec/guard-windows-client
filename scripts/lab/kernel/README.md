@@ -55,14 +55,33 @@ Authenticode компилятора, MSBuild и SignTool проверен: Micro
 
 Сборка создаёт новые TEMP-каталоги и не исполняет драйвер. MSB8029 предупреждает только об
 инкрементальной сборке в TEMP; здесь каждый build использует новый каталог. C-компиляция `/W4 /WX`
-прошла; PE x64/Native, Integrity Check и NX подтверждены. В первой сборке отсутствовал kernel macro
+и MSVC `/analyze` прошли; отчёт `<DEFECTS></DEFECTS>`. Уточнены SAL-типы worker/dispatch;
+неподдерживаемые IRP остаются у стандартного invalid-request handler Windows.
+PE x64/Native, Integrity Check и NX подтверждены. В первой сборке отсутствовал kernel macro
 `PROCESS_TERMINATE`; используется его документированная минимальная маска `0x0001`, не ALL_ACCESS.
 
-Первый живой опыт 2026-10-06: FAIL до получения результата TTL, `E_ACCESSDENIED` внутри guest probe.
-Теперь probe сообщает ограниченные phase/type/id/line вместо потери места ошибки.
-Recovery первоначально остановился после применения snapshot: повторное присвоение даже того же
-Secure Boot template запрещено Hyper-V после инициализации vTPM. Runner исправлен: шаблон только
-проверяется, возвращается лишь ON/OFF. Повторный опыт допустим только после BOOT_VERIFIED recovery.
+Живые опыты 2026-10-06 пока **не прошли**:
+
+- Исходный `937ba1ff…`: recovery завершён после подтверждения UAC, `BOOT_VERIFIED`, собственный
+  snapshot удалён. Повторное присвоение даже прежнего Secure Boot template запрещено при vTPM;
+  runner теперь только проверяет шаблон и восстанавливает флаг ON/OFF.
+- `b844471d…`: точный отказ — `Import-Certificate` в `LocalMachine\TrustedPublisher`, строка 80.
+  Этот лишний импорт удалён: non-PnP test-mode driver не устанавливает PnP-пакет. Root остаётся
+  только для явной проверки Authenticode; приватный ключ и доверие существуют лишь в guest.
+- `a43bf5f0…`: после исправления импорта потерян PowerShell Direct (`Hyper-V socket target exited`).
+  При разборе обнаружен недопустимый `KeQueryInterruptTimePrecise(NULL)`: выходной указатель обязателен.
+  Во всех трёх местах заменён на `KeQueryInterruptTime()`; его tick-точность достаточна для 20 секунд
+  и 100-мс worker, перевод часов не меняет счётчик. Dump не сохранён, поэтому причина обрыва не доказана
+  анализом crash dump. Две проверки регрессии добавлены в существующий safety harness.
+- Оба повторных опыта восстановлены: `BOOT_VERIFIED`, Secure Boot ON, test-signing OFF, Guard и lab
+  driver отсутствуют, собственные snapshot удалены. Исходный clean snapshot сохранён.
+- Исправленный таймер ещё **не запускался**: Windows вернула отмену следующего UAC до старта runner.
+  Не считать это PASS. Финальная сборка после `/analyze` исправлений готова для следующего VM опыта.
+
+Пакет следующего опыта: `%TEMP%\GuardKernelLab-21749175cd46412da686ae05f0f2b762`.
+Manifest SHA-256: `46F087471B22C59018E533C1410DA5034085C5DF823942C9898B5F920EE2F508`.
+Запуск — существующий `Invoke-KernelLeaseLab.ps1` с этими `-PackageRoot` и `-ManifestSha256`,
+из повышенного PowerShell после подтверждения Ивана. Host Guard/driver не запускать.
 
 Безопасная проверка сценариев: `scripts/lab/Test-LabSafety.ps1`.
 Сборка и живой результат фиксируются в worklog после фактического выполнения.
@@ -71,7 +90,10 @@ Secure Boot template запрещено Hyper-V после инициализа�
 Документированные API:
 [process notification](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-pssetcreateprocessnotifyroutineex),
 [creation status](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_ps_create_notify_info),
-[interrupt time](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryinterrupttimeprecise),
+[interrupt time](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryinterrupttime),
+[обязательный указатель Precise API](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryinterrupttimeprecise),
+[test-signing](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-testsigning-boot-configuration-option),
+[Trusted Publishers для PnP](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/trusted-publishers-certificate-store),
 [process object handle](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-obopenobjectbypointer),
 [termination](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-zwterminateprocess),
 [secure device](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdmsec/nf-wdmsec-wdmlibiocreatedevicesecure),
