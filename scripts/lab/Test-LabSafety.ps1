@@ -18,6 +18,26 @@ $kernelSource=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'kernel/GuardKer
 if ($kernelSource -match 'KeQueryInterruptTimePrecise\s*\(\s*NULL\s*\)') {
     throw 'KeQueryInterruptTimePrecise requires a writable output pointer, never NULL'
 }
+# Execute the actual pure manifest/phase validator, never the guest script.
+$experimentValidator=$kernelProbeAst.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-KernelLabExperiment'},$false)
+if ($null -eq $experimentValidator) { throw 'Missing experiment binding' }
+. ([scriptblock]::Create($experimentValidator.Extent.Text))
+Assert-KernelLabExperiment ([pscustomobject]@{Version=1}) 'Experiment'
+Assert-KernelLabExperiment ([pscustomobject]@{Version=2;Experiment='Lease'}) 'AfterBoot'
+Assert-KernelLabExperiment ([pscustomobject]@{Version=2;Experiment='DenyUnload'}) 'Tamper'
+Assert-KernelLabExperiment ([pscustomobject]@{Version=2;Experiment='DenyUnload'}) 'AfterTamperBoot'
+foreach ($case in @(
+    @([pscustomobject]@{Version=1},'Tamper'),
+    @([pscustomobject]@{Version=1;Experiment='DenyUnload'},'Tamper'),
+    @([pscustomobject]@{Version=2;Experiment='Lease'},'AfterTamperBoot'),
+    @([pscustomobject]@{Version=2;Experiment='DenyUnload'},'Experiment'),
+    @([pscustomobject]@{Version=2;Experiment='Unknown'},'Tamper'),
+    @([pscustomobject]@{Version=3;Experiment='DenyUnload'},'Tamper')
+)) {
+    $refused=$false
+    try { Assert-KernelLabExperiment $case[0] $case[1] } catch { $refused=$true }
+    if (-not $refused) { throw 'Wrong experiment/phase was accepted' }
+}
 # Exercise the real preflight against stale wrappers/fresh native disk metadata.
 # Child scope mocks every Hyper-V/CIM dependency; never invokes the elevated runner or a real VM.
 foreach ($runner in @('Invoke-ServiceBootstrapLab.ps1','kernel/Invoke-KernelLeaseLab.ps1')) { & {

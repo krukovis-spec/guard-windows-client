@@ -16,12 +16,32 @@
 Вызов завершения — вне callback/lock на PASSIVE_LEVEL.
 
 Это **не** exact-hash identity, hardware-backed phone authority или защита от администратора.
-Переименование marker обходит basename-фильтр. Администратор вправе выгрузить этот lab driver;
+Переименование marker обходит basename-фильтр. В исходном lease-варианте администратор вправе выгрузить lab driver;
 тест должен зафиксировать обход, а не скрыть его. Подпись — тестовая, Secure Boot выключен.
 Ни успешная сборка, ни PASS этого опыта не закрывают M1. Сон/возобновление и строгий
 production signing/boot/anti-tamper остаются отдельными непроверенными условиями.
 
 ## Изоляция и восстановление
+
+Дополнительный **DenyUnload** опыт (06.10.2026): при сборке `Build-KernelLabPackage.ps1 -DenyUnload`
+обычная unload entry point отсутствует. Это отдельный вариант non-PnP legacy software driver,
+а не рекомендация убрать обязательный unload у PnP/WDM драйвера. Cleanup ошибки инициализации
+сохранён. [Документация поля DRIVER_OBJECT.DriverUnload](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_driver_object).
+Manifest v2 связывает вариант `Lease`/`DenyUnload` с допустимыми фазами runner; старый v1 — только Lease.
+
+- Реальный отчёт `Access/kernel-lease-4180db0eee3242f4a1dd8fbdd3357b9c.json`,
+  15:37:58 UTC, PASS/exit 0. Manifest `72DF6E2CD414BBF8E521411D784962C05413014EA2D4D7D3457B6E1B71442E2C`.
+- `sc stop` повышенного администратора отказал (1052); драйвер Running, оба marker запрещены.
+  Но `start=disabled` принят; до reboot запрет сохраняется, после reboot драйвер Stopped/Disabled
+  и обе программы выполняются без grant. `AdministratorDisableThenReboot=BYPASS_CONFIRMED`.
+- `M1Accepted=false`: это измеренный boot-bypass, не принятая защита администратора. Lease/TTL не повторён.
+  Оба варианта собраны `/W4 /WX` + пустой `/analyze DEFECTS`; исходная lease-конфигурация сохранена.
+- Recovery BOOT_VERIFIED, Secure Boot ON/test-signing OFF/no Guard/data/lab driver; собственный
+  snapshot `29818ddb-41f8-4891-85ca-6464ca0c02b7` удалён, исходный clean сохранён.
+  Удаление четырёх новых временных build/package-каталогов отклонено policy терминала;
+  они остались в TEMP, проверка от них больше не зависит. ISO EWDK отсоединён, кэш сохранён.
+- Не повторять этот опыт без изменения защищённой boot-модели. Отключение Unload само по себе
+  не обеспечивает обязательное присутствие драйвера, сохранность бинарника/конфигурации или доверенные grants.
 
 - Driver не входит в solution, publish, installer или service composition.
 - Host только собирает исходники; kernel binary не устанавливается/запускается на host.

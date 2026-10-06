@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$HostComputerName,
     [Parameter(Mandatory=$true)][string]$PackageRoot,
     [Parameter(Mandatory=$true)][string]$ManifestSha256,
-    [ValidateSet('Experiment','AfterBoot')][string]$Phase='Experiment'
+    [ValidateSet('Experiment','AfterBoot','Tamper','AfterTamperBoot')][string]$Phase='Experiment'
 )
 $ErrorActionPreference='Stop'
 $script:labPhase='identity-check'
@@ -30,8 +30,17 @@ foreach ($folder in @('C:\GuardLab',$PackageRoot)) {
 $manifestPath=Join-Path $PackageRoot 'manifest.json'
 if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -cne $ManifestSha256) { throw 'Lab manifest changed' }
 $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+function Assert-KernelLabExperiment($Manifest,[string]$ProbePhase) {
+    # Original v1 packages are lease-only. A mode must never be guessed from the requested phase.
+    if ($Manifest.Version -eq 1 -and -not $Manifest.PSObject.Properties['Experiment']) { $experiment='Lease' }
+    elseif ($Manifest.Version -eq 2 -and $Manifest.Experiment -cin @('Lease','DenyUnload')) { $experiment=$Manifest.Experiment }
+    else { throw 'Invalid kernel lab experiment manifest' }
+    $phases=if ($experiment -ceq 'DenyUnload') { @('Tamper','AfterTamperBoot') } else { @('Experiment','AfterBoot') }
+    if ($ProbePhase -cnotin $phases) { throw 'Kernel lab package/phase mismatch' }
+}
+Assert-KernelLabExperiment $manifest $Phase
 $names=@('GuardKernelLab.sys','LabControl.exe','GuardKernelLabAllowed.exe','GuardKernelLabDenied.exe','signtool.exe')
-if ($manifest.Version -ne 1 -or $manifest.LabOnly -ne $true -or $manifest.Files.Count -ne $names.Count) { throw 'Invalid lab manifest' }
+if ($manifest.LabOnly -ne $true -or $manifest.Files.Count -ne $names.Count) { throw 'Invalid lab manifest' }
 $seen=@{}
 foreach ($entry in $manifest.Files) {
     if ($entry.Path -cnotin $names -or $seen.ContainsKey($entry.Path) -or $entry.Sha256 -notmatch '^[A-F0-9]{64}$') { throw 'Unexpected lab file' }
@@ -61,6 +70,26 @@ function Assert-Blocked([string]$Path) {
 function Invoke-DriverControl([string]$Action) {
     $output=& "$env:WINDIR\System32\sc.exe" $Action GuardKernelLab 2>&1
     if ($LASTEXITCODE -ne 0) { throw ('Lab driver '+$Action+' failed: '+($output -join ' ')) }
+}
+function Assert-MarkerRuns([string]$Path,[string]$ExpectedOutput) {
+    $p=New-Object Diagnostics.Process
+    $p.StartInfo.FileName=$Path; $p.StartInfo.Arguments='--self-test'; $p.StartInfo.UseShellExecute=$false
+    $p.StartInfo.RedirectStandardOutput=$true
+    try {
+        [void]$p.Start()
+        if (-not $p.WaitForExit(5000)) { $p.Kill(); [void]$p.WaitForExit(5000); throw 'Unprotected marker timed out' }
+        if ($p.ExitCode -ne 0 -or $p.StandardOutput.ReadToEnd().Trim() -cne $ExpectedOutput) { throw 'Marker bypass was not observed' }
+    } finally { $p.Dispose() }
+}
+if ($Phase -eq 'AfterTamperBoot') {
+    $script:labPhase='after-admin-disabled-boot'
+    $driver=Get-CimInstance Win32_SystemDriver -Filter "Name='GuardKernelLab'"
+    if ($null -eq $driver -or $driver.State -ne 'Stopped' -or $driver.StartMode -ne 'Disabled') { throw 'Expected disabled driver was not observed' }
+    Assert-MarkerRuns $allowed 'MARKER_SELF_TEST_PASS v1'
+    Assert-MarkerRuns $denied 'MARKER_SELF_TEST_PASS v2'
+    [pscustomobject]@{Status='PASS';DriverState=$driver.State;DriverStartMode=$driver.StartMode;
+        AdministratorDisableThenReboot='BYPASS_CONFIRMED';BothMarkers='ALLOWED_WITHOUT_GRANT';M1Accepted=$false}
+    return
 }
 if ($Phase -eq 'AfterBoot') {
     $driver=Get-CimInstance Win32_SystemDriver -Filter "Name='GuardKernelLab'"
@@ -95,6 +124,24 @@ $script:labPhase='start-driver'
 Invoke-DriverControl 'start'
 $script:labPhase='initial-default-deny'
 Assert-Blocked $allowed; Assert-Blocked $denied
+if ($Phase -eq 'Tamper') {
+    $script:labPhase='admin-stop-without-unload-callback'
+    $stopOutput=& "$env:WINDIR\System32\sc.exe" stop GuardKernelLab 2>&1
+    $stopExit=$LASTEXITCODE
+    $driver=Get-CimInstance Win32_SystemDriver -Filter "Name='GuardKernelLab'"
+    if ($stopExit -eq 0 -or $driver.State -ne 'Running') { throw 'Ordinary driver stop was not rejected' }
+    Assert-Blocked $allowed; Assert-Blocked $denied
+    $script:labPhase='admin-disable-next-boot'
+    $disableOutput=& "$env:WINDIR\System32\sc.exe" config GuardKernelLab start= disabled 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ('Driver disable was refused: '+($disableOutput -join ' ')) }
+    $driver=Get-CimInstance Win32_SystemDriver -Filter "Name='GuardKernelLab'"
+    if ($driver.State -ne 'Running' -or $driver.StartMode -ne 'Disabled') { throw 'Disabled next-boot state was not observed' }
+    Assert-Blocked $allowed; Assert-Blocked $denied
+    [pscustomobject]@{Status='PASS';Experiment='DenyUnload';AdministratorScmStop='REJECTED';StopExitCode=$stopExit;
+        AfterStopMarkers='DENIED';AdministratorDisable='ACCEPTED';BeforeRebootMarkers='DENIED';
+        GuardUserModeService=$false;M1Accepted=$false;LeaseTest='NOT_REPEATED';SleepResume='NOT_RUN'}
+    return
+}
 $script:labPhase='arm-once'
 $clock=[Diagnostics.Stopwatch]::StartNew()
 $armOutput=& $control --arm-lab-once

@@ -106,6 +106,11 @@ try {
         $ManifestSha256 -notmatch '^[A-F0-9]{64}$' -or
         (Get-FileHash -LiteralPath (Join-Path $PackageRoot 'manifest.json') -Algorithm SHA256).Hash -cne $ManifestSha256) { throw 'Untrusted lab package' }
     if (@(Get-ChildItem -LiteralPath $PackageRoot -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Redirected lab payload' }
+    $manifest=Get-Content -LiteralPath (Join-Path $PackageRoot 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($manifest.Version -eq 1 -and -not $manifest.PSObject.Properties['Experiment']) { $experiment='Lease' }
+    elseif ($manifest.Version -eq 2 -and $manifest.Experiment -cin @('Lease','DenyUnload')) { $experiment=$manifest.Experiment }
+    else { throw 'Invalid kernel lab experiment manifest' }
+    $report.ExperimentKind=$experiment
     $vm=Get-PinnedVM
     if ($vm.State -ne 'Running' -or @(Get-VMSnapshot -VM $vm -Name 'clean-windows-20260930').Count -ne 1) { throw 'Running clean lab/recovery baseline required' }
     $originalFirmware=Get-VMFirmware -VM $vm
@@ -152,12 +157,15 @@ try {
         New-Item -ItemType Directory -Path $Target | Out-Null
     } -ArgumentList $biosGuid,$guestPackage
     foreach ($file in Get-ChildItem -LiteralPath $PackageRoot -File) { Copy-Item -LiteralPath $file.FullName -Destination $guestPackage -ToSession $session }
-    $phase='kernel-expiry'
-    $report.Experiment=Invoke-GuestProbe 'Experiment'
+    $phase=if ($experiment -ceq 'DenyUnload') {'kernel-unload-tamper'} else {'kernel-expiry'}
+    $probePhase=if ($experiment -ceq 'DenyUnload') {'Tamper'} else {'Experiment'}
+    $report.Experiment=Invoke-GuestProbe $probePhase
     if ($report.Experiment.Status -ne 'PASS') { throw 'Kernel experiment did not pass' }
-    $phase='active-grant-reboot'; Stop-PinnedVM; $boot=Start-PinnedVM
+    $phase=if ($experiment -ceq 'DenyUnload') {'admin-disabled-reboot'} else {'active-grant-reboot'}
+    Stop-PinnedVM; $boot=Start-PinnedVM
     if (-not $boot.HasLabDriver -or -not $boot.TestSigning -or $boot.SecureBoot) { throw 'Unexpected kernel lab reboot state' }
-    $report.AfterBoot=Invoke-GuestProbe 'AfterBoot'
+    $probePhase=if ($experiment -ceq 'DenyUnload') {'AfterTamperBoot'} else {'AfterBoot'}
+    $report.AfterBoot=Invoke-GuestProbe $probePhase
     if ($report.AfterBoot.Status -ne 'PASS') { throw 'Reboot test did not pass' }
     $report.Status='PASS'
 } catch {
