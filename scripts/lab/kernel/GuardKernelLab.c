@@ -178,7 +178,13 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registryPath)
         IoDeleteDevice(LabDevice);
         return status;
     }
+    // LAB variant only: no ordinary unload entry point. This does NOT protect the
+    // next boot, service registration, binary on disk or authority to arm a lease.
+#ifdef GUARD_LAB_DENY_UNLOAD
+    driver->DriverUnload = NULL;
+#else
     driver->DriverUnload = LabUnload;
+#endif
     status = IoCreateSymbolicLink(&LinkName, &deviceName);
     if (!NT_SUCCESS(status)) { LabUnload(driver); return status; }
     LinkCreated = TRUE;

@@ -21,6 +21,9 @@
     <Link><AdditionalDependencies>Wdmsec.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions></Link>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(LabDenyUnload)' == 'true'">
+    <ClCompile><PreprocessorDefinitions>GUARD_LAB_DENY_UNLOAD;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+  </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="GuardKernelLab.c" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

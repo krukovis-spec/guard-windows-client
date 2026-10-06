@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$EwdkRoot,[Parameter(Mandatory=$true)][string]$SignToolPath)
+param([Parameter(Mandatory=$true)][string]$EwdkRoot,[Parameter(Mandatory=$true)][string]$SignToolPath,[switch]$DenyUnload)
 $ErrorActionPreference='Stop'
 $EwdkRoot=[IO.Path]::GetFullPath($EwdkRoot).TrimEnd('\')
 $SignToolPath=[IO.Path]::GetFullPath($SignToolPath)
@@ -13,7 +13,7 @@ $build=Join-Path $tempRoot ('GuardKernelBuild-'+[guid]::NewGuid().ToString('N'))
 $package=Join-Path $tempRoot ('GuardKernelLab-'+[guid]::NewGuid().ToString('N'))
 if ($build -notmatch '^[A-Za-z]:[A-Za-z0-9_ .\\-]+$' -or $PSScriptRoot -notmatch '^[A-Za-z]:[A-Za-z0-9_ .\\-]+$') { throw 'Unsupported shell path characters' }
 New-Item -ItemType Directory -Path $build | Out-Null
-& (Join-Path $PSScriptRoot 'BuildFromEwdk.cmd') $EwdkRoot $build
+& (Join-Path $PSScriptRoot 'BuildFromEwdk.cmd') $EwdkRoot $build $DenyUnload.IsPresent.ToString().ToLowerInvariant()
 if ($LASTEXITCODE -ne 0) { throw ('Kernel build failed; diagnostics preserved: '+$build) }
 $driver=Join-Path $build 'bin\GuardKernelLab.sys'
 if (-not (Test-Path -LiteralPath $driver)) { throw 'Driver output missing' }
@@ -33,5 +33,5 @@ $files=@(Get-ChildItem -LiteralPath $package -File | Sort-Object Name | ForEach-
     [pscustomobject]@{Path=$_.Name;Length=$_.Length;Sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
 })
 if ($files.Count -ne 5) { throw 'Unexpected build outputs' }
-[pscustomobject]@{Version=1;LabOnly=$true;Files=$files} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $package 'manifest.json') -Encoding UTF8
+[pscustomobject]@{Version=2;LabOnly=$true;Experiment=$(if ($DenyUnload) {'DenyUnload'} else {'Lease'});Files=$files} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $package 'manifest.json') -Encoding UTF8
 [pscustomobject]@{Package=$package;BuildRoot=$build;ManifestSha256=(Get-FileHash -LiteralPath (Join-Path $package 'manifest.json') -Algorithm SHA256).Hash}
