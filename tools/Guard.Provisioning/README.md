@@ -5,7 +5,7 @@
 ## Что нужно заранее
 
 - Проверенный HTTPS origin своего Guard relay, совпадающий с публичными pins выпуска. Не брать новый адрес из чужого QR/JSON.
-- Для нового mailbox — обновлённый Guard relay и отдельно настроенный `BOOTSTRAP_ADMIN_TOKEN`, сохранённый в Bitwarden. Это не API-токен Cloudflare. Утилита не меняет секреты Cloudflare; фактическая настройка этого секрета ещё не выполнена.
+- Для нового mailbox — обновлённый Guard relay и отдельно настроенный `BOOTSTRAP_ADMIN_TOKEN`, сохранённый в Bitwarden. Это не API-токен Cloudflare. Утилита не меняет секреты Cloudflare. Первый семейный ящик создан 2026-10-06, после подтверждения bootstrap отключён; для продолжения использовать исходное `family-mailbox.job`, не создавать новый ящик.
 - Отдельный случайный пароль администратора ящика (от 32 печатных ASCII-символов), сначала созданный и сохранённый в Bitwarden. Он не должен совпадать с bootstrap secret. Либо уже действующий mailbox и его административный токен, если используется прежняя команда `publish`.
 - Публичное описание компьютера от `GetDeviceProvisioning` (33) и независимо проверенный SHA-256 его точных UTF-8 байтов. [Guard.Setup](../../src/Guard.Setup/README.md) получает его через проверенный SCM/SYSTEM pipe, сохраняет файл и показывает полный SHA-256. Сам по себе произвольный JSON или его хеш не доказывает, что это нужный компьютер. Окно ещё требует проверки в VM вместе с доверенным установщиком.
 - Существующая приватная папка вне Git на родительском ПК. Файлы создаются без перезаписи, сразу с ACL только текущего пользователя. Утилита отказывает для перенаправленных путей/reparse points и путей внутри Git.
@@ -13,6 +13,22 @@
 ## Команды
 
 Собрать: `dotnet build tools/Guard.Provisioning/Guard.Provisioning.csproj -c Release`.
+
+### Секреты без доступа к Bitwarden
+
+Иван сам сохраняет master copy в Bitwarden; Codex не открывает хранилище и не получает его мастер-пароль. Локальные operational copies находятся вне Git/синхронизации: `%LOCALAPPDATA%\GuardOperator\BOOTSTRAP_ADMIN_TOKEN.dpapi`, `MAILBOX_ADMIN_TOKEN.dpapi`, `SESSION_SECRET.dpapi`. DPAPI CurrentUser имеет отдельное назначение для каждого имени; файлы — с защищённым ACL только текущего пользователя. Смена Windows-профиля требует восстановления из Bitwarden, не смены владельца Guard.
+
+`prepare-mailbox` и `publish-mailbox` дополнительно принимают `--credential-file <абсолютный-путь.dpapi>` вместо ручного ввода. Первая команда принимает только назначение `MAILBOX_ADMIN_TOKEN`, вторая — только `BOOTSTRAP_ADMIN_TOKEN`; открытый текст, чужое назначение, повреждение, широкие ACL и путь внутри Git отклоняются. Значения не передаются аргументами и не печатаются. Строки HTTP остаются в памяти процесса; абсолютного стирания управляемых копий не обещаем.
+
+`scripts/Manage-OperatorSecrets.ps1` (PowerShell 7.6/.NET 10, после Release build) использует тот же DPAPI-код. `Import -Directory <приватная-папка> -HandoffFile <приватный-файл>` импортирует три именованных значения из заметки, не перезаписывает файлы и не удаляет исходник автоматически. Частичный импорт сохраняется для диагностики, не повторяется вслепую. `ConfigureRelay` настраивает только два server secrets строго в Guard Worker и отказывает, если хотя бы один уже существует; это не общий механизм ротации. `DisableBootstrap` предназначен только после подтверждённой выдачи ящика. Изменение секрета создаёт новую версию Worker ([Cloudflare API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/secrets/methods/update/)). Deployment credential никогда не передаётся прикладному endpoint.
+
+Безопасная проверка из нового процесса, без изменений конфигурации и без вывода значений:
+
+```powershell
+pwsh -NoProfile -File scripts/Manage-OperatorSecrets.ps1 -Action Verify -Directory "$env:LOCALAPPDATA\GuardOperator" -MailboxJob "$env:LOCALAPPDATA\GuardOperator\family-mailbox.job"
+```
+
+Она проверяет расшифровку/ACL трёх локальных файлов, namespace/bindings/deployment Guard и пустой служебный poll: правильный mailbox credential → 200, отсутствующий/неверный → 401. Это проверка административного подключения, не шифрованного обмена устройства/телефона и не готовности защиты.
 
 ### Сначала ящик
 

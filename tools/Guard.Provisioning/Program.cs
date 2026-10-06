@@ -1,4 +1,7 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using Guard.Windows.Cryptography;
 
 namespace Guard.Provisioning;
 
@@ -8,18 +11,20 @@ internal static class Program
     {
         try
         {
-            if (args.Length == 4 && args[0] == "prepare-mailbox")
+            if ((args.Length == 4 || args.Length == 6 && args[4] == "--credential-file") && args[0] == "prepare-mailbox")
             {
                 Console.WriteLine("Только родительский ПК. Сначала создайте и сохраните в Bitwarden отдельный случайный пароль ящика (от 32 символов).");
-                Console.Write("Вставьте этот пароль (не API-токен Cloudflare; ввод скрыт): ");
-                MailboxProvisioningJob.Prepare(args[1], args[2], ReadCredential(), args[3], DateTimeOffset.UtcNow);
+                if (args.Length == 4) Console.Write("Вставьте этот пароль (не API-токен Cloudflare; ввод скрыт): ");
+                var credential = args.Length == 6 ? ReadCredentialFile(args[5], "MAILBOX_ADMIN_TOKEN") : ReadCredential();
+                MailboxProvisioningJob.Prepare(args[1], args[2], credential, args[3], DateTimeOffset.UtcNow);
                 Console.WriteLine("Приватное задание ящика сохранено. На сервер ничего не отправлено; master copy оставьте в Bitwarden.");
                 return 0;
             }
-            if (args.Length == 3 && args[0] == "publish-mailbox")
+            if ((args.Length == 3 || args.Length == 5 && args[3] == "--credential-file") && args[0] == "publish-mailbox")
             {
-                Console.Write("Введите отдельный BOOTSTRAP_ADMIN_TOKEN своего Guard relay (не API-токен Cloudflare; ввод скрыт): ");
-                var expires = await MailboxProvisioningJob.PublishAsync(args[1], args[2], ReadCredential(), DateTimeOffset.UtcNow, CancellationToken.None);
+                if (args.Length == 3) Console.Write("Введите отдельный BOOTSTRAP_ADMIN_TOKEN своего Guard relay (не API-токен Cloudflare; ввод скрыт): ");
+                var credential = args.Length == 5 ? ReadCredentialFile(args[4], "BOOTSTRAP_ADMIN_TOKEN") : ReadCredential();
+                var expires = await MailboxProvisioningJob.PublishAsync(args[1], args[2], credential, DateTimeOffset.UtcNow, CancellationToken.None);
                 Console.WriteLine("Сервер подтвердил доступ администратора ящика до " + expires.ToString("u", CultureInfo.InvariantCulture) + ". Это не срок работы Guard.");
                 return 0;
             }
@@ -78,6 +83,7 @@ internal static class Program
             Console.WriteLine("Guard.Provisioning — служебная утилита, только для родительского ПК.");
             Console.WriteLine("prepare-mailbox <доверенный-HTTPS-origin> <новый-mailboxId> <новый-файл-задания-ящика>");
             Console.WriteLine("publish-mailbox <тот-же-доверенный-origin> <файл-задания-ящика>");
+            Console.WriteLine("Для этих двух команд: необязательный --credential-file <приватный-DPAPI-файл>, вместо ручного ввода.");
             Console.WriteLine("prepare <доверенный-HTTPS-origin> <описание.json> <проверенный-SHA256> <mailboxId> <срок-UTC:2027-10-01T00:00:00Z> <новый-файл-задания>");
             Console.WriteLine("publish <тот-же-доверенный-origin> <файл-задания> <новый-файл-профиля>");
             Console.WriteLine("publish-with-mailbox <тот-же-доверенный-origin> <файл-задания-устройства> <файл-задания-ящика> <новый-файл-профиля>");
@@ -102,6 +108,20 @@ internal static class Program
             Console.Error.WriteLine("Сохраните исходные задания: повторяйте ту же publish/activate-команду с ними. Для активации нужно действующее подтверждение Windows. Не заменяйте токен и не используйте другой сервер.");
             return 1;
         }
+    }
+
+    internal static string ReadCredentialFile(string path, string name)
+    {
+        var raw = LocalSystemDpapiDataProtector.ForOperatorCredential(name)
+            .Unprotect(ProvisioningJob.ReadBounded(path, 8192, requirePrivate: true));
+        try
+        {
+            if (raw.Length is < 32 or > 512) throw new InvalidDataException("Credential size.");
+            var value = new UTF8Encoding(false, true).GetString(raw);
+            ProvisioningJob.RequireCredential(value);
+            return value;
+        }
+        finally { CryptographicOperations.ZeroMemory(raw); }
     }
 
     private static string ReadCredential()

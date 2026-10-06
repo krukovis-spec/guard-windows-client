@@ -33,6 +33,7 @@ internal static class ProvisioningChecks
         Directory.CreateDirectory(root);
         try
         {
+            OperatorCredentialChecks(root);
             var guard = new TestGuard(); var paths = new GuardDataPaths(Path.Combine(root, "guest"));
             Directory.CreateDirectory(paths.RootDirectory);
             using var service = new ServiceAuthoritativeStateBoundary(paths,
@@ -185,6 +186,33 @@ internal static class ProvisioningChecks
             Check(!File.Exists(gitJob), "operator secret saved inside Git");
         }
         finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static void OperatorCredentialChecks(string root)
+    {
+        const string name = "BOOTSTRAP_ADMIN_TOKEN";
+        var path = Path.Combine(root, "credential.dpapi");
+        var protector = LocalSystemDpapiDataProtector.ForOperatorCredential(name);
+        var encrypted = protector.Protect(Encoding.UTF8.GetBytes(Admin));
+        ProvisioningJob.SaveNewPrivate(path, encrypted);
+        Check(Guard.Provisioning.Program.ReadCredentialFile(path, name) == Admin, "operator credential roundtrip");
+        Reject(() => Guard.Provisioning.Program.ReadCredentialFile(path, "MAILBOX_ADMIN_TOKEN"));
+        Reject(() => LocalSystemDpapiDataProtector.ForOperatorMailbox().Unprotect(encrypted));
+        Reject(() => LocalSystemDpapiDataProtector.ForOperatorCredential("UNKNOWN"));
+        foreach (var raw in new[] { Encoding.UTF8.GetBytes("123456"), new byte[513], new byte[] { 0xff }.Concat(new byte[40]).ToArray() })
+        {
+            File.WriteAllBytes(path, protector.Protect(raw));
+            Reject(() => Guard.Provisioning.Program.ReadCredentialFile(path, name));
+        }
+        File.WriteAllBytes(path, encrypted[..^1]);
+        Reject(() => Guard.Provisioning.Program.ReadCredentialFile(path, name));
+        File.WriteAllBytes(path, encrypted);
+        var file = new FileInfo(path); var acl = file.GetAccessControl();
+        acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null), FileSystemRights.Read, AccessControlType.Allow));
+        file.SetAccessControl(acl);
+        Reject(() => Guard.Provisioning.Program.ReadCredentialFile(path, name));
+        var git = Path.Combine(root, "credential-git"); Directory.CreateDirectory(Path.Combine(git, ".git"));
+        Reject(() => Guard.Provisioning.Program.ReadCredentialFile(Path.Combine(git, "credential.dpapi"), name));
     }
 
     private static async Task MailboxChecks(string path, string deviceJob)
