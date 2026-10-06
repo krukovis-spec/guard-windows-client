@@ -23,7 +23,12 @@ static const GUID DeviceClass = {0xb512c786, 0x8c8d, 0x4449, {0xb8,0x74,0xe1,0x6
 
 DRIVER_INITIALIZE DriverEntry;
 DRIVER_UNLOAD LabUnload;
+_Dispatch_type_(IRP_MJ_CREATE)
+_Dispatch_type_(IRP_MJ_CLOSE)
+_Dispatch_type_(IRP_MJ_CLEANUP)
+_Dispatch_type_(IRP_MJ_DEVICE_CONTROL)
 DRIVER_DISPATCH LabDispatch;
+static KSTART_ROUTINE ExpiryWorker;
 
 static ULONG MarkerKind(PCUNICODE_STRING image)
 {
@@ -60,7 +65,7 @@ static VOID ProcessChanged(PEPROCESS process, HANDLE processId, PPS_CREATE_NOTIF
     i = MarkerKind(info->ImageFileName);
     if (i == 0 || !NT_SUCCESS(info->CreationStatus)) return;
     ExAcquireFastMutex(&Gate);
-    if (i != 1 || !Armed || KeQueryInterruptTimePrecise(NULL) >= Deadline) {
+    if (i != 1 || !Armed || KeQueryInterruptTime() >= Deadline) {
         info->CreationStatus = STATUS_ACCESS_DENIED;
     } else {
         for (i = 0; i < LAB_PROCESS_LIMIT && Tracked[i] != NULL; ++i) { }
@@ -70,6 +75,7 @@ static VOID ProcessChanged(PEPROCESS process, HANDLE processId, PPS_CREATE_NOTIF
     ExReleaseFastMutex(&Gate);
 }
 
+_Use_decl_annotations_
 static VOID ExpiryWorker(PVOID context)
 {
     LARGE_INTEGER delay;
@@ -79,7 +85,7 @@ static VOID ExpiryWorker(PVOID context)
     while (KeWaitForSingleObject(&StopEvent, Executive, KernelMode, FALSE, &delay) == STATUS_TIMEOUT) {
         ULONG i, count = 0;
         ExAcquireFastMutex(&Gate);
-        if (Armed && KeQueryInterruptTimePrecise(NULL) >= Deadline) {
+        if (Armed && KeQueryInterruptTime() >= Deadline) {
             for (i = 0; i < LAB_PROCESS_LIMIT; ++i) {
                 if (Tracked[i] != NULL) { ObReferenceObject(Tracked[i]); expired[count++] = Tracked[i]; }
             }
@@ -117,7 +123,9 @@ NTSTATUS LabDispatch(PDEVICE_OBJECT device, PIRP irp)
         ExAcquireFastMutex(&Gate);
         if (Armed) status = STATUS_ACCESS_DENIED;
         else {
-            Deadline = KeQueryInterruptTimePrecise(NULL) + LAB_LEASE_TICKS;
+            // Tick precision is sufficient for a 20s lease and a 100ms worker interval.
+            // Unlike the Precise API, this call has no required output pointer.
+            Deadline = KeQueryInterruptTime() + LAB_LEASE_TICKS;
             Armed = TRUE;
             status = STATUS_SUCCESS;
         }
@@ -149,12 +157,15 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING registryPath)
     UNICODE_STRING deviceName = RTL_CONSTANT_STRING(L"\\Device\\GuardKernelLab");
     UNICODE_STRING sddl = RTL_CONSTANT_STRING(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
     OBJECT_ATTRIBUTES attributes;
-    ULONG i;
     NTSTATUS status;
     UNREFERENCED_PARAMETER(registryPath);
     ExInitializeFastMutex(&Gate);
     KeInitializeEvent(&StopEvent, NotificationEvent, FALSE);
-    for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; ++i) driver->MajorFunction[i] = LabDispatch;
+    // Other requests retain the I/O manager's default invalid-request handler.
+    driver->MajorFunction[IRP_MJ_CREATE] = LabDispatch;
+    driver->MajorFunction[IRP_MJ_CLOSE] = LabDispatch;
+    driver->MajorFunction[IRP_MJ_CLEANUP] = LabDispatch;
+    driver->MajorFunction[IRP_MJ_DEVICE_CONTROL] = LabDispatch;
     status = IoCreateDeviceSecure(driver, 0, &deviceName, LAB_DEVICE_TYPE,
         FILE_DEVICE_SECURE_OPEN, FALSE, &sddl, &DeviceClass, &LabDevice);
     if (!NT_SUCCESS(status)) return status;
