@@ -1,5 +1,13 @@
 # Worklog
 
+## 2026-10-06 — corrected kernel lease VM experiment PASS; admin bypass remains
+
+- Ivan said ready and approved the VM-only elevated runner. Exact source `bd95978`, package manifest `46F087471B22C59018E533C1410DA5034085C5DF823942C9898B5F920EE2F508`. Report `LOCALAPPDATA/GuardV2Lab/Access/kernel-lease-02399e1db8c6496e8ff005fde72c7e38.json`, completed 11:31:46 UTC; actual child exit 0, Status PASS. No code changes or new checkpoint/dependency in this turn.
+- Real observations: both markers initially denied; one-shot arm accepted, repeated arm rejected and second marker denied. Allowed running marker terminated after 20.606s with C0000022 despite observed 30-minute wall-clock rollback and no Guard user-mode service. Post-expiry launches denied; unload/reload resets to deny; a subsequent pre-boot arm is not restored after reboot. These are narrow marker-only results, not a production timing/identity guarantee.
+- Administrator unload deliberately measured BYPASS_CONFIRMED: denied marker ran after driver stop. M1Accepted=false; full system remains not ready. Sleep/resume NOT_RUN; exact-image identity, phone-authorized kernel grants, protected boot/signing and tamper resistance remain gates. Next M1 work must address these boundaries, not repeat solved marker TTL or substitute standard-user-only protection without agreement.
+- Recovery BOOT_VERIFIED in a fresh guest session: Secure Boot true, test-signing false, BitLocker unchanged Off, no Guard/data/lab driver. Own snapshot `1e200f05-3c2a-40b1-ab6f-fffa1ffc4625` removed; original clean snapshot preserved. No lab process/UAC remains pending. Existing tested TEMP package retained for scoped follow-up; host enforcement/phone/cloud untouched.
+- PROJECT_ONLY via wiki-memory/project-memory: updated canonical plan/capsule/lab README with actual evidence and remaining boundary. Ponytail reused the same compiled package and bounded experiment; prior Release/29 v2/45 legacy and native analyzer/safety results unchanged, not rerun for documentation-only edits. Connection journal unchanged; M7 visual pass remains queued.
+
 ## 2026-10-06 — recovery verified; certificate/timer defects fixed, corrected VM run awaits approval
 
 - Original recovery `kernel-lease-937ba1ffb65347faaccd0da04f71b4f1.json` resumed at 07:55 UTC and finished BOOT_VERIFIED; original own snapshot removed. New `kernel-lease-b844471d9cbd481d95bae31e6c246a79.json` localized access denied to TrustedPublisher import (line 80). Removed this unnecessary PnP trust step from the non-PnP test-mode probe; Root retained only for explicit Authenticode validation. No broader rights/host certificates or helper service.

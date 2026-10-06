@@ -60,7 +60,21 @@ Authenticode компилятора, MSBuild и SignTool проверен: Micro
 PE x64/Native, Integrity Check и NX подтверждены. В первой сборке отсутствовал kernel macro
 `PROCESS_TERMINATE`; используется его документированная минимальная маска `0x0001`, не ALL_ACCESS.
 
-Живые опыты 2026-10-06 пока **не прошли**:
+Последний живой опыт 2026-10-06 **PASS**, но строгая защита M1 **НЕ ПРИНЯТА**:
+
+- Source `bd95978`; `Access/kernel-lease-02399e1db8c6496e8ff005fde72c7e38.json`,
+  11:31:46 UTC, реальный exit 0. Начальный запрет, однократная выдача, отказ повторной выдачи
+  и запрет второго marker подтверждены. Первый работающий marker завершён через **20,606 с**
+  с `C0000022`, без Guard user-mode службы и при наблюдаемом переводе часов назад на 30 минут.
+- После срока повторный запуск запрещён; reload и reboot не восстанавливают lease.
+- `AdministratorUnload=BYPASS_CONFIRMED`: администратор выгрузил драйвер и запустил запрещённый
+  marker. Это не защита от администратора; `M1Accepted=false`, sleep/resume `NOT_RUN`.
+- `SnapshotRecovery=BOOT_VERIFIED`: Secure Boot ON/test-signing OFF, Guard/data/lab driver
+  отсутствуют, исходный BitLocker Off не изменён. Собственный snapshot удалён, clean snapshot сохранён.
+- Следующий этап — граница anti-tamper/boot, exact image identity, доверенные kernel grants,
+  сон/возобновление и выпускная подпись. Закрытый marker-only TTL не повторять без нового основания.
+
+Предыдущие неуспешные опыты и исправления:
 
 - Исходный `937ba1ff…`: recovery завершён после подтверждения UAC, `BOOT_VERIFIED`, собственный
   snapshot удалён. Повторное присвоение даже прежнего Secure Boot template запрещено при vTPM;
@@ -75,10 +89,10 @@ PE x64/Native, Integrity Check и NX подтверждены. В первой �
   анализом crash dump. Две проверки регрессии добавлены в существующий safety harness.
 - Оба повторных опыта восстановлены: `BOOT_VERIFIED`, Secure Boot ON, test-signing OFF, Guard и lab
   driver отсутствуют, собственные snapshot удалены. Исходный clean snapshot сохранён.
-- Исправленный таймер ещё **не запускался**: Windows вернула отмену следующего UAC до старта runner.
-  Не считать это PASS. Финальная сборка после `/analyze` исправлений готова для следующего VM опыта.
+- Первое приглашение UAC после исправления вернуло отмену до старта runner. После нового «готов»
+  Иван подтвердил запуск; исправленный таймер и финальная `/analyze` сборка проверены выше.
 
-Пакет следующего опыта: `%TEMP%\GuardKernelLab-21749175cd46412da686ae05f0f2b762`.
+Испытанный пакет (сохранён для следующего ограниченного этапа): `%TEMP%\GuardKernelLab-21749175cd46412da686ae05f0f2b762`.
 Manifest SHA-256: `46F087471B22C59018E533C1410DA5034085C5DF823942C9898B5F920EE2F508`.
 Запуск — существующий `Invoke-KernelLeaseLab.ps1` с этими `-PackageRoot` и `-ManifestSha256`,
 из повышенного PowerShell после подтверждения Ивана. Host Guard/driver не запускать.
