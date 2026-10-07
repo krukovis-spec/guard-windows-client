@@ -1,12 +1,23 @@
 param([switch]$PolicySigning)
 $ErrorActionPreference = 'Stop'
 if ($PolicySigning -and $PSVersionTable.PSVersion.Major -lt 7) { throw 'Custom-content PKCS#7 self-test requires the installed PowerShell 7 runtime' }
-foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1', 'LabPolicySigning.ps1', 'MarkerProcess.ps1', 'Invoke-AppLockerLab.ps1', 'Build-ServiceLabPackage.ps1', 'Test-ServiceBootstrap.ps1', 'Invoke-ServiceBootstrapLab.ps1', 'kernel/Test-KernelLease.ps1', 'kernel/Invoke-KernelLeaseLab.ps1', 'kernel/Build-KernelLabPackage.ps1')) {
+foreach ($file in @('Get-GuestBaseline.ps1', 'Test-LabSafety.ps1', 'Test-AppLockerFeasibility.ps1', 'Test-AppControlFeasibility.ps1', 'Test-SignedAppControlFeasibility.ps1', 'LabPolicySigning.ps1', 'MarkerProcess.ps1', 'Invoke-AppLockerLab.ps1', 'Build-ServiceLabPackage.ps1', 'Test-ServiceBootstrap.ps1', 'Invoke-ServiceBootstrapLab.ps1', 'Continue-PhoneEnrollmentLab.ps1', 'Import-DeviceProfileLab.ps1', 'kernel/Test-KernelLease.ps1', 'kernel/Invoke-KernelLeaseLab.ps1', 'kernel/Build-KernelLabPackage.ps1')) {
     $tokens = $null
     $parseErrors = $null
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
     if ($parseErrors.Count) { throw ('Parse failure: ' + $file) }
 }
+$serviceAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Test-ServiceBootstrap.ps1'),[ref]$null,[ref]$null)
+$pathValidator=$serviceAst.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-ServiceLabPath'},$false)
+if ($null -eq $pathValidator) { throw 'Missing service manifest path guard' }
+. ([scriptblock]::Create($pathValidator.Extent.Text))
+foreach ($valid in @('service\Guard.Service.exe','probe\Guard.Windows.Ipc.Tests.exe','setup\Guard.Setup.exe','setup\ru\PresentationCore.resources.dll')) {
+    if (-not (Test-ServiceLabPath $valid $true)) { throw 'Valid service manifest path refused' }
+}
+foreach ($invalid in @('setup\..\guard.exe','setup\ru\..\guard.exe','setup\ru\foreign.exe','setup\xx\file.resources.dll','C:\Guard.Service.exe','service\..','service\nested\Guard.Service.exe')) {
+    if (Test-ServiceLabPath $invalid $true) { throw 'Unsafe service manifest path accepted' }
+}
+if (Test-ServiceLabPath 'setup\Guard.Setup.exe' $false) { throw 'Setup unexpectedly accepted outside phone mode' }
 # The non-PnP kernel probe needs only Root for its explicit Authenticode validation;
 # do not reintroduce the unnecessary TrustedPublisher import that the guest rejects.
 $kernelProbeAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'kernel/Test-KernelLease.ps1'),[ref]$null,[ref]$null)
@@ -92,6 +103,21 @@ foreach ($probe in @('Test-ServiceBootstrap.ps1','kernel/Test-KernelLease.ps1'))
     try {
         & (Join-Path $PSScriptRoot $probe) -ExpectedUuid ([guid]::Empty) -HostComputerName $env:COMPUTERNAME -PackageRoot 'not-used' -ManifestSha256 'not-used'
         throw 'Service/kernel test host guard did not reject execution'
+    } catch {
+        if ($_.Exception.Message -ne 'This probe can run only in the validated disposable Hyper-V guest.') { throw }
+    }
+}
+foreach ($phoneMode in @($false, $true)) {
+    try {
+        # Same positional bool binding as PowerShell Direct -FilePath/-ArgumentList.
+        & (Join-Path $PSScriptRoot 'Test-ServiceBootstrap.ps1') ([guid]::Empty) $env:COMPUTERNAME 'not-used' 'not-used' $phoneMode
+        throw 'Phone preparation did not refuse host'
+    } catch {
+        if ($_.Exception.Message -ne 'This probe can run only in the validated disposable Hyper-V guest.') { throw }
+    }
+    try {
+        & (Join-Path $PSScriptRoot 'Import-DeviceProfileLab.ps1') -ExpectedUuid ([guid]::Empty) -HostComputerName $env:COMPUTERNAME -PackageRoot 'not-used' -ProfileSha256 'not-used' -SystemStage:$phoneMode
+        throw 'Device profile import did not refuse host'
     } catch {
         if ($_.Exception.Message -ne 'This probe can run only in the validated disposable Hyper-V guest.') { throw }
     }

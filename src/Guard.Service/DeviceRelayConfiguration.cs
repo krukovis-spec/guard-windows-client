@@ -156,6 +156,8 @@ internal sealed class DeviceRelayConfigurationStore(GuardDataPaths paths, IState
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!service.IsAcquired) throw new InvalidOperationException("Profile import requires the service writer lease.");
+        // A cold SCM import holds the leases but has not loaded/validated the persisted identity yet.
+        await service.LoadPristineAsync(cancellationToken).ConfigureAwait(false);
         var handoff = new ProtectedServiceRecord(paths.DeviceRelayInstallFile, paths.DeviceRelayInstallPendingFile,
             new DeviceRelayProfileEnvelope(service.Identity.Encryption), boundary, MaximumPlaintextBytes, DeviceRelayProfileEnvelope.MaximumFileBytes);
         var plaintext = handoff.Read();

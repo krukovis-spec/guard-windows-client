@@ -58,6 +58,7 @@ internal static class EnrollmentConfigurationChecks
         Directory.CreateDirectory(paths.RootDirectory);
         try
         {
+            await CheckColdImportAsync(root, trust);
             var guard = new TestGuard();
             var identityStore = new DeviceIdentityStore(paths, new LocalSystemDpapiDataProtector(DeviceIdentityStore.Purpose, true), guard);
             using var boundary = new ServiceAuthoritativeStateBoundary(paths,
@@ -237,6 +238,36 @@ internal static class EnrollmentConfigurationChecks
         }
         finally { Directory.Delete(root, recursive: true); }
     }
+    private static async Task CheckColdImportAsync(string root, EnrollmentDeploymentTrust trust)
+    {
+        var paths = new GuardDataPaths(Path.Combine(root, "cold-import"));
+        Directory.CreateDirectory(paths.RootDirectory);
+        var guard = new TestGuard();
+        ServiceAuthoritativeStateBoundary Open() => new(paths,
+            new LocalSystemDpapiDataProtector(LocalSystemDpapiDataProtector.DefaultPurpose, true), guard,
+            new DeviceIdentityStore(paths, new LocalSystemDpapiDataProtector(DeviceIdentityStore.Purpose, true), guard),
+            () => DeviceIdentityChecks.OpenRelay(paths));
+        string deviceId;
+        using (var initial = Open())
+        {
+            await initial.AcquireAsync(default); await initial.InitializeNewAsync(default);
+            await initial.LoadAsync(default); deviceId = initial.Identity.DeviceId;
+            var profile = JsonSerializer.SerializeToUtf8Bytes(Profile(initial.Identity));
+            try { File.WriteAllBytes(paths.DeviceRelayInstallFile, new DeviceRelayProfileEnvelope(initial.Identity.Encryption).Protect(profile)); }
+            finally { CryptographicOperations.ZeroMemory(profile); }
+        }
+        using var cold = Open();
+        await cold.AcquireAsync(default);
+        Throws(() => _ = cold.Identity); // Same startup order as the real SCM import, no prior status query.
+        var store = new DeviceRelayConfigurationStore(paths,
+            new LocalSystemDpapiDataProtector(DeviceRelayConfigurationStore.Purpose, true), guard);
+        await store.ImportStagedAsync(trust, cold, Now, default);
+        var state = await cold.LoadAsync(default);
+        Check(cold.Identity.DeviceId == deviceId && state.Version == 0 && !state.IsProvisioned &&
+            !File.Exists(paths.DeviceRelayInstallFile), "cold import replaced identity/state or retained staging");
+        _ = store.Load(trust, cold.Identity, state, Now);
+    }
+
     private static Dictionary<string, object> Profile(DeviceIdentity identity) => new(StringComparer.Ordinal) {
         ["version"] = 1, ["role"] = "device", ["relayOrigin"] = Origin, ["deviceId"] = identity.DeviceId,
         ["signingKeyId"] = identity.SigningKeyId, ["encryptionKeyId"] = identity.EncryptionKeyId,
