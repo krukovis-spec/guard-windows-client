@@ -31,7 +31,17 @@ class RealDeviceSecurityTest {
         try {
             val challenge = GuardWire.sha256(suffix.toByteArray(Charsets.US_ASCII))
             val approval = AndroidApprovalKeyStore(approvalAlias)
-            val first = approval.loadOrEnroll(challenge)
+            val first = try { approval.loadOrEnroll(challenge) } catch (failure: IllegalStateException) {
+                // Only non-secret policy facts from our fresh test alias; never key/certificate bytes.
+                val key = keystore.getKey(approvalAlias, null) as? java.security.PrivateKey ?: throw failure
+                val info = java.security.KeyFactory.getInstance("EC", "AndroidKeyStore")
+                    .getKeySpec(key, android.security.keystore.KeyInfo::class.java)
+                throw AssertionError("Approval policy facts: securityLevel=${info.securityLevel}, size=${info.keySize}, " +
+                    "origin=${info.origin}, purposes=${info.purposes}, digests=${info.digests.joinToString()}, " +
+                    "authRequired=${info.isUserAuthenticationRequired}, duration=${info.userAuthenticationValidityDurationSeconds}, " +
+                    "authType=${info.userAuthenticationType}, hardwareAuth=${info.isUserAuthenticationRequirementEnforcedBySecureHardware}, " +
+                    "invalidateOnEnrollment=${info.isInvalidatedByBiometricEnrollment}, onBody=${info.isUserAuthenticationValidWhileOnBody}", failure)
+            }
             val second = AndroidApprovalKeyStore(approvalAlias).loadOrEnroll(challenge)
             assertArrayEquals(first.publicKeySpki, second.publicKeySpki)
             assertTrue(first.certificateChain.size in 2..8)

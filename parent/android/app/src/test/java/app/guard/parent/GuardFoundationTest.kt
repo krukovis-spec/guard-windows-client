@@ -94,6 +94,14 @@ class GuardFoundationTest {
         assertThrows(SecurityException::class.java) { loader.load("Abcd_1234-xyz.5678") }
     }
 
+    @Test fun `per operation duration accepts both providers but no cached or unknown window`() {
+        assertTrue(BiometricPolicy.isPerOperationDuration(-1))
+        assertTrue(BiometricPolicy.isPerOperationDuration(0))
+        listOf(Int.MIN_VALUE, -2, 1, 30, Int.MAX_VALUE).forEach {
+            assertFalse(BiometricPolicy.isPerOperationDuration(it))
+        }
+    }
+
     @Test fun `biometric source excludes device credential`() {
         assertEquals(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG, BiometricPolicy.allowedAuthenticators())
         val startDirectory = System.getProperty("user.dir") ?: error("user.dir unavailable")
