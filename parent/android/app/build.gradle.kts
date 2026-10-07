@@ -29,6 +29,11 @@ android {
     sourceSets.getByName("test").resources.directories.add("../../../protocol/test-vectors")
 }
 
+// A release without a fixed relay cannot enroll; do not distribute an unconfigured APK.
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    doFirst { require(enrollmentRelay.isNotEmpty()) { "Release requires guardEnrollmentRelay" } }
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
