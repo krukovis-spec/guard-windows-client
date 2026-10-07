@@ -13,6 +13,8 @@ public partial class SetupWindow
     private NativeSetupSnapshot? _displayed;
     private EnrollmentView? _enrollmentView;
     private bool _beginAttempted, _enrollmentBusy, _pollStopped, _clockInvalid, _polling;
+    private Task? _backgroundPoll;
+    private bool _waitingForPoll;
     private DateTimeOffset _lastUiTime = DateTimeOffset.UtcNow, _nextPoll;
     private readonly DispatcherTimer _enrollmentTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
@@ -30,12 +32,13 @@ public partial class SetupWindow
 
     private async void BeginEnrollment_Click(object sender, RoutedEventArgs e)
     {
+        if (!await WaitForBackgroundPollAsync()) return;
         if (_beginAttempted || _operation != null || _inspection?.CanBeginEnrollment != true || !IsActive) return;
         _beginAttempted = true; // A lost first reply must not be retried from this window.
         await RunEnrollmentAsync(async token =>
         {
             EnrollmentStatus.Text = "Начинаем привязку родительского телефона…";
-            var session = await NativeSetupSession.BeginAsync(token);
+            var session = await _backend.BeginAsync(token);
             if (_closed) { await session.DisposeAsync(); return; }
             _enrollment = session; _enrollmentTimer.Start();
             await session.RefreshAsync(token);
@@ -44,6 +47,7 @@ public partial class SetupWindow
 
     private async void RefreshEnrollment_Click(object sender, RoutedEventArgs e)
     {
+        if (!await WaitForBackgroundPollAsync()) return;
         if (_operation != null || _enrollment == null || _enrollmentView?.CanRefresh != true || _clockInvalid || !IsActive) return;
         _pollStopped = false;
         await RunEnrollmentAsync(token => _enrollment.RefreshAsync(token));
@@ -52,7 +56,8 @@ public partial class SetupWindow
     private async void ConfirmEnrollment_Click(object sender, RoutedEventArgs e)
     {
         var compared = _displayed; // Pin the exact screen, not a later asynchronous response.
-        if (_operation != null || _enrollment == null || compared == null || Compared.IsChecked != true ||
+        if (!await WaitForBackgroundPollAsync()) return;
+        if (_operation != null || _enrollment == null || compared == null || compared != _displayed || Compared.IsChecked != true ||
             _enrollmentView?.CanCompare != true || _clockInvalid || !IsActive) return;
         await RunEnrollmentAsync(token => _enrollment.ConfirmComparedAsync(compared.StateVersion, compared.ClaimHash!, token));
     }
@@ -60,7 +65,9 @@ public partial class SetupWindow
     private async void CancelEnrollment_Click(object sender, RoutedEventArgs e)
     {
         var displayed = _displayed;
-        if (_operation != null || _enrollment == null || displayed == null || _enrollmentView?.CanCancel != true || _clockInvalid || !IsActive) return;
+        if (!await WaitForBackgroundPollAsync()) return;
+        if (_operation != null || _enrollment == null || displayed == null || displayed != _displayed ||
+            _enrollmentView?.CanCancel != true || _clockInvalid || !IsActive) return;
         // This clearly named button cancels only the live unconfirmed attempt, not protection or an owner.
         await RunEnrollmentAsync(token => _enrollment.CancelAsync(displayed.StateVersion, token));
     }
@@ -71,9 +78,29 @@ public partial class SetupWindow
     {
         if (_closed || _enrollment == null) return;
         if (!TryRenderEnrollment()) return;
-        if (_operation == null && IsActive && !_pollStopped && !_clockInvalid && _enrollmentView?.AutoRefresh == true &&
+        if (_operation == null && !_waitingForPoll && IsActive && !_pollStopped && !_clockInvalid && _enrollmentView?.AutoRefresh == true &&
             DateTimeOffset.UtcNow >= _nextPoll)
-            await RunEnrollmentAsync(token => _enrollment.RefreshAsync(token), polling: true);
+        {
+            _backgroundPoll = RunEnrollmentAsync(token => _enrollment.RefreshAsync(token), polling: true);
+            try { await _backgroundPoll; }
+            finally { _backgroundPoll = null; }
+        }
+    }
+
+    // Keep buttons stable during automatic reads. An explicit click queues once behind
+    // the current read, then the handler rechecks its authority/screen preconditions.
+    private async Task<bool> WaitForBackgroundPollAsync()
+    {
+        if (_closed || _waitingForPoll) return false;
+        var pending = _backgroundPoll;
+        if (pending == null) return true;
+        _waitingForPoll = true; UpdateMainControls(); UpdateEnrollmentControls();
+        try { await pending; return !_closed; }
+        finally
+        {
+            _waitingForPoll = false;
+            if (!_closed) { UpdateMainControls(); UpdateEnrollmentControls(); }
+        }
     }
 
     private async Task RunEnrollmentAsync(Func<CancellationToken, Task> action, bool polling = false)
@@ -166,7 +193,8 @@ public partial class SetupWindow
     {
         // Checked/Unchecked may run during InitializeComponent.
         if (BeginEnrollment == null || ConfirmEnrollment == null) return;
-        var available = !_closed && !_clockInvalid && _operation == null && !_enrollmentBusy && IsActive;
+        var available = !_closed && !_clockInvalid && !_waitingForPoll &&
+            (_operation == null || _polling) && (!_enrollmentBusy || _polling) && IsActive;
         BeginEnrollment.IsEnabled = available && !_beginAttempted && _inspection?.CanBeginEnrollment == true;
         RefreshEnrollment.IsEnabled = available && _enrollmentView?.CanRefresh == true;
         CancelEnrollment.IsEnabled = available && _displayed != null && _enrollmentView?.CanCancel == true;

@@ -9,9 +9,11 @@ public partial class SetupWindow : Window
     private CancellationTokenSource? _operation;
     private SetupInspection? _inspection;
     private bool _closed;
+    private readonly ISetupBackend _backend;
 
-    public SetupWindow()
+    internal SetupWindow(ISetupBackend backend)
     {
+        _backend = backend;
         InitializeComponent();
         Protection.Text = SetupInspection.ProtectionNotice;
         InitializeEnrollment();
@@ -19,13 +21,14 @@ public partial class SetupWindow : Window
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
+        if (!await WaitForBackgroundPollAsync()) return;
         if (_operation != null) return;
         _inspection = null; Facts.ItemsSource = null; CheckedAt.Text = "";
         Digest.Clear(); ExportStatus.Text = "";
         await RunAsync(async token =>
         {
             Status.Text = "Проверяем установленную службу Guard…";
-            var inspection = await SetupInspection.ReadAsync(token);
+            var inspection = await _backend.InspectAsync(token);
             token.ThrowIfCancellationRequested();
             if (_closed) return;
             _inspection = inspection; Facts.ItemsSource = inspection.Lines.Where(line => line.Length != 0);
@@ -37,12 +40,13 @@ public partial class SetupWindow : Window
 
     private async void Export_Click(object sender, RoutedEventArgs e)
     {
+        if (!await WaitForBackgroundPollAsync()) return;
         if (_operation != null || _inspection?.CanExport != true) return;
         Digest.Clear(); ExportStatus.Text = "";
         await RunAsync(async token =>
         {
             Status.Text = "Читаем и проверяем описание компьютера…";
-            var descriptor = await SetupInspection.ReadDescriptorAsync(token);
+            var descriptor = await _backend.DescriptorAsync(token);
             token.ThrowIfCancellationRequested();
             if (_closed) return;
             var dialog = new SaveFileDialog { Title = "Сохранить новое описание компьютера", FileName = "guard-device.json",
@@ -61,12 +65,13 @@ public partial class SetupWindow : Window
 
     private async void ExportActivation_Click(object sender, RoutedEventArgs e)
     {
+        if (!await WaitForBackgroundPollAsync()) return;
         if (_operation != null || _inspection?.Status.IsProvisioned != true) return;
         Digest.Clear(); ExportStatus.Text = "";
         await RunAsync(async token =>
         {
             Status.Text = "Читаем подписанное подтверждение привязки…";
-            var confirmation = await SetupInspection.ReadActivationConfirmationAsync(token);
+            var confirmation = await _backend.ActivationAsync(token);
             token.ThrowIfCancellationRequested();
             if (_closed) return;
             var dialog = new SaveFileDialog { Title = "Сохранить подтверждение привязки", FileName = "guard-native.guard-proof",
@@ -88,7 +93,8 @@ public partial class SetupWindow : Window
     private async Task RunAsync(Func<CancellationToken, Task> action)
     {
         using var operation = new CancellationTokenSource();
-        _operation = operation; Refresh.IsEnabled = Export.IsEnabled = ExportActivation.IsEnabled = false; Cancel.IsEnabled = true;
+        _operation = operation;
+        UpdateMainControls();
         UpdateEnrollmentControls();
         try { await action(operation.Token); }
         catch (Exception error)
@@ -102,11 +108,19 @@ public partial class SetupWindow : Window
         finally
         {
             _operation = null;
-            if (!_closed) { Refresh.IsEnabled = true; Cancel.IsEnabled = false; Export.IsEnabled = _inspection?.CanExport == true;
-                ExportActivation.IsEnabled = _inspection?.Status.IsProvisioned == true; UpdateEnrollmentControls(); }
+            if (!_closed) { UpdateMainControls(); UpdateEnrollmentControls(); }
         }
     }
 
-    private void Cancel_Click(object sender, RoutedEventArgs e) => _operation?.Cancel();
+    private void UpdateMainControls()
+    {
+        var busy = _waitingForPoll || _operation != null && !_polling;
+        Refresh.IsEnabled = !_closed && !busy;
+        Cancel.IsEnabled = !_closed && _operation != null && !_polling;
+        Export.IsEnabled = !_closed && !busy && _inspection?.CanExport == true;
+        ExportActivation.IsEnabled = !_closed && !busy && _inspection?.Status.IsProvisioned == true;
+    }
+
+    private void Cancel_Click(object sender, RoutedEventArgs e) { if (!_polling) _operation?.Cancel(); }
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 }
