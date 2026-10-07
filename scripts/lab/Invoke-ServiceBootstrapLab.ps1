@@ -2,7 +2,8 @@
 #requires -RunAsAdministrator
 param(
     [Parameter(Mandatory=$true)][string]$PackageRoot,
-    [Parameter(Mandatory=$true)][string]$ManifestSha256
+    [Parameter(Mandatory=$true)][string]$ManifestSha256,
+    [switch]$KeepForPhone
 )
 $ErrorActionPreference = 'Stop'
 $vmName = 'GuardV2-Lab-20260930'
@@ -105,8 +106,15 @@ try {
     } -ArgumentList $biosGuid,$guestPackage
     foreach ($item in Get-ChildItem -LiteralPath $PackageRoot) { Copy-Item -LiteralPath $item.FullName -Destination $guestPackage -Recurse -ToSession $session }
     $phase = 'service-bootstrap-and-restart'
-    $report.Experiment = Invoke-Command -Session $session -FilePath (Join-Path $PSScriptRoot 'Test-ServiceBootstrap.ps1') -ArgumentList $biosGuid,$env:COMPUTERNAME,$guestPackage,$ManifestSha256
+    $report.Experiment = Invoke-Command -Session $session -FilePath (Join-Path $PSScriptRoot 'Test-ServiceBootstrap.ps1') -ArgumentList $biosGuid,$env:COMPUTERNAME,$guestPackage,$ManifestSha256,([bool]$KeepForPhone)
     if ($report.Experiment.Status -ne 'PASS') { throw 'Guest experiment did not pass' }
+    if ($KeepForPhone) {
+        $export = Join-Path $accessRoot ('phone-device-' + $runId + '.json')
+        if (Test-Path -LiteralPath $export) { throw 'Public export already exists' }
+        Copy-Item -FromSession $session -LiteralPath (Join-Path $guestPackage 'device.json') -Destination $export
+        if ((Get-FileHash -LiteralPath $export -Algorithm SHA256).Hash -cne $report.Experiment.AfterRestart.descriptorSha256) { throw 'Descriptor transfer mismatch' }
+        $report.PhonePreparation = [ordered]@{DescriptorFile=$export;GuestPackage=$guestPackage;SnapshotName=$snapshot.Name;ProfileImported=$false}
+    }
     $report.Status = 'PASS'
 } catch {
     $report.Status = 'FAIL'; $report.FailurePhase = $phase
@@ -115,7 +123,11 @@ try {
     $report.Description = $_.Exception.Message
 } finally {
     if ($session) { Remove-PSSession -Session $session -ErrorAction SilentlyContinue; $session = $null }
-    if ($changedGuest -and $snapshot) {
+    if ($KeepForPhone -and $report.Status -eq 'PASS' -and $report.PhonePreparation) {
+        # Explicit lab handoff only: retain this identity and its rollback snapshot for the physical phone.
+        # Any failed preparation still takes the original unconditional recovery path below.
+        $report.Status = 'PHONE_PREPARED'; $report.SnapshotRecovery = 'RETAINED_FOR_PHONE'
+    } elseif ($changedGuest -and $snapshot) {
         try {
             $vm = Get-PinnedVM
             if ($vm.State -ne 'Off') {
@@ -143,4 +155,5 @@ try {
     $report.CompletedAtUtc = [datetime]::UtcNow.ToString('o')
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $resultPath -Encoding UTF8
 }
-if ($report.Status -eq 'PASS' -and $report.SnapshotRecovery -eq 'BOOT_VERIFIED') { exit 0 } else { exit 1 }
+if (($report.Status -eq 'PASS' -and $report.SnapshotRecovery -eq 'BOOT_VERIFIED') -or
+    ($KeepForPhone -and $report.Status -eq 'PHONE_PREPARED' -and $report.SnapshotRecovery -eq 'RETAINED_FOR_PHONE')) { exit 0 } else { exit 1 }

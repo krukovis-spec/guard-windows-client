@@ -2,9 +2,15 @@ param(
     [Parameter(Mandatory=$true)][guid]$ExpectedUuid,
     [Parameter(Mandatory=$true)][string]$HostComputerName,
     [Parameter(Mandatory=$true)][string]$PackageRoot,
-    [Parameter(Mandatory=$true)][string]$ManifestSha256
+    [Parameter(Mandatory=$true)][string]$ManifestSha256,
+    [bool]$ExportForPhone = $false
 )
 $ErrorActionPreference = 'Stop'
+function Test-ServiceLabPath([string]$Path, [bool]$Phone) {
+    ($Path -cmatch '^(service|probe)\\[A-Za-z0-9_-][A-Za-z0-9_.-]*$') -or
+        ($Phone -and ($Path -cmatch '^setup\\[A-Za-z0-9_-][A-Za-z0-9_.-]*$' -or
+            $Path -cmatch '^setup\\(cs|de|es|fr|it|ja|ko|pl|pt-BR|ru|tr|zh-Hans|zh-Hant)\\[A-Za-z0-9_-][A-Za-z0-9_.-]*\.resources\.dll$'))
+}
 $machine = Get-CimInstance Win32_ComputerSystem
 $product = Get-CimInstance Win32_ComputerSystemProduct
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -30,8 +36,9 @@ if ($manifest.Version -ne 1 -or $manifest.LabOnly -ne $true -or $manifest.Files.
 $expectedOrigin = if ($manifest.PSObject.Properties.Name -contains 'ExpectedRelayOrigin') { $manifest.ExpectedRelayOrigin } else { 'https://guard-lab.invalid' }
 if ($expectedOrigin -cnotin @('https://guard-lab.invalid', 'https://guard-relay.voicepaste.workers.dev')) { throw 'Unexpected lab relay origin' }
 $expected = @{}
+if (@(Get-ChildItem -LiteralPath $PackageRoot -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Redirected lab payload' }
 foreach ($entry in $manifest.Files) {
-    if ($entry.Path -notmatch '^(service|probe)\\[A-Za-z0-9_.-]+$' -or $expected.ContainsKey($entry.Path) -or
+    if (-not (Test-ServiceLabPath $entry.Path ([bool]$ExportForPhone)) -or $expected.ContainsKey($entry.Path) -or
         $entry.Sha256 -notmatch '^[A-F0-9]{64}$' -or $entry.Length -le 0) { throw 'Invalid lab file entry' }
     $expected[$entry.Path] = $true
     $file = Get-Item -LiteralPath (Join-Path $PackageRoot $entry.Path)
@@ -46,6 +53,9 @@ foreach ($folder in @($PackageRoot, (Join-Path $PackageRoot 'service'), (Join-Pa
 foreach ($required in @('service\Guard.Service.exe','probe\Guard.Windows.Ipc.Tests.exe')) {
     if (-not $expected.ContainsKey($required)) { throw 'Lab entry point missing' }
 }
+if ($ExportForPhone -and ($expectedOrigin -cne 'https://guard-relay.voicepaste.workers.dev' -or
+    -not $expected.ContainsKey('setup\Guard.Setup.exe'))) { throw 'Phone setup payload absent' }
+if ($ExportForPhone -and ((Get-Item -LiteralPath (Join-Path $PackageRoot 'setup')).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Redirected setup directory' }
 New-Item -ItemType Directory -Path $install | Out-Null
 # No legacy files, policy, browser/account changes or production credentials. Snapshot is the recovery route.
 Get-ChildItem -LiteralPath (Join-Path $PackageRoot 'service') -File | Copy-Item -Destination $install
@@ -87,8 +97,10 @@ while (-not [GuardLabPipeWait]::WaitNamedPipe('\\.\pipe\Guard.V2.AdminSetup.v1',
     Start-Sleep -Milliseconds 200
 }
 $probe = Join-Path $PackageRoot 'probe\Guard.Windows.Ipc.Tests.exe'
-function Invoke-ReadOnlyProbe([string]$Mode) {
-    $text = & $probe --installed-service-lab $Mode $expectedOrigin
+function Invoke-ReadOnlyProbe([string]$Mode, [switch]$Export) {
+    $probeArgs = @('--installed-service-lab', $Mode, $expectedOrigin)
+    if ($Export) { $probeArgs += (Join-Path $PackageRoot 'device.json') }
+    $text = & $probe @probeArgs
     if ($LASTEXITCODE -ne 0) { throw ('Installed-service probe refused (' + $Mode + '): ' + ($text -join ' ')) }
     $value = ($text -join '') | ConvertFrom-Json
     if ($value.status -ne 'PASS') { throw 'Installed-service probe did not pass' }
@@ -104,7 +116,7 @@ $first = Invoke-ReadOnlyProbe 'inspect'
 Stop-Service Guard
 (Get-Service Guard).WaitForStatus('Stopped', [timespan]::FromSeconds(30))
 Start-Service Guard
-$second = Invoke-ReadOnlyProbe 'inspect'
+$second = Invoke-ReadOnlyProbe 'inspect' -Export:$ExportForPhone
 if ($first.descriptorSha256 -cne $second.descriptorSha256) { throw 'Device identity changed on normal service restart' }
 $service = Get-CimInstance Win32_Service -Filter "Name='Guard'"
 if ($service.StartName -ne 'LocalSystem' -or $service.PathName -cne $binary -or $service.State -ne 'Running') { throw 'Final SCM identity mismatch' }

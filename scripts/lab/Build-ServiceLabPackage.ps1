@@ -1,10 +1,11 @@
 # No service execution or elevation here; output is a temporary LAB-ONLY package.
-param([string]$AndroidPilotManifest, [string]$AndroidPilotManifestSha256)
+param([string]$AndroidPilotManifest, [string]$AndroidPilotManifestSha256, [switch]$IncludeSetup)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $relayOrigin = 'https://guard-lab.invalid'
 $androidSigner = 'A' * 64
 $minimumVersion = 1
+if ($IncludeSetup -and -not $AndroidPilotManifest) { throw 'Phone setup requires a verified Android pilot manifest' }
 if ($AndroidPilotManifest -or $AndroidPilotManifestSha256) {
     if (-not [IO.Path]::IsPathRooted($AndroidPilotManifest) -or $AndroidPilotManifestSha256 -notmatch '^[A-F0-9]{64}$') { throw 'Complete Android manifest commitment required' }
     $inputFile = Get-Item -LiteralPath $AndroidPilotManifest
@@ -24,10 +25,14 @@ if ($AndroidPilotManifest -or $AndroidPilotManifestSha256) {
 }
 $package = Join-Path ([IO.Path]::GetFullPath($env:TEMP)) ('GuardServiceLab-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $package | Out-Null
-foreach ($item in @(
+$projects = @(
     @{Project='src\Guard.Service\Guard.Service.csproj';Folder='service'},
     @{Project='tests\Guard.Windows.Ipc.Tests\Guard.Windows.Ipc.Tests.csproj';Folder='probe'}
-)) {
+)
+if ($IncludeSetup) {
+    $projects += @{Project='src\Guard.Setup\Guard.Setup.csproj';Folder='setup'}
+}
+foreach ($item in $projects) {
     & dotnet publish (Join-Path $projectRoot $item.Project) -c Release -r win-x64 --self-contained true --nologo -o (Join-Path $package $item.Folder) `
         ('-p:GuardRelayOrigin=' + $relayOrigin) ('-p:GuardAndroidSignerSha256=' + $androidSigner) ('-p:GuardMinimumAndroidVersion=' + $minimumVersion)
     if ($LASTEXITCODE -ne 0) { throw ('Lab publish failed; incomplete package: ' + $package) }
