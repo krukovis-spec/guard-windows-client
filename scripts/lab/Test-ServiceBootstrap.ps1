@@ -27,6 +27,8 @@ $manifestPath = Join-Path $PackageRoot 'manifest.json'
 if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -cne $ManifestSha256) { throw 'Lab manifest changed' }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($manifest.Version -ne 1 -or $manifest.LabOnly -ne $true -or $manifest.Files.Count -lt 10 -or $manifest.Files.Count -gt 2000) { throw 'Invalid lab manifest' }
+$expectedOrigin = if ($manifest.PSObject.Properties.Name -contains 'ExpectedRelayOrigin') { $manifest.ExpectedRelayOrigin } else { 'https://guard-lab.invalid' }
+if ($expectedOrigin -cnotin @('https://guard-lab.invalid', 'https://guard-relay.voicepaste.workers.dev')) { throw 'Unexpected lab relay origin' }
 $expected = @{}
 foreach ($entry in $manifest.Files) {
     if ($entry.Path -notmatch '^(service|probe)\\[A-Za-z0-9_.-]+$' -or $expected.ContainsKey($entry.Path) -or
@@ -86,7 +88,7 @@ while (-not [GuardLabPipeWait]::WaitNamedPipe('\\.\pipe\Guard.V2.AdminSetup.v1',
 }
 $probe = Join-Path $PackageRoot 'probe\Guard.Windows.Ipc.Tests.exe'
 function Invoke-ReadOnlyProbe([string]$Mode) {
-    $text = & $probe --installed-service-lab $Mode
+    $text = & $probe --installed-service-lab $Mode $expectedOrigin
     if ($LASTEXITCODE -ne 0) { throw ('Installed-service probe refused (' + $Mode + '): ' + ($text -join ' ')) }
     $value = ($text -join '') | ConvertFrom-Json
     if ($value.status -ne 'PASS') { throw 'Installed-service probe did not pass' }

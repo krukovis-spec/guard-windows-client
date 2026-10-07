@@ -16,10 +16,13 @@ internal static class InstalledServiceChecks
         try
         {
             using var identity = WindowsIdentity.GetCurrent();
-            if (args.Length != 2 || args[0] != "--installed-service-lab" ||
+            if (args.Length is not (2 or 3) || args[0] != "--installed-service-lab" ||
                 Environment.MachineName != "DESKTOP-8C2FU3H" || identity.IsSystem ||
                 !new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
                 throw new InvalidOperationException("Disposable guest administrator required.");
+            var expectedOrigin = args.Length == 3 ? args[2] : "https://guard-lab.invalid";
+            if (expectedOrigin is not ("https://guard-lab.invalid" or "https://guard-relay.voicepaste.workers.dev"))
+                throw new ArgumentException("Unknown lab deployment.");
             if (args[1] == "reject-bootstrap")
             {
                 phase = "reject-bootstrap-query";
@@ -36,11 +39,11 @@ internal static class InstalledServiceChecks
             phase = "inspect-validation";
             observations = new { inspection.CanExport, inspection.Status.StateVersion, inspection.Readiness.CanEnableProtection,
                 serviceBoundary = inspection.Readiness.ServiceBoundary.ToString(), programDataAcl = inspection.Readiness.ProgramDataAcl.ToString(),
-                expectedLabOrigin = descriptor.RelayOrigin == "https://guard-lab.invalid" };
+                expectedLabOrigin = descriptor.RelayOrigin == expectedOrigin };
             if (!inspection.CanExport || inspection.Status.StateVersion != 0 || inspection.Readiness.CanEnableProtection ||
                 inspection.Readiness.ServiceBoundary != GuardReadinessFactState.Satisfied ||
                 inspection.Readiness.ProgramDataAcl != GuardReadinessFactState.Satisfied ||
-                descriptor.RelayOrigin != "https://guard-lab.invalid")
+                descriptor.RelayOrigin != expectedOrigin)
                 throw new InvalidOperationException("Unexpected fresh lab state or trust profile.");
             Console.WriteLine(JsonSerializer.Serialize(new { status = "PASS", authenticatedSystemService = true,
                 stateVersion = inspection.Status.StateVersion, ownerBound = inspection.Status.IsProvisioned,
