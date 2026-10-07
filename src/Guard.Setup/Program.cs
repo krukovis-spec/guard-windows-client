@@ -16,6 +16,6 @@ internal static class Program
                 "Настройка Guard", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        new System.Windows.Application().Run(new SetupWindow());
+        new System.Windows.Application().Run(new SetupWindow(new ServiceSetupBackend()));
     }
 }
