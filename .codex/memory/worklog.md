@@ -1,5 +1,13 @@
 # Worklog
 
+## 2026-10-08 — production Setup transferred to retained VM
+
+- Ivan approved transfer/continuation. No application-source change: published production `Guard.Setup` at `2554be5` Release/win-x64/self-contained, not Preview; build PASS. Existing pushed UI checkpoint remains the baseline. Reused exact `Get-PinnedVM` guard and existing interactive Setup task, no new deployment framework (Ponytail).
+- Package `%TEMP%\GuardSetupTransfer-8a87af843d0d4fc9bed9c25b946f40bf`, 413 files, archive SHA256 `590FD577F703491E2C1649DBBFCB48D99C1E79154212604D2BC8CED64186B17C`, Setup DLL `02A3098303A2570DCF94E051005465C2A7982D4175EF015B45EEE646C23921B3`. One-shot `Update-SetupOnly.ps1` retained there until visual/phone acceptance; no secret values in script/package. New guest `C:\GuardLab\SetupStable-8a87af843d0d4fc9bed9c25b946f40bf`; old guest package retained for UI-only rollback, never restore identity snapshot blindly.
+- Preflight initially refused before any guest write: PS5.1 `@($task.Triggers)` counts a null property as 1. Read-only second attempt proved SID/action/Interactive/Highest all correct and zero non-null triggers. Corrected null filtering, PS5.1 null/non-null regression PASS. Original/retry1 reports retained; successful retry2 is not a reused stale result.
+- `%LOCALAPPDATA%\GuardV2Lab\Access\setup-stable-8a87af843d0d4fc9bed9c25b946f40bf-retry2.json`: UI_PROCESS_UPDATED at 2026-10-07T21:32:16.3344393Z, actual child exit0, all hashes match, one nonzero-session UI process; same service PID/path/account/start mode. Pinned VM/BIOS/80GiB disk/SecureBoot/vTPM/snapshot/guest marker and task SID verified. Only existing Setup task stopped/repointed/restarted; no service restart/install, protected-state access, policy write, phone/relay mutation or credential reissue.
+- VMConnect opened and Computer Use observed GuardLabAdmin login. Stop at human login; no automated auth. Actual updated VM UI/QR scanning/fingerprint/comparison/GNA1 remain unverified. Full M1/M7/M9 unchanged. Existing previous source suites (29 v2/45 legacy/UI checks) not rerun for this artifact-only transfer. PROJECT_ONLY memory: plan/capsule/lab handoff updated; next manual login, Check installation, phone enrollment, not repeated bootstrap/import.
+
 ## 2026-10-07 — local WPF preview and background button flicker
 
 - User requested UI debugging on host before further VM transfers. Baseline `981418dcc6ea81b085cbb0dcf01582694e32b70d` checkpoint pushed as `codex/checkpoint-20261007-2114-setup-local-debug`; work on `codex/setup-local-debug`. Existing untracked `.wrangler` untouched. One executor, no new library/framework; reused WPF/native session test transport and real view sources (Ponytail).
