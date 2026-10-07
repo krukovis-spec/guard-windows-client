@@ -93,10 +93,9 @@ class AndroidApprovalKeyStore(private val alias: String,
         val hardwareBacked = keyInfo.securityLevel == KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT ||
             keyInfo.securityLevel == KeyProperties.SECURITY_LEVEL_STRONGBOX
         check(hardwareBacked) { "software-backed key rejected" }
-        // KeyInfo reports per-operation authorization as -1 (builder input is 0).
         check(keyInfo.keySize == 256 && keyInfo.origin == KeyProperties.ORIGIN_GENERATED &&
             keyInfo.purposes == KeyProperties.PURPOSE_SIGN && keyInfo.digests.toSet() == setOf(KeyProperties.DIGEST_SHA256) &&
-            keyInfo.isUserAuthenticationRequired && keyInfo.userAuthenticationValidityDurationSeconds == -1 &&
+            keyInfo.isUserAuthenticationRequired && BiometricPolicy.isPerOperationDuration(keyInfo.userAuthenticationValidityDurationSeconds) &&
             keyInfo.userAuthenticationType == KeyProperties.AUTH_BIOMETRIC_STRONG &&
             keyInfo.isUserAuthenticationRequirementEnforcedBySecureHardware && keyInfo.isInvalidatedByBiometricEnrollment &&
             !keyInfo.isUserAuthenticationValidWhileOnBody) { "approval key policy" }
@@ -214,4 +213,7 @@ data class RecoveryKitConfirmation(val firstTyped: String, val secondTyped: Stri
 
 object BiometricPolicy {
     fun allowedAuthenticators(): Int = BiometricManager.Authenticators.BIOMETRIC_STRONG
+    // KeyInfo documents -1; AOSP Keystore2 returns 0 when AUTH_TIMEOUT is absent.
+    // Both represent per-operation auth. Never accept a positive cached-auth window.
+    internal fun isPerOperationDuration(seconds: Int): Boolean = seconds == -1 || seconds == 0
 }
