@@ -30,7 +30,7 @@ public partial class SetupWindow
 
     private async void BeginEnrollment_Click(object sender, RoutedEventArgs e)
     {
-        if (_beginAttempted || _operation != null || _inspection?.CanExport != true || !IsActive) return;
+        if (_beginAttempted || _operation != null || _inspection?.CanBeginEnrollment != true || !IsActive) return;
         _beginAttempted = true; // A lost first reply must not be retried from this window.
         await RunEnrollmentAsync(async token =>
         {
@@ -131,6 +131,11 @@ public partial class SetupWindow
                     var image = new BitmapImage(); image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad;
                     image.StreamSource = stream; image.EndInit(); image.Freeze();
                     EnrollmentQrImage.Source = image; EnrollmentQrImage.Visibility = Visibility.Visible;
+                    Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+                    {
+                        if (!_closed && IsActive && EnrollmentQrImage.Visibility == Visibility.Visible)
+                            EnrollmentQrFrame.BringIntoView();
+                    }));
                 }
                 finally { CryptographicOperations.ZeroMemory(bytes); }
             }
@@ -162,7 +167,7 @@ public partial class SetupWindow
         // Checked/Unchecked may run during InitializeComponent.
         if (BeginEnrollment == null || ConfirmEnrollment == null) return;
         var available = !_closed && !_clockInvalid && _operation == null && !_enrollmentBusy && IsActive;
-        BeginEnrollment.IsEnabled = available && !_beginAttempted && _inspection?.CanExport == true;
+        BeginEnrollment.IsEnabled = available && !_beginAttempted && _inspection?.CanBeginEnrollment == true;
         RefreshEnrollment.IsEnabled = available && _enrollmentView?.CanRefresh == true;
         CancelEnrollment.IsEnabled = available && _displayed != null && _enrollmentView?.CanCancel == true;
         ConfirmEnrollment.IsEnabled = available && _displayed != null && _enrollmentView?.CanCompare == true && Compared.IsChecked == true;
