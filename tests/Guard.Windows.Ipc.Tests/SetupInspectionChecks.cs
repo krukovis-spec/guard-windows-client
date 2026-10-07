@@ -27,7 +27,14 @@ internal static class SetupInspectionChecks
             _ => throw new InvalidOperationException("inspection attempted a mutation or unsolicited export")
         }));
         var result = await SetupInspection.ReadAsync(Query, default);
-        Check(result.CanExport && result.Readiness.CanEnableProtection, "initial export eligibility");
+        Check(result.CanExport && result.CanBeginEnrollment && result.Readiness.CanEnableProtection, "initial export/enrollment eligibility");
+        foreach (var status in new[] { new GuardStatusPayload(4, false, false), new(4, true, false), new(4, false, true) })
+        {
+            var observed = await SetupInspection.ReadAsync((verb, _) => Task.FromResult(Reply(verb == GuardVerb.GetStatus
+                ? GuardStatusPayloadCodec.Encode(status) : GuardReadinessPayloadCodec.Encode(Readiness(4, ready)))), default);
+            Check(!observed.CanExport && observed.CanBeginEnrollment == (!status.IsProvisioned && !status.IsChildAccountBound),
+                "enrollment retry must not require pristine export or permit existing authority");
+        }
         Check(result.Lines.Any(line => line.Contains("Включение защиты этим не подтверждено")) &&
             SetupInspection.ProtectionNotice.Contains("Защита не подтверждена"), "readiness presented as protection");
         foreach (var state in Enum.GetValues<GuardReadinessFactState>())

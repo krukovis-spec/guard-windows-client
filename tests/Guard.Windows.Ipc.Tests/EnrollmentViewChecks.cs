@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Xml.Linq;
 using Guard.Contracts.Relay;
 using Guard.Protocol.Relay;
 using Guard.Setup;
@@ -14,6 +15,7 @@ internal static class EnrollmentViewChecks
 {
     internal static void Run()
     {
+        CheckCompactLayout();
         var now = DateTimeOffset.FromUnixTimeMilliseconds(1790812800000);
         var expiry = now.AddMinutes(5);
         const string hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -55,6 +57,24 @@ internal static class EnrollmentViewChecks
         var recovery = EnrollmentView.Create(new NativeSetupSnapshot(NativeSetupPhase.Confirmed, 8,
             claimHash: hash, recoveryRequired: true), expiry, now);
         Check(!recovery.AutoRefresh && recovery.Message.Contains("не сбрасывайте", StringComparison.Ordinal), "recovery encouraged owner reset");
+    }
+    private static void CheckCompactLayout()
+    {
+        using var source = typeof(EnrollmentViewChecks).Assembly.GetManifestResourceStream("Guard.Setup.SetupWindow.xaml")!;
+        var window = XDocument.Load(source).Root!;
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement Named(string name) => window.Descendants().Single(element => (string?)element.Attribute(x + "Name") == name);
+        var qr = Named("EnrollmentQrImage");
+        var frame = qr.Parent!;
+        Check((string?)window.Attribute("FontSize") == "14", "setup text is oversized");
+        Check(frame.Name.LocalName == "Viewbox" && (string?)frame.Attribute("MaxWidth") == "320" &&
+            (string?)frame.Attribute("MaxHeight") == "{Binding ViewportHeight, ElementName=SetupScroll}" &&
+            (string?)frame.Attribute("Stretch") == "Uniform" && (string?)frame.Attribute("StretchDirection") == "DownOnly",
+            "QR must fit both width and visible scroll height without cropping/upscaling");
+        Check((string?)qr.Attribute("Width") == "320" && (string?)qr.Attribute("Height") == "320" &&
+            (string?)qr.Attribute("Stretch") == "Uniform" && (string?)qr.Attribute("Visibility") == "Collapsed",
+            "QR must stay square and hidden before an authenticated session");
+        Check(Named("SetupScroll").Name.LocalName == "ScrollViewer", "QR height must use the real viewport");
     }
     private static void Check(bool value, string error) { if (!value) throw new InvalidDataException(error); }
 }

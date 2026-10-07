@@ -16,6 +16,8 @@ public sealed class SetupInspection
     public GuardStatusPayload Status { get; }
     public GuardReadinessPayload Readiness { get; }
     public bool CanExport => Status.StateVersion == 0 && !Status.IsProvisioned && !Status.IsChildAccountBound;
+    // UI eligibility only: the service still rejects a live challenge or any existing owner.
+    public bool CanBeginEnrollment => !Status.IsProvisioned && !Status.IsChildAccountBound;
     public string[] Lines => new[] {
         Status.IsProvisioned ? "Родитель: привязан" : "Родитель: ещё не привязан",
         Status.IsChildAccountBound ? "Детский аккаунт: выбран" : "Детский аккаунт: ещё не выбран",

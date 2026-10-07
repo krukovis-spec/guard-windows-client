@@ -1,31 +1,31 @@
 <Window x:Class="Guard.Setup.SetupWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Настройка Guard" Width="820" Height="740" MinWidth="420" MinHeight="360"
-    WindowStartupLocation="CenterScreen" FontFamily="Segoe UI" FontSize="16"
+    Title="Настройка Guard" Width="760" Height="660" MinWidth="420" MinHeight="360"
+    WindowStartupLocation="CenterScreen" FontFamily="Segoe UI" FontSize="14"
     Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
     Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
     UseLayoutRounding="True" Language="ru-RU">
     <Window.Resources>
         <Style TargetType="TextBlock">
             <Setter Property="TextWrapping" Value="Wrap" />
-            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="Margin" Value="0,0,0,8" />
         </Style>
         <Style TargetType="Button">
-            <Setter Property="Padding" Value="14,9" />
+            <Setter Property="Padding" Value="10,6" />
             <Setter Property="Margin" Value="0,0,8,8" />
             <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" />
         </Style>
     </Window.Resources>
-    <Grid Margin="24">
+    <Grid Margin="16">
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
         <StackPanel>
-            <TextBlock Text="Настройка компьютера" FontSize="26" FontWeight="SemiBold" />
+            <TextBlock Text="Настройка компьютера" FontSize="22" FontWeight="SemiBold" />
             <TextBlock Text="Проверка установки и подготовка подключения. Это окно не включает и не отключает блокировки." />
         </StackPanel>
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer x:Name="SetupScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
-                <Border BorderBrush="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}" BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,0,0,16">
+                <Border BorderBrush="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,12">
                     <TextBlock x:Name="Protection" Margin="0" FontWeight="SemiBold" />
                 </Border>
                 <TextBlock x:Name="Status" Text="Нажмите «Проверить установку». Guard прочитает состояние службы; системные настройки не изменятся."
@@ -34,7 +34,7 @@
                 <ItemsControl x:Name="Facts">
                     <ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" /></DataTemplate></ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <TextBlock Text="Описание компьютера для подключения" FontSize="20" FontWeight="SemiBold" Margin="0,16,0,12" />
+                <TextBlock Text="Описание компьютера для подключения" FontSize="16" FontWeight="SemiBold" Margin="0,12,0,8" />
                 <TextBlock Text="В файл входят адрес сервера, идентификатор компьютера и открытые ключи — без паролей. На доверенном компьютере оператора нужно отдельно сверить адрес сервера и весь код SHA-256 с этим окном." />
                 <Button x:Name="Export" Content="Сохранить описание компьютера…" Click="Export_Click" IsEnabled="False" HorizontalAlignment="Left" />
                 <TextBlock x:Name="ExportStatus" AutomationProperties.LiveSetting="Polite" />
@@ -44,16 +44,19 @@
                     Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
                     Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
                     AutomationProperties.Name="Полный код SHA-256 сохранённого файла Guard" />
-                <TextBlock Text="Привязка родительского телефона" FontSize="20" FontWeight="SemiBold" Margin="0,16,0,12" />
+                <TextBlock Text="Привязка родительского телефона" FontSize="16" FontWeight="SemiBold" Margin="0,12,0,8" />
                 <TextBlock Text="Сначала оператор готовит подключение компьютера к серверу. Затем здесь можно начать привязку. QR не включает защиту; этот комплект ещё не прошёл семейную приёмку." />
                 <Button x:Name="BeginEnrollment" Content="Привязать телефон" Click="BeginEnrollment_Click" IsEnabled="False" HorizontalAlignment="Left" />
                 <TextBlock x:Name="EnrollmentStatus" AutomationProperties.LiveSetting="Polite" />
                 <TextBlock x:Name="EnrollmentDeadline" />
-                <Image x:Name="EnrollmentQrImage" Visibility="Collapsed" MaxWidth="560" Stretch="Uniform" HorizontalAlignment="Left"
-                    RenderOptions.BitmapScalingMode="NearestNeighbor" AutomationProperties.Name="QR для сканирования приложением Guard на родительском телефоне" />
+                <Viewbox x:Name="EnrollmentQrFrame" MaxWidth="320" MaxHeight="{Binding ViewportHeight, ElementName=SetupScroll}"
+                    Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Left">
+                    <Image x:Name="EnrollmentQrImage" Visibility="Collapsed" Width="320" Height="320" Stretch="Uniform"
+                        RenderOptions.BitmapScalingMode="NearestNeighbor" AutomationProperties.Name="QR для сканирования приложением Guard на родительском телефоне" />
+                </Viewbox>
                 <StackPanel x:Name="ComparisonPanel" Visibility="Collapsed" Margin="0,12,0,12">
                     <Label Target="{Binding ElementName=ComparisonCode}" Content="Код сравнения — все восемь строк" Padding="0,0,0,8" />
-                    <TextBox x:Name="ComparisonCode" IsReadOnly="True" FontFamily="Consolas" Padding="8" FontSize="20"
+                    <TextBox x:Name="ComparisonCode" IsReadOnly="True" FontFamily="Consolas" Padding="8" FontSize="16"
                         IsReadOnlyCaretVisible="True" Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
                         Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
                         AutomationProperties.Name="Полный код для сравнения с телефоном" />
@@ -67,12 +70,12 @@
                     <Button x:Name="CancelEnrollment" Content="Отменить привязку" Click="CancelEnrollment_Click" IsEnabled="False" />
                 </WrapPanel>
                 <TextBlock Text="Закрытие окна не отменяет уже сохранённую привязку. QR не сохраняется в файл и не копируется в буфер обмена." />
-                <TextBlock Text="Подтверждение уже выполненной привязки" FontSize="20" FontWeight="SemiBold" Margin="0,8,0,12" />
+                <TextBlock Text="Подтверждение уже выполненной привязки" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,8" />
                 <TextBlock Text="После привязки можно сохранить подписанное подтверждение для доверенного компьютера оператора. Паролей в нём нет. Оператор должен сверить подпись с первоначальным описанием компьютера; сам файл не включает защиту и не выдаёт разрешений." />
                 <Button x:Name="ExportActivation" Content="Сохранить подтверждение привязки…" Click="ExportActivation_Click" IsEnabled="False" HorizontalAlignment="Left" />
             </StackPanel>
         </ScrollViewer>
-        <WrapPanel Grid.Row="2" Margin="0,16,0,0">
+        <WrapPanel Grid.Row="2" Margin="0,12,0,0">
             <Button x:Name="Refresh" Content="Проверить установку" Click="Refresh_Click" />
             <Button x:Name="Cancel" Content="Отменить проверку" Click="Cancel_Click" IsEnabled="False" />
             <Button Content="Закрыть" Click="Close_Click" />
