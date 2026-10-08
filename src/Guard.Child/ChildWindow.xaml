@@ -33,7 +33,7 @@
                 <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="8" /></Style></ListBox.ItemContainerStyle>
                 <ListBox.ItemTemplate><DataTemplate><StackPanel>
                     <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding ObservedAtUtc, StringFormat=Блокировка: {0:HH:mm} UTC}" FontSize="12" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding ObservedAtUtc.LocalDateTime, StringFormat=Блокировка: {0:dd.MM HH:mm}}" FontSize="12" Margin="0,4,0,0" />
                 </StackPanel></DataTemplate></ListBox.ItemTemplate>
             </ListBox>
         </Border>
