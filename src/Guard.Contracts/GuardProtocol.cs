@@ -67,6 +67,7 @@ namespace Guard.Contracts
         CreateApplicationRequest = 10,
         CreateWebsiteRequest = 11,
         GetBlockedApplications = 12,
+        GetApplicationRequestHistory = 13,
         EvaluateDomain = 20,
         BeginSetup = 30,
         CompleteSetup = 31,

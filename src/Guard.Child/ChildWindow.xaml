@@ -19,16 +19,16 @@
             <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <StackPanel>
-            <TextBlock Text="Нужен доступ к программе?" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,8" />
-            <TextBlock Text="Выберите её в списке и попросите родителя разрешить запуск." Margin="0,0,0,14" />
+            <TextBlock x:Name="Heading" Text="Нужен доступ к программе?" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,8" />
+            <TextBlock x:Name="Introduction" Text="Выберите её в списке и попросите родителя разрешить запуск." Margin="0,0,0,14" />
         </StackPanel>
         <DockPanel Grid.Row="1" Margin="0,0,0,10">
             <Button x:Name="Refresh" DockPanel.Dock="Right" Content="Обновить список" Click="Refresh_Click" />
-            <TextBlock Text="Недавние блокировки" VerticalAlignment="Center" FontWeight="SemiBold" />
+            <TextBlock x:Name="SectionTitle" Text="Недавние блокировки" VerticalAlignment="Center" FontWeight="SemiBold" />
         </DockPanel>
         <Border Grid.Row="2" BorderThickness="1" CornerRadius="8" Padding="4"
                 BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}">
-            <ListBox x:Name="Applications" BorderThickness="0" SelectionChanged="Selection_Changed"
+            <Grid><ListBox x:Name="Applications" BorderThickness="0" SelectionChanged="Selection_Changed"
                      AutomationProperties.Name="Недавние заблокированные программы" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                 <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="8" /></Style></ListBox.ItemContainerStyle>
                 <ListBox.ItemTemplate><DataTemplate><StackPanel>
@@ -36,15 +36,28 @@
                     <TextBlock Text="{Binding ObservedAtUtc.LocalDateTime, StringFormat=Блокировка: {0:dd.MM HH:mm}}" FontSize="12" Margin="0,4,0,0" />
                 </StackPanel></DataTemplate></ListBox.ItemTemplate>
             </ListBox>
+            <ListBox x:Name="History" Visibility="Collapsed" BorderThickness="0" AutomationProperties.Name="Мои просьбы"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="8" /></Style></ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate><DataTemplate><StackPanel>
+                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding StatusText}" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding CreatedAt, StringFormat=Просьба: {0:dd.MM HH:mm}}" FontSize="12" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding RecordedAt, StringFormat=Запись: {0:dd.MM HH:mm}}" FontSize="12" />
+                </StackPanel></DataTemplate></ListBox.ItemTemplate>
+            </ListBox></Grid>
         </Border>
-        <StackPanel Grid.Row="3" Margin="0,12,0,12">
+        <StackPanel x:Name="ReasonPanel" Grid.Row="3" Margin="0,12,0,12">
             <Label Target="{Binding ElementName=Reason}" Content="Зачем нужна программа (необязательно)" Padding="0,0,0,6" />
             <TextBox x:Name="Reason" Padding="8" MaxLength="160" TextChanged="Reason_Changed" AcceptsReturn="False" />
             <TextBlock x:Name="ReasonHint" Margin="0,6,0,0" />
         </StackPanel>
         <StackPanel Grid.Row="4">
             <TextBlock x:Name="Status" Text="Нажмите «Обновить список»." Margin="0,0,0,10" AutomationProperties.LiveSetting="Polite" />
-            <Button x:Name="Send" Content="Попросить доступ" Click="Send_Click" IsEnabled="False" HorizontalAlignment="Left" />
+            <WrapPanel>
+                <Button x:Name="Send" Content="Попросить доступ" Click="Send_Click" IsEnabled="False" Margin="0,0,8,0" />
+                <Button x:Name="ToggleHistory" Content="Мои просьбы" Click="ToggleHistory_Click" />
+            </WrapPanel>
             <TextBlock Text="Это окно отправляет просьбу, но не снимает блокировку. Закрыть его можно в любой момент." FontSize="12" Margin="0,12,0,0" />
         </StackPanel>
     </Grid>

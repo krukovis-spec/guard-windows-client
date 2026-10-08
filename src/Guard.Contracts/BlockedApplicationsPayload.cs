@@ -10,6 +10,16 @@ namespace Guard.Contracts
         public BlockedApplicationItem(string observationId, string displayName, DateTimeOffset observedAtUtc, DateTimeOffset expiresAtUtc)
         {
             if (!GuardIdentifier.IsCanonicalToken(observationId)) throw new ArgumentException("Invalid observation id.");
+            RequireDisplayName(displayName);
+            if (observedAtUtc.Offset != TimeSpan.Zero || expiresAtUtc.Offset != TimeSpan.Zero ||
+                expiresAtUtc <= observedAtUtc || expiresAtUtc - observedAtUtc > TimeSpan.FromMinutes(30))
+                throw new ArgumentException("Invalid observation lifetime.");
+            ObservationId = observationId; DisplayName = displayName;
+            ObservedAtUtc = observedAtUtc; ExpiresAtUtc = expiresAtUtc;
+        }
+
+        internal static void RequireDisplayName(string displayName)
+        {
             if (string.IsNullOrWhiteSpace(displayName) || displayName.Length > 256 || displayName != displayName.Trim())
                 throw new ArgumentException("Invalid application name.");
             for (var i = 0; i < displayName.Length; i++)
@@ -24,11 +34,6 @@ namespace Guard.Contracts
                 }
                 else if (char.IsLowSurrogate(displayName[i])) throw new ArgumentException("Invalid Unicode.");
             }
-            if (observedAtUtc.Offset != TimeSpan.Zero || expiresAtUtc.Offset != TimeSpan.Zero ||
-                expiresAtUtc <= observedAtUtc || expiresAtUtc - observedAtUtc > TimeSpan.FromMinutes(30))
-                throw new ArgumentException("Invalid observation lifetime.");
-            ObservationId = observationId; DisplayName = displayName;
-            ObservedAtUtc = observedAtUtc; ExpiresAtUtc = expiresAtUtc;
         }
         public string ObservationId { get; }
         public string DisplayName { get; }

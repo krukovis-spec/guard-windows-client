@@ -8,6 +8,9 @@ namespace Guard.Windows.Ipc;
 
 public static class GuardChildClient
 {
+    public static Task<GuardIpcResponse> GetApplicationRequestHistoryAsync(CancellationToken token)
+        => SendAsync(GuardVerb.GetApplicationRequestHistory, Array.Empty<byte>(), token);
+
     public static Task<GuardIpcResponse> GetBlockedApplicationsAsync(CancellationToken token)
         => SendAsync(GuardVerb.GetBlockedApplications, Array.Empty<byte>(), token);
 

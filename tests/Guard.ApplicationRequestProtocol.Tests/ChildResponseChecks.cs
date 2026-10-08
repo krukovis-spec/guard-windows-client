@@ -19,8 +19,15 @@ internal static class ChildResponseChecks
             decoded.Items[0].ExpiresAtUtc == item.ExpiresAtUtc, "list precision/Unicode");
         var queued = BlockedApplicationsPayloadCodec.EncodeQueued(new ApplicationRequestQueuedPayload("request-00000001", false, now.AddMinutes(5)));
         Check(!BlockedApplicationsPayloadCodec.DecodeQueued(queued).Created, "duplicate flag");
+        var historyItems = Enum.GetValues<ApplicationRequestHistoryStatus>().Select((status, i) =>
+            new ApplicationRequestHistoryItem("history-0000000" + i, item.DisplayName, now.AddMinutes(-1), now, status)).ToArray();
+        var history = BlockedApplicationsPayloadCodec.EncodeHistory(new ApplicationRequestHistoryPayload(now, historyItems));
+        var readHistory = BlockedApplicationsPayloadCodec.DecodeHistory(history);
+        Check(readHistory.CheckedAtUtc == now && readHistory.Items.Select(x => x.Status).SequenceEqual(historyItems.Select(x => x.Status)) &&
+            readHistory.Items[0].DisplayName == item.DisplayName, "history roundtrip");
         foreach (var (bytes, decode) in new (byte[], Action<byte[]>)[] {
-            (encoded, b => BlockedApplicationsPayloadCodec.Decode(b)), (queued, b => BlockedApplicationsPayloadCodec.DecodeQueued(b)) })
+            (encoded, b => BlockedApplicationsPayloadCodec.Decode(b)), (queued, b => BlockedApplicationsPayloadCodec.DecodeQueued(b)),
+            (history, b => BlockedApplicationsPayloadCodec.DecodeHistory(b)) })
         {
             for (var count = 0; count < bytes.Length; count++) Reject(() => decode(bytes.Take(count).ToArray()));
             Reject(() => decode(bytes.Concat(new byte[] { 0 }).ToArray()));
@@ -37,6 +44,12 @@ internal static class ChildResponseChecks
             Reject(() => new BlockedApplicationItem(item.ObservationId, text, now, now.AddMinutes(1)));
         var empty = BlockedApplicationsPayloadCodec.Decode(BlockedApplicationsPayloadCodec.Encode(new BlockedApplicationsPayload(now, Array.Empty<BlockedApplicationItem>())));
         Check(empty.Items.Count == 0, "empty historical list");
+        var badStatus = (byte[])history.Clone(); badStatus[^1] = 99; Reject(() => BlockedApplicationsPayloadCodec.DecodeHistory(badStatus));
+        var badCount = (byte[])history.Clone(); badCount[19] = 17; Reject(() => BlockedApplicationsPayloadCodec.DecodeHistory(badCount));
+        Reject(() => new ApplicationRequestHistoryPayload(now, new[] { historyItems[0], historyItems[0] }));
+        Reject(() => new ApplicationRequestHistoryPayload(now.AddTicks(-1), historyItems));
+        Reject(() => new ApplicationRequestHistoryItem("history-00000001", "bad\u202e", now, now, ApplicationRequestHistoryStatus.Denied));
+        Reject(() => new ApplicationRequestHistoryItem("history-00000001", "Valid", now, now, (ApplicationRequestHistoryStatus)0));
     }
     private static void Check(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
     private static void Reject(Action action)

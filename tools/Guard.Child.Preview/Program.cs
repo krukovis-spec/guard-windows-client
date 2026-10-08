@@ -72,6 +72,28 @@ internal static class PreviewProgram
             Check(window.Status.Text.Contains("не подтверждает"), "empty list implied protection");
             backend.Empty = false; Click(window.Refresh); await Until(() => window.Refresh.IsEnabled);
             window.Applications.SelectedIndex = 0; window.Reason.Text = "";
+            var requestsBeforeHistory = backend.Requests;
+            Click(window.ToggleHistory); await Until(() => window.Refresh.IsEnabled);
+            Check(window.History.Items.Count == 6 && window.Send.Visibility == Visibility.Collapsed &&
+                window.Status.Text.Contains("не подтверждает доступ сейчас"), "history missing or permission claim");
+            for (var i = 0; i < 2; i++)
+            {
+                window.Width = i == 0 ? 620 : 420; window.Height = i == 0 ? 610 : 500; window.UpdateLayout();
+                Check(window.History.ActualHeight >= 80 && window.ToggleHistory.TransformToAncestor(window).Transform(new Point()).Y +
+                    window.ToggleHistory.ActualHeight < window.ActualHeight - 30, "history layout clipped");
+            }
+            backend.HistoryFails = true; Click(window.Refresh); await Until(() => window.Refresh.IsEnabled);
+            Check(window.History.Items.Count == 0 && window.Status.Text.Contains("Не удалось"), "history error left stale data");
+            backend.HistoryFails = false; Click(window.Refresh); await Until(() => window.Refresh.IsEnabled);
+            Check(window.History.Items.Count == 6 && backend.Requests == requestsBeforeHistory, "history retry sent new request");
+            window.Width = 620; window.Height = 610; window.UpdateLayout();
+            bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(window); png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap));
+            path = Path.Combine(directory.FullName, "child-history.png");
+            using (var output = File.Create(path)) png.Save(output);
+            Console.WriteLine("History image: " + path);
+            Click(window.ToggleHistory); await Until(() => window.Refresh.IsEnabled);
+            Check(window.Applications.Visibility == Visibility.Visible && window.History.Visibility == Visibility.Collapsed, "return to request failed");
         }
         finally { window.Close(); }
         backend = new PreviewBackend(); window = new ChildWindow(backend);
@@ -100,6 +122,17 @@ internal sealed class PreviewBackend : IChildBackend
     internal GuardIpcResponseStatus ReadStatus = GuardIpcResponseStatus.Success;
     internal Task<GuardIpcResponse>? Pending;
     internal CancellationToken LastToken;
+    internal bool HistoryFails;
+    public Task<GuardIpcResponse> ReadHistoryAsync(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (HistoryFails) throw new IOException("synthetic history failure");
+        var now = DateTimeOffset.UtcNow;
+        return Task.FromResult(new GuardIpcResponse(1, Guid.NewGuid().ToString("D"), GuardIpcResponseStatus.Success,
+            BlockedApplicationsPayloadCodec.EncodeHistory(new ApplicationRequestHistoryPayload(now,
+                Enum.GetValues<ApplicationRequestHistoryStatus>().Select((status, i) => new ApplicationRequestHistoryItem(
+                    "demo-history-000" + i, "Учебная программа (демо)", now.AddMinutes(-5), now.AddMinutes(-1), status)).ToArray()))));
+    }
     public Task<GuardIpcResponse> ReadAsync(CancellationToken token)
     {
         token.ThrowIfCancellationRequested(); var now = DateTimeOffset.UtcNow;

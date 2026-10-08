@@ -43,13 +43,14 @@ internal static class ChildApplicationIpcChecks
                 new GuardIpcRequest(1, Guid.NewGuid().ToString("D"), verb, data ?? Array.Empty<byte>()), token, sid);
 
         var initial = await boundary.RelayTransactions.LoadAsync(default);
-        foreach (var verb in new[] { GuardVerb.GetBlockedApplications, GuardVerb.CreateApplicationRequest })
+        foreach (var verb in new[] { GuardVerb.GetBlockedApplications, GuardVerb.CreateApplicationRequest, GuardVerb.GetApplicationRequestHistory })
         {
             var data = verb == GuardVerb.CreateApplicationRequest ? create : Array.Empty<byte>();
             foreach (var sid in new[] { null, other }) Check((await Call(verb, sid, data)).Status == GuardIpcResponseStatus.Forbidden, "SID boundary");
             Check((await Call(verb, account, data, ClientRole.AdminSetup)).Status == GuardIpcResponseStatus.Forbidden, "admin verb boundary");
         }
         Check(source.Calls == 0, "unauthorized request reached source");
+        Check((await Call(GuardVerb.GetApplicationRequestHistory, account, new byte[] { 1 })).Status == GuardIpcResponseStatus.InvalidRequest, "history payload accepted");
         Check((await Call(GuardVerb.GetBlockedApplications, account, new byte[] { 1 })).Status == GuardIpcResponseStatus.InvalidRequest, "list payload");
         Check((await Call(GuardVerb.CreateApplicationRequest, account, create.Concat(new byte[] { 1 }).ToArray())).Status == GuardIpcResponseStatus.InvalidRequest, "injected fields");
         using (var absent = Open(null))
@@ -75,6 +76,7 @@ internal static class ChildApplicationIpcChecks
         Check((await Call(GuardVerb.GetBlockedApplications, account)).Status == GuardIpcResponseStatus.Unavailable, "source failure looked empty");
         source.Before = null;
         dependency.Ready = false;
+        Check((await Call(GuardVerb.GetApplicationRequestHistory, account)).Status == GuardIpcResponseStatus.Unavailable, "history ignored ACL");
         Check((await Call(GuardVerb.CreateApplicationRequest, account, create)).Status == GuardIpcResponseStatus.Unavailable, "ACL loss accepted");
         dependency.Ready = true;
         Check((await boundary.RelayTransactions.LoadAsync(default)).Version == initial.Version, "refusals changed relay");
@@ -93,6 +95,21 @@ internal static class ChildApplicationIpcChecks
         var saved = await boundary.RelayTransactions.LoadAsync(default);
         Check(saved.Outbox.Count == initial.Outbox.Count + 1 && saved.PolicyRevision == initial.PolicyRevision &&
             saved.SignedReceipts.Count == initial.SignedReceipts.Count && saved.ReconcileIntents.Count == initial.ReconcileIntents.Count, "submission changed policy");
+        using (var reopened = Open(null))
+        {
+            var read = await reopened.HandleAsync(ClientRole.Child, new GuardIpcRequest(1, Guid.NewGuid().ToString("D"),
+                GuardVerb.GetApplicationRequestHistory, Array.Empty<byte>()), default, account);
+            Check(read.Status == GuardIpcResponseStatus.Success, "history depends on active observation source");
+            var own = BlockedApplicationsPayloadCodec.DecodeHistory(read.GetPayloadCopy()).Items.Single(x => x.RequestId == results[0].RequestId);
+            Check(own.Status == ApplicationRequestHistoryStatus.AwaitingResponse && own.DisplayName == observation.DisplayName, "history lost original queue");
+        }
+        dependency.UtcNow = now.AddMinutes(11);
+        var expiredHistory = await Call(GuardVerb.GetApplicationRequestHistory, account);
+        Check(BlockedApplicationsPayloadCodec.DecodeHistory(expiredHistory.GetPayloadCopy()).Items.Single(x => x.RequestId == results[0].RequestId).Status ==
+            ApplicationRequestHistoryStatus.Expired, "expired request appeared live");
+        dependency.UtcNow = now;
+        Check((await boundary.RelayTransactions.LoadAsync(default)).Version == saved.Version, "history changed durable state");
+        NativeApplicationHistoryChecks.Run(owner, boundary.Identity, account, now);
 
         async Task ChangeOwner()
         {
