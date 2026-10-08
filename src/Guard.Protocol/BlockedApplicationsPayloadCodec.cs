@@ -10,6 +10,7 @@ namespace Guard.Protocol
     {
         private static readonly byte[] ListMagic = { 0x47, 0x42, 0x4c, 0x31 }; // GBL1
         private static readonly byte[] QueuedMagic = { 0x47, 0x43, 0x41, 0x31 }; // GCA1
+        private static readonly byte[] HistoryMagic = { 0x47, 0x43, 0x48, 0x31 }; // GCH1
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);
         private const int MaximumBytes = 24 * 1024;
 
@@ -58,6 +59,33 @@ namespace Guard.Protocol
             var flag = stream.ReadByte();
             if (flag != 0 && flag != 1) throw new InvalidDataException("Invalid queue flag.");
             return new ApplicationRequestQueuedPayload(id, flag == 1, ReadTime(stream));
+        });
+
+        public static byte[] EncodeHistory(ApplicationRequestHistoryPayload payload)
+        {
+            if (payload == null) throw new ArgumentNullException(nameof(payload));
+            using (var stream = Start(HistoryMagic))
+            {
+                WriteTime(stream, payload.CheckedAtUtc); WriteInt32(stream, payload.Items.Count);
+                foreach (var item in payload.Items)
+                {
+                    WriteText(stream, item.RequestId); WriteText(stream, item.DisplayName);
+                    WriteTime(stream, item.CreatedAtUtc); WriteTime(stream, item.RecordedAtUtc);
+                    WriteInt32(stream, (int)item.Status);
+                }
+                return stream.ToArray();
+            }
+        }
+
+        public static ApplicationRequestHistoryPayload DecodeHistory(byte[] payload) => Read(payload, HistoryMagic, stream =>
+        {
+            var now = ReadTime(stream); var count = ReadInt32(stream);
+            if (count < 0 || count > ApplicationRequestHistoryPayload.MaximumItems) throw new InvalidDataException("Invalid history count.");
+            var items = new ApplicationRequestHistoryItem[count];
+            for (var i = 0; i < count; i++)
+                items[i] = new ApplicationRequestHistoryItem(ReadText(stream, 128), ReadText(stream, 1024), ReadTime(stream),
+                    ReadTime(stream), (ApplicationRequestHistoryStatus)ReadInt32(stream));
+            return new ApplicationRequestHistoryPayload(now, items);
         });
 
         private static MemoryStream Start(byte[] magic)

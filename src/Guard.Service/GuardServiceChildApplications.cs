@@ -8,6 +8,7 @@ using Guard.Application;
 using Guard.Contracts;
 using Guard.Domain;
 using Guard.Protocol;
+using Guard.Windows;
 
 namespace Guard.Service;
 
@@ -15,6 +16,46 @@ internal sealed partial class GuardServiceIpcOperationHandler
 {
     private readonly IBlockedApplicationObservationSource? _blockedApplications;
     private readonly IServiceDataBoundaryGuard? _childDataBoundary;
+
+    private async Task<GuardIpcResponse> ChildHistoryAsync(ClientRole role, WindowsAccountSid? account,
+        GuardIpcRequest request, CancellationToken cancellationToken)
+    {
+        if (role != ClientRole.Child || account == null) return Response(request, GuardIpcResponseStatus.Forbidden);
+        if (request.PayloadLength != 0) return Response(request, GuardIpcResponseStatus.InvalidRequest);
+        if (_childDataBoundary == null || _stateStore is not ServiceAuthoritativeStateBoundary boundary)
+            return Response(request, GuardIpcResponseStatus.Unavailable);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(25));
+        var token = deadline.Token;
+        try
+        {
+            _childDataBoundary.DemandReady();
+            var started = _clock.UtcNow;
+            var owner = await boundary.LoadAsync(token).ConfigureAwait(false);
+            if (owner.ChildAccountSid == null || !owner.ChildAccountSid.Equals(account)) return Response(request, GuardIpcResponseStatus.Forbidden);
+            ApplicationRequestHistoryPayload? payload = null;
+            // Same owner -> relay lock order as mutations; history also works offline/after profile expiry.
+            var read = await boundary.NativeEnrollmentStore.TryWithCurrentStateAsync(owner.Version, async (held, ct) =>
+            {
+                var state = await boundary.RelayTransactions.LoadAsync(ct).ConfigureAwait(false);
+                var now = _clock.UtcNow;
+                if (now < started) throw new InvalidDataException("History clock rollback.");
+                payload = NativeApprovalTransaction.ReadApplicationHistory(held, state,
+                    new AuthenticatedChildContext(held.DeviceId, account), boundary.Identity.Encryption, boundary.Identity.Signing, now);
+                _childDataBoundary.DemandReady();
+                ct.ThrowIfCancellationRequested();
+                if (_clock.UtcNow < now) throw new InvalidDataException("History clock rollback.");
+                return true;
+            }, token).ConfigureAwait(false);
+            return !read || payload == null ? Response(request, GuardIpcResponseStatus.Conflict) :
+                Response(request, GuardIpcResponseStatus.Success, BlockedApplicationsPayloadCodec.EncodeHistory(payload));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        { return Response(request, GuardIpcResponseStatus.Unavailable); }
+        catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or
+            UnauthorizedAccessException or CryptographicException or OverflowException)
+        { return Response(request, GuardIpcResponseStatus.Unavailable); }
+    }
 
     private async Task<GuardIpcResponse> ChildApplicationAsync(ClientRole role, WindowsAccountSid? account,
         GuardIpcRequest request, CancellationToken cancellationToken)

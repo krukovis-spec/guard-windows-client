@@ -2,7 +2,9 @@
 
 Статус: исполнение M0–M9 разрешено Иваном. P0 containment завершён; интеграция и приёмка продукта продолжаются в `codex/guard-v2-integrated`. Готовой системы пока нет.
 
-Последнее обновление: 2026-10-08.
+Последнее обновление: 2026-10-09.
+
+Текущий связанный инкремент M4: read-only история собственных запросов в Guard.Child из защищённой relay-очереди и проверенных device-signed квитанций. Checkpoint `codex/checkpoint-20261009-0003-child-history` отправлен на `db9b476863840cd9b7e09e1088299f6a49e98ec5`, рабочая ветка `codex/child-request-history`. Пустой child-only verb, SID только из Windows-токена, ограниченный ответ, повторная проверка owner/ACL/подписей; без выдачи прав и сетевых действий. Исторический результат не означает текущий доступ. Gate: чужие SID/epochs/подпись/clock rollback, отсутствие source, reopen/expiry, строгий codec, безопасный exact-XAML preview и safe suites. Read-only Hyper-V audit 08.10 20:37 UTC PASS: исходная VM Running, Secure Boot ON, TPM ON; привязка не менялась. M1 mandatory-boot/admin-tamper остаётся release blocker, kernel runner для clean guest на привязанной VM не запускать.
 
 Следующий связанный инкремент M4: child IPC передаёт SID из проверенного Windows-токена, возвращает ограниченный список доверенных блокировок и атомарно сохраняет запрос в существующую native-очередь; непривилегированное окно Guard.Child показывает список/очередь без заявления о включённой защите. Checkpoint `codex/checkpoint-20261008-2242-child-flow` отправлен на `a7743c564d4a890f7a4e7abe0cbea57a344936c7`, ветка `codex/child-request-flow`. Gate: чужой/отсутствующий SID, смена owner, отказ/устаревание источника, строгие wire bounds, повтор после потери ответа, безопасная UI-проверка и обязательные safe suites. Пока нет проверенного production active-policy source, служба отвечает «недоступно», не подставляет демонстрационные события. M1 остаётся открытым; привязку и системные политики не менять.
 

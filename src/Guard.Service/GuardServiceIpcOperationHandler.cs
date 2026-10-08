@@ -108,6 +108,8 @@ namespace Guard.Service
                 case GuardVerb.GetBlockedApplications:
                 case GuardVerb.CreateApplicationRequest:
                     return await ChildApplicationAsync(authenticatedRole, authenticatedAccount, request, cancellationToken).ConfigureAwait(false);
+                case GuardVerb.GetApplicationRequestHistory:
+                    return await ChildHistoryAsync(authenticatedRole, authenticatedAccount, request, cancellationToken).ConfigureAwait(false);
 
                 case GuardVerb.GetDeviceProvisioning:
                     return await GetDeviceProvisioningAsync(authenticatedRole, request, cancellationToken).ConfigureAwait(false);

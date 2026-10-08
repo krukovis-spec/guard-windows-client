@@ -15,6 +15,7 @@ public partial class ChildWindow : Window
     private readonly Dictionary<string, string> _queued = new(StringComparer.Ordinal);
     private bool _busy;
     private bool _closed;
+    private bool _historyVisible;
 
     internal ChildWindow(IChildBackend backend)
     {
@@ -45,11 +46,12 @@ public partial class ChildWindow : Window
     {
         if (!IsInitialized || _closed) return;
         Refresh.IsEnabled = !_busy;
+        ToggleHistory.IsEnabled = !_busy;
         Applications.IsEnabled = !_busy;
         Reason.IsEnabled = !_busy;
         var item = Applications.SelectedItem as BlockedApplicationItem;
         var valid = TryPayload(out _);
-        Send.IsEnabled = !_busy && valid && item != null && DateTimeOffset.UtcNow >= item.ObservedAtUtc &&
+        Send.IsEnabled = !_busy && !_historyVisible && valid && item != null && DateTimeOffset.UtcNow >= item.ObservedAtUtc &&
             DateTimeOffset.UtcNow < item.ExpiresAtUtc && !_queued.ContainsKey(item.ObservationId);
         ReasonHint.Text = item != null && !valid ? "Сократите пояснение: до 140 русских букв. Переносы строк и скрытые символы не подходят." : "Короткого пояснения достаточно.";
     }
@@ -66,6 +68,7 @@ public partial class ChildWindow : Window
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
         if (_busy || _closed) return;
+        if (_historyVisible) { await ReadHistoryAsync(); return; }
         _busy = true; UpdateControls(); Status.Text = "Получаем список с этого компьютера…";
         try
         {
@@ -82,6 +85,53 @@ public partial class ChildWindow : Window
         }
         catch (Exception) when (!_closed)
         { Applications.ItemsSource = null; Status.Text = "Список недоступен. Попробуйте обновить его. Если это повторяется, попросите родителя проверить настройку Guard."; }
+        catch (Exception) when (_closed) { }
+        finally { Finish(); }
+    }
+
+    private void ToggleHistory_Click(object sender, RoutedEventArgs e)
+    {
+        if (_busy || _closed) return;
+        _historyVisible = !_historyVisible;
+        Heading.Text = _historyVisible ? "Что с моей просьбой?" : "Нужен доступ к программе?";
+        Introduction.Text = _historyVisible ? "Здесь — сохранённые просьбы и ответы на этом компьютере." :
+            "Выберите её в списке и попросите родителя разрешить запуск.";
+        Applications.Visibility = ReasonPanel.Visibility = Send.Visibility = _historyVisible ? Visibility.Collapsed : Visibility.Visible;
+        History.Visibility = _historyVisible ? Visibility.Visible : Visibility.Collapsed;
+        SectionTitle.Text = _historyVisible ? "Мои просьбы" : "Недавние блокировки";
+        ToggleHistory.Content = _historyVisible ? "Новый запрос" : "Мои просьбы";
+        Refresh.Content = _historyVisible ? "Обновить историю" : "Обновить список";
+        Refresh_Click(sender, e);
+    }
+
+    private async Task ReadHistoryAsync()
+    {
+        _busy = true; UpdateControls(); History.ItemsSource = null;
+        Status.Text = "Проверяем ответы на этом компьютере…";
+        try
+        {
+            var response = await _backend.ReadHistoryAsync(_lifetime.Token);
+            if (_closed) return;
+            if (response.Status != GuardIpcResponseStatus.Success) { Status.Text = Failure(response.Status, false); return; }
+            var payload = BlockedApplicationsPayloadCodec.DecodeHistory(response.GetPayloadCopy());
+            History.ItemsSource = payload.Items.Select(item => new
+            {
+                item.DisplayName, CreatedAt = item.CreatedAtUtc.LocalDateTime, RecordedAt = item.RecordedAtUtc.LocalDateTime,
+                StatusText = item.Status switch
+                {
+                    ApplicationRequestHistoryStatus.AwaitingResponse => "Ответа пока нет. Доставка родителю не подтверждена.",
+                    ApplicationRequestHistoryStatus.AwaitingApplication => "Родитель разрешил. Компьютер ещё не подтвердил применение.",
+                    ApplicationRequestHistoryStatus.Denied => "Родитель отклонил эту просьбу.",
+                    ApplicationRequestHistoryStatus.Expired => "Срок просьбы истёк. Если доступ нужен, запросите его заново.",
+                    ApplicationRequestHistoryStatus.NotApplied => "Ответ получен, но решение не применено. Попросите родителя проверить Guard.",
+                    _ => "Компьютер подтвердил применение в прошлом. Доступ сейчас не проверен."
+                }
+            }).ToArray();
+            Status.Text = payload.Items.Count == 0 ? "Сохранённых просьб этого аккаунта пока нет." :
+                $"Последние {payload.Items.Count} просьб. Проверено {payload.CheckedAtUtc.LocalDateTime:dd.MM HH:mm}. История не подтверждает доступ сейчас.";
+        }
+        catch (Exception) when (!_closed)
+        { History.ItemsSource = null; Status.Text = "Не удалось проверить историю. Нажмите «Обновить историю», чтобы повторить."; }
         catch (Exception) when (_closed) { }
         finally { Finish(); }
     }

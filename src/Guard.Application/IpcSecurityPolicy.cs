@@ -22,7 +22,8 @@ namespace Guard.Application
                     return verb == GuardVerb.GetStatus ||
                            verb == GuardVerb.CreateApplicationRequest ||
                            verb == GuardVerb.CreateWebsiteRequest ||
-                           verb == GuardVerb.GetBlockedApplications;
+                           verb == GuardVerb.GetBlockedApplications ||
+                           verb == GuardVerb.GetApplicationRequestHistory;
 
                 case ClientRole.AdminSetup:
                     return verb == GuardVerb.GetStatus ||
