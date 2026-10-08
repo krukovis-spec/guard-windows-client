@@ -40,7 +40,7 @@ internal class NativeApprovalAttempt private constructor(
         val prefix = "{\"frameId\":\"$frameId\",\"recipientKeyId\":\"${offer.encryptionKeyId}\",\"cursor\":"
         val pattern = Regex(Regex.escape(prefix) + "([1-9][0-9]{0,15})," +
             Regex.escape("\"createdAt\":$created,\"expiresAt\":$expiry,\"leaseExpiresAt\":") +
-            "([1-9][0-9]{0,15}),\"status\":\"reserved\",\"nonAuthoritative\":true}")
+            "([1-9][0-9]{0,15}),\"status\":\"reserved\",\"nonAuthoritative\":true\\}")
         // Exact canonical shape emitted by the pinned Worker; no duplicate fields, aliases or permissive JSON coercions.
         require(status == 200 || status == 201)
         require(response.size <= 1024 && response.all { it.toInt() in 0..127 })

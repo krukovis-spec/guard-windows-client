@@ -162,8 +162,9 @@ internal object NativeInboxPageCodec {
     const val MAX_BYTES = PAGE_SIZE * (MAX_FRAME_TEXT + 4) + 128
     private val space = "[ \\t\\r\\n]*"
     // Worker emits canonical unescaped base64/field names. Accept field reordering and JSON whitespace, not aliases/duplicates.
-    private val framesFirst = Regex("\\{$space\"frames\"$space:$space\\[([^\\[\\]]*)]$space,$space\"nextCursor\"$space:$space(0|[1-9][0-9]{0,15})$space}")
-    private val cursorFirst = Regex("\\{$space\"nextCursor\"$space:$space(0|[1-9][0-9]{0,15})$space,$space\"frames\"$space:$space\\[([^\\[\\]]*)]$space}")
+    // Android's ICU regex requires escaping the literal closing brace; desktop Java silently accepts it.
+    private val framesFirst = Regex("\\{$space\"frames\"$space:$space\\[([^\\[\\]]*)]$space,$space\"nextCursor\"$space:$space(0|[1-9][0-9]{0,15})$space\\}")
+    private val cursorFirst = Regex("\\{$space\"nextCursor\"$space:$space(0|[1-9][0-9]{0,15})$space,$space\"frames\"$space:$space\\[([^\\[\\]]*)]$space\\}")
     private fun String.jsonTrim() = trim(' ', '\t', '\r', '\n')
 
     fun decode(raw: ByteArray, recipient: RelayRecipient, after: Long): Pair<List<ByteArray>, Long> {
