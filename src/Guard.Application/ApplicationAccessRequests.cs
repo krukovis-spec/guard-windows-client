@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -110,6 +111,12 @@ namespace Guard.Application
         Task<VerifiedBlockedApplicationObservation?> ResolveAsync(
             string observationId,
             CancellationToken cancellationToken);
+    }
+
+    public interface IBlockedApplicationObservationSource : IBlockedApplicationObservationResolver
+    {
+        Task<IReadOnlyList<VerifiedBlockedApplicationObservation>> ReadRecentAsync(
+            WindowsAccountSid account, CancellationToken cancellationToken);
     }
 
     public sealed class ApplicationAccessRequest

@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Guard.Contracts;
+using Guard.Domain;
 
 namespace Guard.Application
 {
@@ -10,7 +11,8 @@ namespace Guard.Application
         Task<GuardIpcResponse> HandleAsync(
             ClientRole authenticatedRole,
             GuardIpcRequest request,
-            CancellationToken cancellationToken);
+            CancellationToken cancellationToken,
+            WindowsAccountSid? authenticatedAccount = null);
     }
 
     public sealed class SecureIpcRequestDispatcher
@@ -25,7 +27,8 @@ namespace Guard.Application
         public async Task<GuardIpcResponse> DispatchAsync(
             ClientRole authenticatedRole,
             GuardIpcRequest request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            WindowsAccountSid? authenticatedAccount = null)
         {
             if (request == null)
             {
@@ -47,7 +50,7 @@ namespace Guard.Application
             try
             {
                 var response = await _handler
-                    .HandleAsync(authenticatedRole, request, cancellationToken)
+                    .HandleAsync(authenticatedRole, request, cancellationToken, authenticatedAccount)
                     .ConfigureAwait(false);
                 if (response == null ||
                     response.ProtocolVersion != GuardProtocol.CurrentVersion ||

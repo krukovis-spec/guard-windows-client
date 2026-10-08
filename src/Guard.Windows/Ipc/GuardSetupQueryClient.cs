@@ -40,12 +40,16 @@ public static class GuardSetupQueryClient
             GuardProtocol.MaximumIpcReadTimeoutMilliseconds, cancellationToken);
     }
 
-    private static async Task<GuardIpcResponse> SendAsync(GuardIpcRequest request, int timeoutMilliseconds, CancellationToken cancellationToken)
+    private static Task<GuardIpcResponse> SendAsync(GuardIpcRequest request, int timeoutMilliseconds, CancellationToken cancellationToken)
+        => SendAuthenticatedAsync("Guard.V2.AdminSetup.v1", request, timeoutMilliseconds, cancellationToken);
+
+    internal static async Task<GuardIpcResponse> SendAuthenticatedAsync(string pipeName, GuardIpcRequest request,
+        int timeoutMilliseconds, CancellationToken cancellationToken)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeoutMilliseconds);
         var token = deadline.Token;
-        using var pipe = CreatePipe("Guard.V2.AdminSetup.v1");
+        using var pipe = CreatePipe(pipeName);
         await pipe.ConnectAsync(token).ConfigureAwait(false);
 
         // A name or PID alone does not authenticate a service. In particular, an

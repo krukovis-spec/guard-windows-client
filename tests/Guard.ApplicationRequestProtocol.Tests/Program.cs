@@ -27,7 +27,8 @@ namespace Guard.ApplicationRequestProtocol.Tests
                 ("rejects oversized payload", RejectsOversizedPayload),
                 ("validates optional short reason", ValidatesShortReason),
                 ("exposes no asserted application identity", ExposesNoAssertedIdentity),
-                ("decodes from a defensive snapshot", DecodesFromDefensiveSnapshot)
+                ("decodes from a defensive snapshot", DecodesFromDefensiveSnapshot),
+                ("bounds blocked lists and local queue acknowledgements", ChildResponseChecks.Run)
             };
 
             var failures = 0;

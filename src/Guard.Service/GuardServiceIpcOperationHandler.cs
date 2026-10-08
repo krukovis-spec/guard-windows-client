@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Guard.Application;
 using Guard.Application.Readiness;
 using Guard.Contracts;
+using Guard.Domain;
 using Guard.Domain.Readiness;
 using Guard.Protocol;
 
@@ -72,7 +73,9 @@ namespace Guard.Service
             IServiceUtcClock clock,
             EnrollmentDeploymentTrust? deploymentTrust = null,
             DeviceRelayConfigurationStore? configurations = null,
-            Func<CancellationToken, Task<ServiceNativeEnrollment>>? openNativeEnrollment = null)
+            Func<CancellationToken, Task<ServiceNativeEnrollment>>? openNativeEnrollment = null,
+            IBlockedApplicationObservationSource? blockedApplications = null,
+            IServiceDataBoundaryGuard? dataBoundaryGuard = null)
         {
             _stateStore = stateStore ??
                 throw new ArgumentNullException(nameof(stateStore));
@@ -85,12 +88,15 @@ namespace Guard.Service
             _deploymentTrust = deploymentTrust;
             _configurations = configurations;
             _openNativeEnrollment = openNativeEnrollment;
+            _blockedApplications = blockedApplications;
+            _childDataBoundary = dataBoundaryGuard;
         }
 
         public async Task<GuardIpcResponse> HandleAsync(
             ClientRole authenticatedRole,
             GuardIpcRequest request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            WindowsAccountSid? authenticatedAccount = null)
         {
             if (request == null)
             {
@@ -99,6 +105,10 @@ namespace Guard.Service
 
             switch (request.Verb)
             {
+                case GuardVerb.GetBlockedApplications:
+                case GuardVerb.CreateApplicationRequest:
+                    return await ChildApplicationAsync(authenticatedRole, authenticatedAccount, request, cancellationToken).ConfigureAwait(false);
+
                 case GuardVerb.GetDeviceProvisioning:
                     return await GetDeviceProvisioningAsync(authenticatedRole, request, cancellationToken).ConfigureAwait(false);
 

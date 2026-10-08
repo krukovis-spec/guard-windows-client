@@ -21,7 +21,8 @@ namespace Guard.Application
                 case ClientRole.Child:
                     return verb == GuardVerb.GetStatus ||
                            verb == GuardVerb.CreateApplicationRequest ||
-                           verb == GuardVerb.CreateWebsiteRequest;
+                           verb == GuardVerb.CreateWebsiteRequest ||
+                           verb == GuardVerb.GetBlockedApplications;
 
                 case ClientRole.AdminSetup:
                     return verb == GuardVerb.GetStatus ||

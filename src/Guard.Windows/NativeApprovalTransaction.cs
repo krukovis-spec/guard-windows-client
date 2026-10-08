@@ -16,7 +16,7 @@ namespace Guard.Windows;
 /// and CAS this successor before publishing the outbox or acknowledging the input.
 /// Preparing a result is not a commit, application, or fresh attestation check.
 /// </summary>
-public static class NativeApprovalTransaction
+public static partial class NativeApprovalTransaction
 {
     public static RelayTransactionState PrepareRequest(DeviceSecurityState owner, RelayTransactionState current,
         RequestSnapshot snapshot, ECDiffieHellman decryptionKey, ECDsa signingKey, DateTimeOffset now)
@@ -153,7 +153,7 @@ public static class NativeApprovalTransaction
             _ => CommandReceiptStatus.Rejected
         };
         var receipt = new CommandReceipt(current.DeviceId, current.DeviceEpoch, current.AuthorityEpoch, approval.KeyId,
-            approval.Sequence, approval.CommandId, approval.RequestId, approval.RequestRevision, status, now, hash,
+            approval.Sequence, approval.CommandId, approval.RequestId, approval.RequestRevision, status, MillisecondTime(now), hash,
             policy?.PolicyRevision ?? current.PolicyRevision,
             status == CommandReceiptStatus.Applied ? ReconciliationStatus.Reconciled :
                 intent == null ? ReconciliationStatus.NotRequired : ReconciliationStatus.Pending,
@@ -231,7 +231,7 @@ public static class NativeApprovalTransaction
         state.RecipientOutboundCursors.TryGetValue(claim.EncryptionKeyId, out var head);
         var cursor = checked(head + 1); var id = Guid.NewGuid().ToString("N");
         RelayFrame Frame(byte[] enc, byte[] cipher) => new(kind, offer.MailboxId, claim.EncryptionKeyId,
-            id, cursor, 0, now, expires, enc, cipher); // Inbound ack is a separate post-commit operation, not this recipient's cursor.
+            id, cursor, 0, MillisecondTime(now), MillisecondTime(expires), enc, cipher); // Inbound ack is a separate post-commit operation, not this recipient's cursor.
         var aad = RelayCanonicalEncoding.EncodeRelayFrameAssociatedData(Frame(Array.Empty<byte>(), Array.Empty<byte>()));
         var domain = kind == RelayFrameKind.Request ? "guard-relay-request-hpke-v1"u8.ToArray() : "guard-relay-receipt-hpke-v1"u8.ToArray();
         var encrypted = RelayCryptography.Encrypt(claim.GetEncryptionKeyCopy(), signedPayload, aad,
@@ -249,4 +249,9 @@ public static class NativeApprovalTransaction
     }
 
     private static bool Equal(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right) => CryptographicOperations.FixedTimeEquals(left, right);
+
+    // Wire timestamps are milliseconds; truncate only encoded fields, never the clock
+    // used for deadline/rollback checks. Rounding up would extend authorization.
+    private static DateTimeOffset MillisecondTime(DateTimeOffset value) =>
+        DateTimeOffset.FromUnixTimeMilliseconds(value.ToUnixTimeMilliseconds());
 }

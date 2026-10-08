@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Guard.Application;
 using Guard.Contracts;
+using Guard.Domain;
 using Guard.Protocol;
 
 namespace Guard.Windows.Ipc
@@ -114,7 +115,8 @@ namespace Guard.Windows.Ipc
                 }
 
                 var response = await _dispatcher
-                    .DispatchAsync(profile.Role, request, cancellationToken)
+                    .DispatchAsync(profile.Role, request, cancellationToken,
+                        profile.Role == ClientRole.Child ? new WindowsAccountSid(facts.UserSid) : null)
                     .ConfigureAwait(false);
                 var frame = IpcResponseFrameCodec.Encode(response);
                 try

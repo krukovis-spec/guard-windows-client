@@ -958,7 +958,8 @@ namespace Guard.V2.Tests
             public Task<GuardIpcResponse> HandleAsync(
                 ClientRole authenticatedRole,
                 GuardIpcRequest request,
-                CancellationToken cancellationToken)
+                CancellationToken cancellationToken,
+                WindowsAccountSid? authenticatedAccount = null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 CallCount++;
