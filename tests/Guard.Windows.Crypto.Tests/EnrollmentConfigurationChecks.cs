@@ -233,7 +233,7 @@ internal static class EnrollmentConfigurationChecks
             await ThrowsAsync(Import); // even identical import is forbidden once setup has begun
             Check(File.Exists(freshPaths.DeviceRelayInstallFile) && installed.SequenceEqual(File.ReadAllBytes(freshPaths.DeviceRelayConfigurationFile)),
                 "active setup accepted/replaced installer profile");
-            await CheckNativeConfirmIpcAsync(freshBoundary, freshConfig, trust, freshStart!, activationDescriptor);
+            await CheckNativeConfirmIpcAsync(freshBoundary, freshConfig, trust, freshStart!, activationDescriptor, freshStore);
             CryptographicOperations.ZeroMemory(freshRaw);
         }
         finally { Directory.Delete(root, recursive: true); }
@@ -368,7 +368,7 @@ internal static class EnrollmentConfigurationChecks
     }
 
     private static async Task CheckNativeConfirmIpcAsync(ServiceAuthoritativeStateBoundary boundary, DeviceRelayConfiguration config,
-        EnrollmentDeploymentTrust trust, NativeEnrollmentStart start, byte[] activationDescriptor)
+        EnrollmentDeploymentTrust trust, NativeEnrollmentStart start, byte[] activationDescriptor, DeviceRelayConfigurationStore configurations)
     {
         // Real synthetic CA/phone keys, never a fake "verified" result or production trust override.
         using var phone = new AndroidAttestationChecks.Fixture();
@@ -518,6 +518,7 @@ internal static class EnrollmentConfigurationChecks
             await NativeRelayCommitChecks.RunAsync(boundary.NativeEnrollmentStore, boundary.Identity, config, trust, phone.Sign, Now);
             await NativeRelayCommitChecks.CheckBoundaryRestartAsync(boundary, config, trust, Now);
             await NativeRelayDeliveryChecks.RunAsync(boundary, config, trust, phone.Sign, Now);
+            await ChildApplicationIpcChecks.RunAsync(boundary, configurations, trust, Now.AddMinutes(1));
         }
         finally { CryptographicOperations.ZeroMemory(capability); }
     }

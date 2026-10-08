@@ -1,0 +1,51 @@
+<Window x:Class="Guard.Child.ChildWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Guard — запрос доступа" Width="620" Height="610" MinWidth="420" MinHeight="500"
+    WindowStartupLocation="CenterScreen" FontFamily="Segoe UI" FontSize="14" Language="ru-RU"
+    UseLayoutRounding="True"
+    Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
+    Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}">
+    <Window.Resources>
+        <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap" /></Style>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="12,7" />
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" />
+        </Style>
+    </Window.Resources>
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" />
+            <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock Text="Нужен доступ к программе?" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,8" />
+            <TextBlock Text="Выберите её в списке и попросите родителя разрешить запуск." Margin="0,0,0,14" />
+        </StackPanel>
+        <DockPanel Grid.Row="1" Margin="0,0,0,10">
+            <Button x:Name="Refresh" DockPanel.Dock="Right" Content="Обновить список" Click="Refresh_Click" />
+            <TextBlock Text="Недавние блокировки" VerticalAlignment="Center" FontWeight="SemiBold" />
+        </DockPanel>
+        <Border Grid.Row="2" BorderThickness="1" CornerRadius="8" Padding="4"
+                BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}">
+            <ListBox x:Name="Applications" BorderThickness="0" SelectionChanged="Selection_Changed"
+                     AutomationProperties.Name="Недавние заблокированные программы" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="8" /></Style></ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate><DataTemplate><StackPanel>
+                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding ObservedAtUtc.LocalDateTime, StringFormat=Блокировка: {0:dd.MM HH:mm}}" FontSize="12" Margin="0,4,0,0" />
+                </StackPanel></DataTemplate></ListBox.ItemTemplate>
+            </ListBox>
+        </Border>
+        <StackPanel Grid.Row="3" Margin="0,12,0,12">
+            <Label Target="{Binding ElementName=Reason}" Content="Зачем нужна программа (необязательно)" Padding="0,0,0,6" />
+            <TextBox x:Name="Reason" Padding="8" MaxLength="160" TextChanged="Reason_Changed" AcceptsReturn="False" />
+            <TextBlock x:Name="ReasonHint" Margin="0,6,0,0" />
+        </StackPanel>
+        <StackPanel Grid.Row="4">
+            <TextBlock x:Name="Status" Text="Нажмите «Обновить список»." Margin="0,0,0,10" AutomationProperties.LiveSetting="Polite" />
+            <Button x:Name="Send" Content="Попросить доступ" Click="Send_Click" IsEnabled="False" HorizontalAlignment="Left" />
+            <TextBlock Text="Это окно отправляет просьбу, но не снимает блокировку. Закрыть его можно в любой момент." FontSize="12" Margin="0,12,0,0" />
+        </StackPanel>
+    </Grid>
+</Window>

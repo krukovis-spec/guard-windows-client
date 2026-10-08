@@ -24,8 +24,8 @@ internal sealed class NativeRelayTransactions(FileAuthoritativeStateStore owners
     DeviceIdentity identity, DeviceRelayConfiguration configuration, EnrollmentDeploymentTrust trust,
     IServiceDataBoundaryGuard boundary, TimeProvider clock)
 {
-    // Not wired to child IPC until its token-derived context and verified active-policy
-    // observation source exist. Never substitute client assertions or arbitrary CI events.
+    // Only token-derived child context and a verified active-policy observation source.
+    // Never substitute client assertions or arbitrary CI events.
     internal async Task<(RequestSnapshot Request, bool Created)?> CreateApplicationRequestAsync(
         long ownerVersion, AuthenticatedChildContext caller, CreateApplicationRequestPayload input,
         IBlockedApplicationObservationResolver observations, CancellationToken token)

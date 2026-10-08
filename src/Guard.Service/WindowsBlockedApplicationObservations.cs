@@ -20,7 +20,7 @@ namespace Guard.Service;
 // Read-only historical evidence, not an enforcement/readiness probe. The service must obtain
 // policyId/hash from its verified active policy, and the account from the authenticated pipe.
 // Do not register this while BoundaryOnlyPolicyReconciler is the production policy boundary.
-internal sealed class WindowsBlockedApplicationObservations : IBlockedApplicationObservationResolver
+internal sealed class WindowsBlockedApplicationObservations : IBlockedApplicationObservationSource
 {
     internal const string Channel = "Microsoft-Windows-CodeIntegrity/Operational";
     internal const string ProviderId = "4ee76bd8-3cf4-44a0-a0ac-3937643e37a3";
@@ -40,6 +40,9 @@ internal sealed class WindowsBlockedApplicationObservations : IBlockedApplicatio
         _policyHash = policyHash.ToUpperInvariant();
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
+
+    public Task<IReadOnlyList<VerifiedBlockedApplicationObservation>> ReadRecentAsync(WindowsAccountSid account, CancellationToken token)
+        => Task.FromResult(ReadRecent(account, token));
 
     internal IReadOnlyList<VerifiedBlockedApplicationObservation> ReadRecent(WindowsAccountSid account, CancellationToken token)
     {

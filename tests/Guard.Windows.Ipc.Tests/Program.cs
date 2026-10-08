@@ -382,9 +382,13 @@ namespace Guard.Windows.Ipc.Tests
             public Task<GuardIpcResponse> HandleAsync(
                 ClientRole authenticatedRole,
                 GuardIpcRequest request,
-                CancellationToken cancellationToken)
+                CancellationToken cancellationToken,
+                WindowsAccountSid? authenticatedAccount = null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (authenticatedRole == ClientRole.Child &&
+                    authenticatedAccount?.Value != CreateChildProfile().AuthorizedSid.Value)
+                    throw new InvalidOperationException("Authenticated Windows account was not forwarded.");
                 return Task.FromResult(new GuardIpcResponse(
                     GuardProtocol.CurrentVersion,
                     request.RequestId,
