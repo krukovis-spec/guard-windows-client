@@ -3,6 +3,8 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using Guard.Application;
+using Guard.Contracts;
 using Guard.Contracts.Relay;
 using Guard.Domain;
 using Guard.Domain.Relay;
@@ -22,6 +24,34 @@ internal sealed class NativeRelayTransactions(FileAuthoritativeStateStore owners
     DeviceIdentity identity, DeviceRelayConfiguration configuration, EnrollmentDeploymentTrust trust,
     IServiceDataBoundaryGuard boundary, TimeProvider clock)
 {
+    // Not wired to child IPC until its token-derived context and verified active-policy
+    // observation source exist. Never substitute client assertions or arbitrary CI events.
+    internal async Task<(RequestSnapshot Request, bool Created)?> CreateApplicationRequestAsync(
+        long ownerVersion, AuthenticatedChildContext caller, CreateApplicationRequestPayload input,
+        IBlockedApplicationObservationResolver observations, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(observations);
+        token.ThrowIfCancellationRequested();
+        boundary.DemandReady();
+        var startedAt = clock.GetUtcNow();
+        var observation = await observations.ResolveAsync(input.ObservationId, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The local blocked observation is unavailable.");
+        (RequestSnapshot Request, bool Created)? result = null;
+        var committed = await CommitAsync(ownerVersion, (owner, current, now) =>
+        {
+            if (now < startedAt) throw new InvalidDataException("Clock moved backwards while resolving the observation.");
+            var prepared = NativeApprovalTransaction.PrepareApplicationRequest(owner, current, caller, input,
+                observation, identity.Encryption, identity.Signing, now);
+            result = (prepared.Request, prepared.Created);
+            var deadline = prepared.Request.PendingExpiresAtUtc < observation.ExpiresAtUtc
+                ? prepared.Request.PendingExpiresAtUtc : observation.ExpiresAtUtc;
+            return (prepared.State, deadline);
+        }, token).ConfigureAwait(false);
+        return committed ? result : null;
+    }
+
     internal Task<bool> PublishRequestAsync(long ownerVersion, RequestSnapshot localRequest, CancellationToken token)
     {
         var snapshot = RelayCanonicalEncoding.DecodeRequestSnapshot(RelayCanonicalEncoding.EncodeRequestSnapshot(localRequest));
@@ -82,13 +112,22 @@ internal sealed class NativeRelayTransactions(FileAuthoritativeStateStore owners
             var preparedAt = clock.GetUtcNow();
             configuration.RequireMatches(trust, identity, owner, preparedAt);
             var (next, deadline) = prepare(owner, current, preparedAt);
-            return await relay.TryCommitGuardedAsync(current.Version, next, () =>
+            bool CanPublish()
             {
                 boundary.DemandReady();
                 var now = clock.GetUtcNow();
                 configuration.RequireMatches(trust, identity, owner, now);
                 return now >= preparedAt && now < deadline;
-            }, cancellation).ConfigureAwait(false);
+            }
+            // All service relay mutations hold this same owner lock. A deduplicated read
+            // must not consume a cursor/version or encrypt/sign a replacement request.
+            if (ReferenceEquals(next, current))
+            {
+                var valid = CanPublish();
+                cancellation.ThrowIfCancellationRequested();
+                return valid;
+            }
+            return await relay.TryCommitGuardedAsync(current.Version, next, CanPublish, cancellation).ConfigureAwait(false);
         }, token);
     }
 }

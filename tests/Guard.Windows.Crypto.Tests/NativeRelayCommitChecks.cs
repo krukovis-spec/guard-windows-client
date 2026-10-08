@@ -101,8 +101,9 @@ internal static class NativeRelayCommitChecks
                     Check(!await runtime.AcceptApprovalAsync(owner.Version, scenario.Item1, default) && guard.Calls == 3 &&
                         (await relay.LoadAsync(default)).CommittedInboundCursor == 0, "inner/outer deadline crossed during commit");
                 }
-                clock.Value = now; guard.Reset();
+                clock.Value = now.AddTicks(37); guard.Reset();
 
+                // Real sub-millisecond clocks must also encode a canonical receipt/frame.
                 // The operation snapshots input before waiting on the owner lock.
                 var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
