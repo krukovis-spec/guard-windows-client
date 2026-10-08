@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-08 — transport continuation waiting for elevation and USB
+
+- User resumed real transport work; no UI redesign/source changes. Original computer.job/family job retained; no native.job/profile yet. Refreshed Ponytail 5.0 instructions, reused existing signed-proof query and operator workflow. Phone absent from ADB (count0); asked Ivan to connect/unlock it.
+- Existing `Guard.Windows.Crypto.Tests` freshly built/run: all PASS, including durable native intent, exact HTTP retry, renewed proof, scope/lineage/clock/ACL/response rejection and native receipt transport. Controlled HTTP only; no live credentials/rights issued. Read service composition: production enrollment uses pinned Google verifier/status source, not a test verifier; no new independent physical-chain acceptance claimed.
+- Prepared one-shot refresh script in previous TEMP probe directory, `Refresh-Proof-20261008.ps1`, parser PASS: exact VM pins + 204-file manifest, preserves previous public proof by non-overwriting rename, runs same read-only diagnostic and copies fresh public GNA1. Windows RunAs returned user-cancelled; elevated helper never started and `Access/binding-refresh-20261008-2035.json` was not created. No VM changes, no proof refresh, no reset/reissue/cloud/phone action. Inline launcher subsequently dereferenced null; use Stop error handling next time. Do not retry elevation until user response. Existing saved binding remains intact; current short-lived proof expired. Do not weaken one-day initial-proof window or rebind on expiry.
+- PROJECT_ONLY handoff: capsule/plan updated; next genuinely needed user actions are visible UAC confirmation and USB phone connection. No background process/heartbeat left for this operation; no implementation checkpoint needed because application code is unchanged.
+
 ## 2026-10-08 — first real phone binding independently verified; protection still absent
 
 - Ivan reported completing the ceremony and requested checking the VM, deferring UI redesign. Computer Use observed production Setup's saved-binding result (no QR decoded/saved). Existing public `SetupInspection` query API reused by an isolated temporary probe; no application/source/auth/policy changes. Probe host-refusal check and Release publish PASS, PS runner parse PASS; exact existing VM guard/BIOS/disk/SecureBoot/vTPM/guest marker used.
