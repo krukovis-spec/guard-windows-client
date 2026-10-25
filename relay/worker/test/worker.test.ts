@@ -749,7 +749,8 @@ describe("mailbox authorization and signing intent", () => {
       expect([...state.storage.sql.exec<{ cursor: number }>("SELECT cursor FROM publication_cursors WHERE recipient_key_id=?", parentRecipient)][0]?.cursor).toBe(21);
     });
   });
-  it.each([false, true])("enforces cursors, roles, idempotency, and signing intents (fingerprint IDs: %s)", async fingerprintIds => {
+  // Each case writes 1,000 quota fixtures; the Windows worker runtime exceeds the default five seconds.
+  it.each([false, true])("enforces cursors, roles, idempotency, and signing intents (fingerprint IDs: %s)", { timeout: 20_000 }, async fingerprintIds => {
     const mailbox = fingerprintIds ? ":mailbox:native-001" : "mailbox-test-00001";
     const deviceRecipient = fingerprintIds ? "p256:" + "D".repeat(43) : "recipient-dev-0001";
     const parentRecipient = fingerprintIds ? "p256:" + "P".repeat(43) : "recipient-key-0001";
