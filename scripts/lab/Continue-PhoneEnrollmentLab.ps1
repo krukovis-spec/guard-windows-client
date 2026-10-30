@@ -18,7 +18,7 @@ $vmId=[guid]'8f088b63-9193-4ecc-bb20-415ef11fd4c8'
 $biosGuid=[guid]'236ea6ef-9cc6-4295-9934-6f7497f9d262'
 $labRoot=Join-Path $env:LOCALAPPDATA 'GuardV2Lab'
 $accessRoot=Join-Path $labRoot 'Access'
-$diskRoot=[IO.Path]::GetFullPath((Join-Path $labRoot 'VM\Virtual Hard Disks')).TrimEnd('\')+'\'
+$diskRoot=[IO.Path]::GetFullPath('D:\GuardV2Lab\Storage-20261030\Virtual Hard Disks').TrimEnd('\')+'\'
 # Reuse the exact already-tested VM guard, not another slightly different disk/firmware check.
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Invoke-ServiceBootstrapLab.ps1'),[ref]$null,[ref]$null)
 $guard=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PinnedVM'},$false)

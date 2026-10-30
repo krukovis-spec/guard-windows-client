@@ -1,5 +1,12 @@
 # Worklog
 
+## 2026-10-30 — reclaim C: while retaining VM and both checkpoints
+
+- Ivan requested storage cleanup with ability to resume Guard. Inventory: VM already Off, base VHDX 23.69 GiB + AVHDX 13.34/31.68 GiB, runtime memory file now only 0.098 GiB. C: free 5.65 GiB; D: healthy fixed NTFS Samsung 970 EVO Plus, free 369.65 GiB. Checkpoint deletion merges delta data and cannot promise reclaim of their full file sizes; chose reversible full storage relocation instead.
+- Hash-pinned elevated helper verified original VM ID/Gen2/BIOS, exactly the two known checkpoints, source/destination ancestry without reparse points and sufficient space. `Move-VMStorage` to fresh protected-ACL `D:\GuardV2Lab\Storage-20261030`; no forced shutdown, snapshot deletion/restore, guest execution or host Guard/policy changes. VM was Off and remains Off. No private credential use. Source tree now has no files; Hyper-V performed source cleanup.
+- PASS 15:55:44 UTC, report `%TEMP%\Guard-storage-9c4eabbd6cd647f09256f9410abd2bcb\result.json`. Same checkpoints/virtual capacity/disk identifiers, every destination chain passes Test-VHD with parents inside destination; base VHDX SHA256 unchanged. AVHDX container hashes not compared because Hyper-V changes parent paths in headers. Freed 68.83 GiB; C: 74.47 GiB free, D: 300.82 GiB free. No boot/guest binding verification performed during cleanup; VM data retained through storage move.
+- Updated only pinned physical disk roots in four lab runners and storage instructions. Existing identity, no-Guard, snapshot and other safety checks unchanged; clean-guest runners still unsuitable for live pairing. PROJECT_ONLY memory/plan records new root so future sessions do not recreate storage on C:. No service/auth/endpoint/secret change. No application build needed for path-only scripts/docs; parse and exact-root checks used without running lab experiments.
+
 ## 2026-10-09 — own request history and verified historical outcomes (local gate)
 
 - Checkpoint `codex/checkpoint-20261009-0003-child-history` at `db9b476863840cd9b7e09e1088299f6a49e98ec5` pushed before implementation; branch `codex/child-request-history`. Prior UAC audit actually completed PASS 08.10 20:37 UTC; exact VM/BIOS/disk check, Running/Secure Boot ON/TPM ON, no guest mutation or pending elevation. Real pairing remains unchanged. M1 mandatory boot/admin-tamper unresolved; do not reuse clean-guest kernel runner on paired VM.
